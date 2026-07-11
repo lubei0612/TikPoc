@@ -34,6 +34,11 @@ class FakeDriver:
     def back(self) -> None:
         return None
 
+    def swipe(
+        self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int
+    ) -> None:
+        return None
+
 
 class DelayedProfileDriver(FakeDriver):
     def __init__(self) -> None:
@@ -48,6 +53,23 @@ class DelayedProfileDriver(FakeDriver):
     @page_source.setter
     def page_source(self, value: str) -> None:
         return None
+
+
+class ScrollingProfileDriver(FakeDriver):
+    def __init__(self) -> None:
+        super().__init__()
+        last_post = (
+            '  <node resource-id="com.zhiliaoapp.musically:id/cover" />\n'
+            '  <node text="404" resource-id="com.zhiliaoapp.musically:id/tv_play_count" />\n'
+        )
+        self.page_source = PROFILE_XML.replace(last_post, "")
+        self.swipes = 0
+
+    def swipe(
+        self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int
+    ) -> None:
+        self.swipes += 1
+        self.page_source = self.page_source.replace('text="101"', 'text="404"')
 
 
 def test_appium_device_opens_profile_with_deep_link() -> None:
@@ -85,3 +107,13 @@ def test_appium_device_waits_for_profile_metrics() -> None:
 
     assert device.read_profile_metrics() == ProfileMetrics(12, 10, 4)
     assert driver.reads == 3
+
+
+def test_appium_device_scrolls_to_confirm_more_than_three_posts() -> None:
+    driver = ScrollingProfileDriver()
+    device = AppiumTikTokDevice(driver, poll_interval=0)
+
+    metrics = device.read_profile_metrics()
+
+    assert metrics == ProfileMetrics(12, 10, 4)
+    assert driver.swipes == 1

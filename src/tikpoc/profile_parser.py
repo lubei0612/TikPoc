@@ -10,6 +10,17 @@ class ProfilePage:
     username: str
     metrics: ProfileMetrics
     visible_post_count: int
+    visible_post_keys: tuple[str, ...]
+
+
+def parse_visible_post_keys(page_source: str) -> tuple[str, ...]:
+    root = ElementTree.fromstring(page_source)
+    return tuple(
+        node.attrib.get("text", "").strip()
+        for node in root.iter()
+        if node.attrib.get("resource-id", "").endswith(":id/tv_play_count")
+        and node.attrib.get("text", "").strip()
+    )
 
 
 def parse_profile_page(page_source: str) -> ProfilePage:
@@ -18,6 +29,7 @@ def parse_profile_page(page_source: str) -> ProfilePage:
     stats: dict[str, int] = {}
     pending_value: str | None = None
     visible_post_count = 0
+    visible_post_keys = parse_visible_post_keys(page_source)
 
     for node in root.iter():
         resource_id = node.attrib.get("resource-id", "")
@@ -27,7 +39,10 @@ def parse_profile_page(page_source: str) -> ProfilePage:
         elif resource_id.endswith(":id/s5y"):
             pending_value = text
         elif resource_id.endswith(":id/s5x") and pending_value is not None:
-            stats[text.lower()] = parse_visible_count(pending_value)
+            label = text.lower()
+            if label == "follower":
+                label = "followers"
+            stats[label] = parse_visible_count(pending_value)
             pending_value = None
         elif resource_id.endswith(":id/cover"):
             visible_post_count += 1
@@ -42,4 +57,5 @@ def parse_profile_page(page_source: str) -> ProfilePage:
             posts=visible_post_count,
         ),
         visible_post_count=visible_post_count,
+        visible_post_keys=visible_post_keys,
     )

@@ -4,7 +4,7 @@ from typing import Protocol
 from selenium.webdriver.common.by import By
 
 from .models import ProfileMetrics
-from .profile_parser import parse_profile_page
+from .profile_parser import parse_profile_page, parse_visible_post_keys
 
 
 TIKTOK_PACKAGE = "com.zhiliaoapp.musically"
@@ -56,7 +56,18 @@ class AppiumTikTokDevice:
         last_error: ValueError | None = None
         for attempt in range(self.metric_read_attempts):
             try:
-                return parse_profile_page(self.driver.page_source).metrics
+                page = parse_profile_page(self.driver.page_source)
+                if page.visible_post_count != 3:
+                    return page.metrics
+                self.driver.swipe(540, 1900, 540, 1050, 600)
+                time.sleep(self.poll_interval)
+                next_keys = parse_visible_post_keys(self.driver.page_source)
+                has_new_post = bool(set(next_keys) - set(page.visible_post_keys))
+                return ProfileMetrics(
+                    following=page.metrics.following,
+                    followers=page.metrics.followers,
+                    posts=4 if has_new_post else 3,
+                )
             except ValueError as error:
                 last_error = error
                 if attempt + 1 < self.metric_read_attempts:

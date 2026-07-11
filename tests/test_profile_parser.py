@@ -12,9 +12,13 @@ PROFILE_XML = """
   <node text="93" resource-id="com.zhiliaoapp.musically:id/s5y" />
   <node text="Likes" resource-id="com.zhiliaoapp.musically:id/s5x" />
   <node resource-id="com.zhiliaoapp.musically:id/cover" />
+  <node text="101" resource-id="com.zhiliaoapp.musically:id/tv_play_count" />
   <node resource-id="com.zhiliaoapp.musically:id/cover" />
+  <node text="202" resource-id="com.zhiliaoapp.musically:id/tv_play_count" />
   <node resource-id="com.zhiliaoapp.musically:id/cover" />
+  <node text="303" resource-id="com.zhiliaoapp.musically:id/tv_play_count" />
   <node resource-id="com.zhiliaoapp.musically:id/cover" />
+  <node text="404" resource-id="com.zhiliaoapp.musically:id/tv_play_count" />
 </hierarchy>
 """
 
@@ -25,6 +29,7 @@ def test_parse_profile_page_reads_stats_and_visible_posts() -> None:
     assert page.username == "sample"
     assert page.metrics == ProfileMetrics(following=12, followers=10, posts=4)
     assert page.visible_post_count == 4
+    assert page.visible_post_keys == ("101", "202", "303", "404")
 
 
 def test_parse_profile_page_accepts_appium_element_tags() -> None:
@@ -34,6 +39,14 @@ def test_parse_profile_page_accepts_appium_element_tags() -> None:
 
     assert page.username == "sample"
     assert page.metrics == ProfileMetrics(following=12, followers=10, posts=4)
+
+
+def test_parse_profile_page_accepts_singular_follower_label() -> None:
+    singular = PROFILE_XML.replace('text="Followers"', 'text="Follower"')
+
+    page = parse_profile_page(singular)
+
+    assert page.metrics.followers == 10
 
 
 def test_parse_profile_page_rejects_missing_required_stat() -> None:
