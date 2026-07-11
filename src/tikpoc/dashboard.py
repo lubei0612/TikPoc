@@ -32,6 +32,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 limit = 10
             self._send_json(self.server.database.recent_tasks(limit))
             return
+        static_files = {
+            "/": ("dashboard.html", "text/html; charset=utf-8"),
+            "/dashboard.css": ("dashboard.css", "text/css; charset=utf-8"),
+            "/dashboard.js": ("dashboard.js", "text/javascript; charset=utf-8"),
+        }
+        if parsed.path in static_files:
+            filename, content_type = static_files[parsed.path]
+            self._send_file(filename, content_type)
+            return
         self.send_error(HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:
@@ -48,6 +57,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_file(self, filename: str, content_type: str) -> None:
+        body = (Path(__file__).parent / "static" / filename).read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

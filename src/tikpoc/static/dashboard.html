@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TikTok 任务监控</title>
+  <link rel="stylesheet" href="/dashboard.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <p class="eyebrow">单设备任务队列</p>
+        <h1>TikTok 任务监控</h1>
+      </div>
+      <span id="workerState" class="state">连接中</span>
+    </header>
+
+    <section class="progress-section" aria-label="总体进度">
+      <div class="progress-copy">
+        <strong id="processedCount">0 / 0</strong>
+        <span id="progressPercent">0%</span>
+      </div>
+      <div class="progress-track"><div id="progressBar"></div></div>
+      <div class="meta"><span id="throughput">速率 --</span><span id="lastUpdated">等待数据</span></div>
+    </section>
+
+    <section id="counts" class="counts" aria-label="任务状态">
+      <div><span>待处理</span><strong id="pendingCount">0</strong></div>
+      <div><span>已完成</span><strong id="completedCount">0</strong></div>
+      <div><span>已跳过</span><strong id="skippedCount">0</strong></div>
+      <div><span>重试</span><strong id="retryCount">0</strong></div>
+      <div><span>失败</span><strong id="failedCount">0</strong></div>
+    </section>
+
+    <section class="current">
+      <p class="section-label">当前任务</p>
+      <strong id="currentUser">暂无运行任务</strong>
+      <span id="currentPhase">等待 worker</span>
+    </section>
+
+    <section class="recent">
+      <div class="section-heading"><p class="section-label">最近记录</p><span id="staleIndicator"></span></div>
+      <ol id="recentTasks"><li class="empty">暂无记录</li></ol>
+    </section>
+
+    <footer>
+      <button id="pauseButton" data-action="pause" title="暂停任务">Ⅱ <span>暂停</span></button>
+      <button id="resumeButton" data-action="resume" title="继续任务">▶ <span>继续</span></button>
+      <button id="stopButton" data-action="stop" class="danger" title="停止任务">■ <span>停止</span></button>
+    </footer>
+  </main>
+  <script src="/dashboard.js"></script>
+</body>
+</html>
