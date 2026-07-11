@@ -17,6 +17,14 @@ def _parser() -> argparse.ArgumentParser:
     import_command.add_argument("--db", type=Path, required=True)
     status = commands.add_parser("status")
     status.add_argument("--db", type=Path, required=True)
+    dashboard = commands.add_parser("dashboard")
+    dashboard.add_argument("--db", type=Path, required=True)
+    dashboard.add_argument("--host", default="127.0.0.1")
+    dashboard.add_argument("--port", type=int, default=8765)
+    run = commands.add_parser("run")
+    run.add_argument("--db", type=Path, required=True)
+    run.add_argument("--appium-url", default="http://127.0.0.1:4723")
+    run.add_argument("--udid", default="emulator-5554")
     return parser
 
 
@@ -34,6 +42,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         for target in result.targets:
             database.insert_task(batch_id, target.target_id, target.username)
         print(f"imported={len(result.targets)} duplicates={result.skipped_duplicates}")
+        return 0
+    if args.command == "dashboard":
+        from .dashboard import create_server
+
+        server = create_server(args.db, args.host, args.port)
+        print(f"dashboard=http://{args.host}:{server.server_port}", flush=True)
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            server.server_close()
+        return 0
+    if args.command == "run":
+        from .runner import run_queue
+
+        run_queue(args.db, args.appium_url, args.udid)
         return 0
     database = Database(args.db)
     database.migrate()

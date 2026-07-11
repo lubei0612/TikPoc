@@ -17,7 +17,9 @@ test = ["pytest>=8,<9"]
 [project.scripts]
 tikpoc = "tikpoc.cli:main"
 
+[tool.setuptools.package-data]
+tikpoc = ["static/*"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
-
