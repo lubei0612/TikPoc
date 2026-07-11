@@ -1,0 +1,10 @@
+{
+  "name": "tikpoc-tools",
+  "private": true,
+  "scripts": {
+    "appium": "appium"
+  },
+  "devDependencies": {
+    "appium": "^3.1.1"
+  }
+}
