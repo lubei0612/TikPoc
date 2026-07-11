@@ -136,3 +136,10 @@ class Database:
         if row is None:
             raise KeyError(task_id)
         return TaskState(row["state"])
+
+    def count_by_state(self) -> dict[str, int]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT state, COUNT(*) AS count FROM tasks GROUP BY state ORDER BY state"
+            ).fetchall()
+        return {row["state"]: row["count"] for row in rows}
