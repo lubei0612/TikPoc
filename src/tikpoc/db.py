@@ -45,6 +45,28 @@ class Database:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS worker_control (
+                    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                    requested_state TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO worker_control(singleton, requested_state) VALUES (1, 'running')"
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS runtime_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_type TEXT NOT NULL,
+                    username TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
 
     def insert_task(self, batch_id: str, target_id: str, username: str) -> int:
         with self._connect() as connection:
@@ -143,3 +165,74 @@ class Database:
                 "SELECT state, COUNT(*) AS count FROM tasks GROUP BY state ORDER BY state"
             ).fetchall()
         return {row["state"]: row["count"] for row in rows}
+
+    def dashboard_snapshot(self) -> dict[str, object]:
+        counts = self.count_by_state()
+        total = sum(counts.values())
+        processed = sum(counts.get(state, 0) for state in ("completed", "skipped", "failed"))
+        with self._connect() as connection:
+            current = connection.execute(
+                """
+                SELECT username, checkpoint, attempts, updated_at
+                FROM tasks WHERE state = 'running' ORDER BY updated_at DESC LIMIT 1
+                """
+            ).fetchone()
+        return {
+            "total": total,
+            "processed": processed,
+            "counts": counts,
+            "current": dict(current) if current else None,
+            "control": self.worker_control(),
+        }
+
+    def recent_tasks(self, limit: int = 10) -> list[dict[str, object]]:
+        safe_limit = max(1, min(limit, 100))
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT username, state, attempts, checkpoint, error_code, updated_at
+                FROM tasks
+                WHERE state != 'pending'
+                ORDER BY updated_at DESC, id DESC
+                LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def worker_control(self) -> str:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT requested_state FROM worker_control WHERE singleton = 1"
+            ).fetchone()
+        return row["requested_state"] if row else "running"
+
+    def set_worker_control(self, state: str) -> None:
+        if state not in {"running", "paused", "stopped"}:
+            raise ValueError(f"invalid worker control state: {state}")
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE worker_control
+                SET requested_state = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE singleton = 1
+                """,
+                (state,),
+            )
+
+    def record_runtime_event(self, event_type: str, username: str | None = None) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO runtime_events(event_type, username) VALUES (?, ?)",
+                (event_type, username),
+            )
+
+    def latest_runtime_event(self) -> dict[str, object] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT event_type, username, created_at
+                FROM runtime_events ORDER BY id DESC LIMIT 1
+                """
+            ).fetchone()
+        return dict(row) if row else None
