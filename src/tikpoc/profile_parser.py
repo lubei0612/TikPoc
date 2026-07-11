@@ -19,7 +19,7 @@ def parse_profile_page(page_source: str) -> ProfilePage:
     pending_value: str | None = None
     visible_post_count = 0
 
-    for node in root.iter("node"):
+    for node in root.iter():
         resource_id = node.attrib.get("resource-id", "")
         text = node.attrib.get("text", "").strip()
         if resource_id.endswith(":id/s7e"):

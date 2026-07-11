@@ -27,6 +27,15 @@ def test_parse_profile_page_reads_stats_and_visible_posts() -> None:
     assert page.visible_post_count == 4
 
 
+def test_parse_profile_page_accepts_appium_element_tags() -> None:
+    appium_source = PROFILE_XML.replace("<node ", "<android.widget.TextView ")
+
+    page = parse_profile_page(appium_source)
+
+    assert page.username == "sample"
+    assert page.metrics == ProfileMetrics(following=12, followers=10, posts=4)
+
+
 def test_parse_profile_page_rejects_missing_required_stat() -> None:
     incomplete = PROFILE_XML.replace(
         '<node text="10" resource-id="com.zhiliaoapp.musically:id/s5y" />\n'
