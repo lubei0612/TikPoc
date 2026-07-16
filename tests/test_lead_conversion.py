@@ -82,6 +82,26 @@ def test_payment_complaint_or_unsupported_decision_requires_human(text: str) -> 
 @pytest.mark.parametrize(
     "text",
     [
+        "I need a human agent",
+        "Please connect me to an operator",
+        "Can I speak with a representative?",
+        "I want to talk to a manager",
+        "转人工客服",
+        "我要找客服",
+        "请让经理联系我",
+    ],
+)
+def test_explicit_handoff_request_requires_human(text: str) -> None:
+    assert requires_human(text) is True
+    result = _assess(text, meaningful_turns=1)
+    assert result.stage == ConversationStage.HUMAN_REQUIRED
+    assert result.human_reason == "human_handoff"
+    assert result.should_invite is False
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
         "Do you have this product in stock?",
         "What is the price?",
         "Can you ship to London?",

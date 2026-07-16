@@ -88,6 +88,14 @@ _BUYING_PATTERNS = (
 )
 _HUMAN_REASONS = (
     (
+        "human_handoff",
+        re.compile(
+            r"\b(human|agent|operator|representative|manager)\b|"
+            r"转人工|人工(?:客服|服务)?|客服|经理",
+            re.IGNORECASE,
+        ),
+    ),
+    (
         "payment",
         re.compile(
             r"\b(payment|paid|pay failed|payment failed)\b|支付|付款",
