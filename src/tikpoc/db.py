@@ -863,34 +863,35 @@ class Database:
         return None if row is None else _row_browser_reply_plan(row)
 
     def complete_browser_reply_plan(
-        self, plan_id: int, reply_text: str, stage: str
-    ) -> bool:
+        self, plan_id: int, *, reply_text: str, stage: str
+    ) -> BrowserReplyPlan:
         if not reply_text.strip() or not stage.strip():
             raise ValueError("reply text and stage must be nonempty")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT reply_text, stage, state FROM browser_reply_plans WHERE id=?",
+                "SELECT * FROM browser_reply_plans WHERE id=?",
                 (plan_id,),
             ).fetchone()
             if row is None:
                 raise KeyError(plan_id)
-            if row["reply_text"] == reply_text and row["stage"] == stage:
-                return True
-            if row["state"] != "planning":
-                return False
-            connection.execute(
-                """
-                UPDATE browser_reply_plans
-                SET reply_text=?, stage=?, state='planned',
-                    updated_at=CURRENT_TIMESTAMP
-                WHERE id=? AND state='planning'
-                """,
-                (reply_text, stage, plan_id),
-            )
-            return True
+            if row["state"] == "planning":
+                connection.execute(
+                    """
+                    UPDATE browser_reply_plans
+                    SET reply_text=?, stage=?, state='planned',
+                        updated_at=CURRENT_TIMESTAMP
+                    WHERE id=? AND state='planning'
+                    """,
+                    (reply_text, stage, plan_id),
+                )
+                row = connection.execute(
+                    "SELECT * FROM browser_reply_plans WHERE id=?", (plan_id,)
+                ).fetchone()
+                assert row is not None
+            return _row_browser_reply_plan(row)
 
-    def set_browser_reply_plan_state(self, plan_id: int, state: str) -> bool:
+    def set_browser_reply_plan_state(self, plan_id: int, state: str) -> None:
         if state not in {"sent", "uncertain", "superseded"}:
             raise ValueError(f"invalid browser reply plan state: {state}")
         allowed_sources = {
@@ -901,7 +902,7 @@ class Database:
         sources = allowed_sources[state]
         placeholders = ", ".join("?" for _ in sources)
         with self._connect() as connection:
-            cursor = connection.execute(
+            connection.execute(
                 f"""
                 UPDATE browser_reply_plans
                 SET state=?, updated_at=CURRENT_TIMESTAMP
@@ -909,7 +910,6 @@ class Database:
                 """,
                 (state, plan_id, *sources),
             )
-            return cursor.rowcount == 1
 
     def claim_browser_action(
         self,
@@ -960,6 +960,7 @@ class Database:
         owner_id: str,
         state: str,
     ) -> bool:
+        _require_identity(account_id, action_type, action_key, owner_id)
         if state not in {"completed", "uncertain", "superseded"}:
             raise ValueError(f"invalid browser action state: {state}")
         completed_guard = "" if state == "completed" else "AND state != 'completed'"

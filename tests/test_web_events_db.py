@@ -331,16 +331,21 @@ def test_reply_plan_completion_is_exactly_idempotent_and_preserves_draft(
         "account-01", "conversation-01", "fp-01", "prospect", "hello", 1_000
     )
 
-    assert database.complete_browser_reply_plan(
-        plan.id, "draft reply", "qualifying"
+    first_completion = database.complete_browser_reply_plan(
+        plan.id, reply_text="draft reply", stage="qualifying"
     )
-    assert database.complete_browser_reply_plan(
-        plan.id, "draft reply", "qualifying"
+    exact_retry = database.complete_browser_reply_plan(
+        plan.id, reply_text="draft reply", stage="qualifying"
     )
-    assert not database.complete_browser_reply_plan(plan.id, "replacement", "invited")
+    conflicting_retry = database.complete_browser_reply_plan(
+        plan.id, reply_text="replacement", stage="invited"
+    )
 
     completed = database.browser_reply_plan_by_id(plan.id)
     assert completed is not None
+    assert first_completion == completed
+    assert exact_retry == completed
+    assert conflicting_retry == completed
     assert completed.reply_text == "draft reply"
     assert completed.stage == "qualifying"
     assert completed.state == "planned"
@@ -356,11 +361,17 @@ def test_reply_plan_completion_validates_inputs_and_missing_plan(
     )
 
     with pytest.raises(ValueError):
-        database.complete_browser_reply_plan(plan.id, "", "qualifying")
+        database.complete_browser_reply_plan(
+            plan.id, reply_text="", stage="qualifying"
+        )
     with pytest.raises(ValueError):
-        database.complete_browser_reply_plan(plan.id, "draft", " ")
+        database.complete_browser_reply_plan(plan.id, reply_text="draft", stage=" ")
     with pytest.raises(KeyError):
-        database.complete_browser_reply_plan(99_999, "draft", "qualifying")
+        database.complete_browser_reply_plan(
+            99_999, reply_text="draft", stage="qualifying"
+        )
+    with pytest.raises(TypeError):
+        database.complete_browser_reply_plan(plan.id, "draft", "qualifying")  # type: ignore[misc]
 
 
 def test_reply_plan_state_transitions_and_sent_does_not_downgrade(
@@ -372,15 +383,21 @@ def test_reply_plan_state_transitions_and_sent_does_not_downgrade(
         "account-01", "conversation-01", "fp-01", "prospect", "hello", 1_000
     )
 
-    assert not database.set_browser_reply_plan_state(plan.id, "uncertain")
-    database.complete_browser_reply_plan(plan.id, "draft", "qualifying")
-    assert database.set_browser_reply_plan_state(plan.id, "uncertain")
-    assert database.set_browser_reply_plan_state(plan.id, "uncertain")
-    assert database.set_browser_reply_plan_state(plan.id, "sent")
-    assert database.set_browser_reply_plan_state(plan.id, "sent")
-    assert not database.set_browser_reply_plan_state(plan.id, "superseded")
+    assert database.set_browser_reply_plan_state(plan.id, "uncertain") is None
+    stored = database.browser_reply_plan_by_id(plan.id)
+    assert stored is not None
+    assert stored.state == "planning"
+
+    database.complete_browser_reply_plan(
+        plan.id, reply_text="draft", stage="qualifying"
+    )
+    assert database.set_browser_reply_plan_state(plan.id, "uncertain") is None
+    assert database.set_browser_reply_plan_state(plan.id, "uncertain") is None
+    assert database.set_browser_reply_plan_state(plan.id, "sent") is None
+    assert database.set_browser_reply_plan_state(plan.id, "sent") is None
+    assert database.set_browser_reply_plan_state(plan.id, "superseded") is None
     assert database.browser_reply_plan_by_id(plan.id).state == "sent"  # type: ignore[union-attr]
-    assert not database.set_browser_reply_plan_state(99_999, "sent")
+    assert database.set_browser_reply_plan_state(99_999, "sent") is None
     with pytest.raises(ValueError):
         database.set_browser_reply_plan_state(plan.id, "planned")
 
@@ -409,11 +426,15 @@ def test_reply_plan_permitted_terminal_transitions(
         "hello",
         1_000,
     )
-    database.complete_browser_reply_plan(plan.id, "draft", "qualifying")
+    database.complete_browser_reply_plan(
+        plan.id, reply_text="draft", stage="qualifying"
+    )
 
     if intermediate_state is not None:
-        assert database.set_browser_reply_plan_state(plan.id, intermediate_state)
-    assert database.set_browser_reply_plan_state(plan.id, final_state)
+        assert (
+            database.set_browser_reply_plan_state(plan.id, intermediate_state) is None
+        )
+    assert database.set_browser_reply_plan_state(plan.id, final_state) is None
     stored = database.browser_reply_plan_by_id(plan.id)
     assert stored is not None
     assert stored.state == final_state
@@ -472,6 +493,19 @@ def test_browser_action_claim_rejects_empty_identity(
 
     with pytest.raises(ValueError):
         database.claim_browser_action(*identities, 1_000, 30)
+
+
+@pytest.mark.parametrize("empty_index", range(4))
+def test_finish_browser_action_rejects_empty_identity(
+    tmp_path: Path, empty_index: int
+) -> None:
+    database = Database(tmp_path / "tasks.db")
+    database.migrate()
+    identities = ["account-01", "dm_send", "plan-1", "tab-a"]
+    identities[empty_index] = " "
+
+    with pytest.raises(ValueError):
+        database.finish_browser_action(*identities, "completed")
 
 
 def test_finish_browser_action_checks_owner_and_completed_is_terminal(
