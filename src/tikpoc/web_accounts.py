@@ -54,8 +54,9 @@ class WebAccountRegistry:
                     f"account entry {index} is missing account_id or device_id"
                 )
 
-            mode = str(item.get("mode") or "").strip().lower()
-            if not mode:
+            if "mode" in item:
+                mode = str(item["mode"]).strip().lower()
+            else:
                 mode = "business" if business_id or token_file_text else "browser"
             if mode not in {"browser", "business"}:
                 raise ValueError(

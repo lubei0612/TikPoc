@@ -99,6 +99,27 @@ def test_web_account_registry_rejects_unknown_mode(tmp_path: Path) -> None:
         WebAccountRegistry.from_path(config)
 
 
+@pytest.mark.parametrize(
+    "mode_yaml",
+    ["false", "0", "[]", "''"],
+    ids=["false", "zero", "empty-list", "empty-string"],
+)
+def test_web_account_registry_rejects_explicit_falsy_modes(
+    tmp_path: Path, mode_yaml: str
+) -> None:
+    config = tmp_path / "accounts.yaml"
+    config.write_text(
+        "accounts:\n"
+        "  - account_id: account-01\n"
+        "    device_id: phone-01\n"
+        f"    mode: {mode_yaml}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="browser or business"):
+        WebAccountRegistry.from_path(config)
+
+
 def test_browser_conversion_integer_settings_have_minimums(tmp_path: Path) -> None:
     config = tmp_path / "accounts.yaml"
     config.write_text(
