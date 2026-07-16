@@ -1,14 +1,21 @@
 accounts:
   - account_id: account-01
     device_id: phone-01
-    business_id: replace-with-tiktok-business-open-id
-    token_file: secrets/account-01-token.json
-    private_channel_hint: "Continue on WhatsApp: replace-with-your-contact"
+    mode: browser
+    private_channel_hint: "WhatsApp: replace-with-your-contact"
+    offer_context: "Products from the account-01 catalog"
+    faq_file: replace-with-account-01-faq.md
+    reply_language: auto
+    max_auto_replies: 12
+    invite_after_meaningful_turns: 2
+    fallback_acknowledgement: "Thanks for your message. What are you looking for?"
+    browser_followback_enabled: true
+    browser_dm_enabled: true
     enabled: true
 
   - account_id: account-02
     device_id: phone-02
-    business_id: replace-with-second-business-open-id
-    token_file: secrets/account-02-token.json
-    private_channel_hint: "Continue on WhatsApp: replace-with-your-contact"
+    mode: browser
+    browser_followback_enabled: false
+    browser_dm_enabled: false
     enabled: false

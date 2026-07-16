@@ -8,9 +8,20 @@ import yaml
 class WebAccount:
     account_id: str
     device_id: str
-    business_id: str
-    token_file: Path
+    business_id: str = ""
+    token_file: Path | None = None
+    mode: str = "browser"
     private_channel_hint: str = ""
+    offer_context: str = ""
+    faq_text: str = ""
+    reply_language: str = "auto"
+    max_auto_replies: int = 12
+    invite_after_meaningful_turns: int = 2
+    fallback_acknowledgement: str = (
+        "Thanks for your message. What are you looking for?"
+    )
+    browser_followback_enabled: bool = True
+    browser_dm_enabled: bool = True
     enabled: bool = True
 
 
@@ -18,7 +29,9 @@ class WebAccountRegistry:
     def __init__(self, accounts: tuple[WebAccount, ...]) -> None:
         self.accounts = accounts
         self._by_account_id = {account.account_id: account for account in accounts}
-        self._by_business_id = {account.business_id: account for account in accounts}
+        self._by_business_id = {
+            account.business_id: account for account in accounts if account.business_id
+        }
 
     @classmethod
     def from_path(cls, path: Path) -> "WebAccountRegistry":
@@ -36,27 +49,80 @@ class WebAccountRegistry:
             device_id = str(item.get("device_id") or "").strip()
             business_id = str(item.get("business_id") or "").strip()
             token_file_text = str(item.get("token_file") or "").strip()
-            if not all((account_id, device_id, business_id, token_file_text)):
-                raise ValueError(f"account entry {index} is missing required fields")
+            if not account_id or not device_id:
+                raise ValueError(
+                    f"account entry {index} is missing account_id or device_id"
+                )
+
+            mode = str(item.get("mode") or "").strip().lower()
+            if not mode:
+                mode = "business" if business_id or token_file_text else "browser"
+            if mode not in {"browser", "business"}:
+                raise ValueError(
+                    f"account entry {index} mode must be browser or business"
+                )
+            if mode == "business" and (not business_id or not token_file_text):
+                raise ValueError(
+                    f"account entry {index} business mode requires "
+                    "business_id and token_file"
+                )
             if account_id in seen_account_ids:
                 raise ValueError(f"duplicate account_id: {account_id}")
-            if business_id in seen_business_ids:
+            if business_id and business_id in seen_business_ids:
                 raise ValueError(f"duplicate business_id: {business_id}")
             seen_account_ids.add(account_id)
-            seen_business_ids.add(business_id)
+            if business_id:
+                seen_business_ids.add(business_id)
 
-            token_file = Path(token_file_text).expanduser()
-            if not token_file.is_absolute():
-                token_file = path.parent / token_file
+            token_file: Path | None = None
+            if token_file_text:
+                token_file = Path(token_file_text).expanduser()
+                if not token_file.is_absolute():
+                    token_file = path.parent / token_file
+
+            faq_text = ""
+            faq_file_text = str(item.get("faq_file") or "").strip()
+            if faq_file_text:
+                faq_file = Path(faq_file_text).expanduser()
+                if not faq_file.is_absolute():
+                    faq_file = path.parent / faq_file
+                faq_text = faq_file.read_text(encoding="utf-8")
+
+            max_auto_replies_value = item.get("max_auto_replies", 12)
+            if max_auto_replies_value in (None, ""):
+                max_auto_replies_value = 12
+            invite_after_turns_value = item.get(
+                "invite_after_meaningful_turns", 2
+            )
+            if invite_after_turns_value in (None, ""):
+                invite_after_turns_value = 2
             accounts.append(
                 WebAccount(
                     account_id=account_id,
                     device_id=device_id,
                     business_id=business_id,
                     token_file=token_file,
+                    mode=mode,
                     private_channel_hint=str(
                         item.get("private_channel_hint") or ""
                     ).strip(),
+                    offer_context=str(item.get("offer_context") or "").strip(),
+                    faq_text=faq_text,
+                    reply_language=str(
+                        item.get("reply_language") or "auto"
+                    ).strip(),
+                    max_auto_replies=max(1, int(max_auto_replies_value)),
+                    invite_after_meaningful_turns=max(
+                        1, int(invite_after_turns_value)
+                    ),
+                    fallback_acknowledgement=str(
+                        item.get("fallback_acknowledgement")
+                        or "Thanks for your message. What are you looking for?"
+                    ).strip(),
+                    browser_followback_enabled=bool(
+                        item.get("browser_followback_enabled", True)
+                    ),
+                    browser_dm_enabled=bool(item.get("browser_dm_enabled", True)),
                     enabled=bool(item.get("enabled", True)),
                 )
             )
