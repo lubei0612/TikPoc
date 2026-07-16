@@ -1,0 +1,9 @@
+{
+  "client_id": "replace-with-developer-app-client-id",
+  "client_secret": "replace-with-developer-app-client-secret",
+  "access_token": "replace-with-current-access-token",
+  "refresh_token": "replace-with-current-refresh-token",
+  "access_expires_at": 1784188800,
+  "refresh_expires_at": 1815724800,
+  "business_id": "replace-with-tiktok-business-open-id"
+}

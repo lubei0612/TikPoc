@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TikPoc Event Bridge</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="eyebrow">TIKPOC / WEB EVENT BRIDGE</p>
+        <h1>账号事件桥接</h1>
+        <p class="subtitle">绑定一个专用 Chrome 登录态与本机 Dashboard。</p>
+      </header>
+
+      <form id="settings-form">
+        <section aria-labelledby="identity-heading">
+          <h2 id="identity-heading">账号绑定</h2>
+          <label>
+            <span>Account ID</span>
+            <input id="account-id" name="accountId" autocomplete="off" required />
+          </label>
+          <label>
+            <span>Device ID</span>
+            <input id="device-id" name="deviceId" autocomplete="off" required />
+          </label>
+        </section>
+
+        <section aria-labelledby="connection-heading">
+          <h2 id="connection-heading">本机服务</h2>
+          <label>
+            <span>Dashboard URL</span>
+            <input
+              id="dashboard-url"
+              name="dashboardUrl"
+              type="url"
+              value="http://127.0.0.1:8766"
+              required
+            />
+          </label>
+          <button id="test-connection" class="secondary" type="button">测试连接</button>
+        </section>
+
+        <section aria-labelledby="behavior-heading">
+          <h2 id="behavior-heading">运行设置</h2>
+          <label class="switch-row">
+            <span>
+              <strong>启用自动回关</strong>
+              <small>只点击明确的新关注通知行中的 Follow / 回关按钮。</small>
+            </span>
+            <input id="enabled" name="enabled" type="checkbox" />
+          </label>
+          <label class="switch-row">
+            <span>
+              <strong>自动打开活动面板</strong>
+              <small>建议仅在专用 TikTok 标签页和 Chrome Profile 中开启。</small>
+            </span>
+            <input id="auto-open-activity" name="autoOpenActivity" type="checkbox" />
+          </label>
+        </section>
+
+        <footer>
+          <output id="status" role="status"></output>
+          <button type="submit">保存设置</button>
+        </footer>
+      </form>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>

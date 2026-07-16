@@ -1,0 +1,14 @@
+accounts:
+  - account_id: account-01
+    device_id: phone-01
+    business_id: replace-with-tiktok-business-open-id
+    token_file: secrets/account-01-token.json
+    private_channel_hint: "Continue on WhatsApp: replace-with-your-contact"
+    enabled: true
+
+  - account_id: account-02
+    device_id: phone-02
+    business_id: replace-with-second-business-open-id
+    token_file: secrets/account-02-token.json
+    private_channel_hint: "Continue on WhatsApp: replace-with-your-contact"
+    enabled: false

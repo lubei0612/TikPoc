@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.tikpoc.dashboard.8766</string>
+    <key>ProgramArguments</key>
+    <array>
+      <string>/usr/bin/env</string>
+      <string>UV_CACHE_DIR=/Users/chenyuqi/Desktop/tik/.uv-cache</string>
+      <string>/Users/chenyuqi/.local/bin/uv</string>
+      <string>run</string>
+      <string>--project</string>
+      <string>/Users/chenyuqi/Desktop/tik</string>
+      <string>tikpoc</string>
+      <string>dashboard</string>
+      <string>--db</string>
+      <string>/Users/Shared/TikPoc/tikpoc.db</string>
+      <string>--host</string>
+      <string>127.0.0.1</string>
+      <string>--port</string>
+      <string>8766</string>
+      <string>--web-accounts</string>
+      <string>/Users/chenyuqi/Desktop/tik/config/web-accounts.yaml</string>
+      <string>--env-file</string>
+      <string>/Users/chenyuqi/Desktop/tik/.env.local</string>
+      <string>--with-web-worker</string>
+      <string>--web-worker-idle-sleep</string>
+      <string>0.5</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/chenyuqi/Library/Logs/TikPoc/dashboard.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/chenyuqi/Library/Logs/TikPoc/dashboard.err.log</string>
+  </dict>
+</plist>

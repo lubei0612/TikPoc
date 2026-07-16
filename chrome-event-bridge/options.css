@@ -1,0 +1,180 @@
+:root {
+  color-scheme: light;
+  --ink: #15171a;
+  --muted: #626972;
+  --line: #d9dde2;
+  --surface: #f4f6f8;
+  --accent: #e82a4f;
+  --accent-dark: #bd1738;
+  --success: #126b4b;
+  --danger: #a61b2b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #ffffff;
+  color: var(--ink);
+  font-family: "Avenir Next", "PingFang SC", sans-serif;
+  letter-spacing: 0;
+}
+
+main {
+  width: min(760px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 56px 0 72px;
+}
+
+header {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 28px;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+h1 {
+  margin: 0;
+  font-size: 34px;
+  line-height: 1.2;
+}
+
+.subtitle {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+section {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 16px 24px;
+  padding: 28px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+h2 {
+  grid-row: 1 / span 3;
+  margin: 5px 0 0;
+  font-size: 15px;
+}
+
+label:not(.switch-row) {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+input[type="text"],
+input[type="url"],
+input:not([type]) {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid #b9c0c8;
+  border-radius: 6px;
+  padding: 9px 11px;
+  background: #ffffff;
+  color: var(--ink);
+  font: inherit;
+}
+
+input:focus-visible,
+button:focus-visible {
+  outline: 3px solid rgba(232, 42, 79, 0.22);
+  outline-offset: 2px;
+}
+
+.switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 54px;
+}
+
+.switch-row span {
+  display: grid;
+  gap: 4px;
+}
+
+.switch-row strong {
+  font-size: 14px;
+}
+
+.switch-row small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+input[type="checkbox"] {
+  width: 38px;
+  height: 22px;
+  accent-color: var(--accent);
+}
+
+button {
+  min-height: 40px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 8px 16px;
+  background: var(--accent);
+  color: #ffffff;
+  font: 600 14px/1 "Avenir Next", "PingFang SC", sans-serif;
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--accent-dark);
+}
+
+button.secondary {
+  justify-self: start;
+  border-color: #aeb5bd;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding-top: 24px;
+}
+
+#status {
+  min-height: 20px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+#status[data-state="success"] {
+  color: var(--success);
+}
+
+#status[data-state="error"] {
+  color: var(--danger);
+}
+
+@media (max-width: 620px) {
+  main {
+    width: min(100% - 28px, 760px);
+    padding-top: 32px;
+  }
+
+  section {
+    grid-template-columns: 1fr;
+  }
+
+  h2 {
+    grid-row: auto;
+  }
+}

@@ -1,0 +1,22 @@
+devices:
+  - id: phone-01
+    udid: 127.0.0.1:5555
+    account: account-01
+  - id: phone-02
+    udid: 127.0.0.1:5556
+    account: account-02
+  - id: phone-03
+    udid: 127.0.0.1:5557
+    account: account-03
+  - id: phone-04
+    udid: 127.0.0.1:5558
+    account: account-04
+  - id: phone-05
+    udid: 127.0.0.1:5559
+    account: account-05
+  - id: phone-06
+    udid: 127.0.0.1:5560
+    account: account-06
+  - id: phone-07
+    udid: 127.0.0.1:5561
+    account: account-07

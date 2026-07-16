@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TikPoc Event Bridge</title>
+    <style>
+      body { width: 260px; margin: 0; padding: 18px; color: #17191c; font-family: "Avenir Next", "PingFang SC", sans-serif; letter-spacing: 0; }
+      h1 { margin: 0 0 14px; font-size: 16px; }
+      dl { display: grid; grid-template-columns: 72px 1fr; gap: 8px; margin: 0 0 16px; font-size: 12px; }
+      dt { color: #6b727b; }
+      dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+      button { width: 100%; min-height: 36px; border: 1px solid #d62950; border-radius: 6px; background: #d62950; color: #fff; font-weight: 700; cursor: pointer; }
+      .state { color: #126b4b; }
+      .state.off { color: #9b2435; }
+    </style>
+  </head>
+  <body>
+    <h1>TikPoc Event Bridge</h1>
+    <dl>
+      <dt>状态</dt><dd id="state" class="state off">未启用</dd>
+      <dt>账号</dt><dd id="account">-</dd>
+      <dt>设备</dt><dd id="device">-</dd>
+    </dl>
+    <button id="open-options" type="button">打开设置</button>
+    <script src="popup.js"></script>
+  </body>
+</html>
