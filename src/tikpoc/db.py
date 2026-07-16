@@ -1,5 +1,5 @@
-import sqlite3
 import json
+import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -42,6 +42,40 @@ class WebEvent:
     dedup_key: str
     payload: dict[str, object]
     attempts: int = 0
+
+
+@dataclass(frozen=True)
+class BrowserReplyPlan:
+    id: int
+    account_id: str
+    conversation_id: str
+    inbound_fingerprint: str
+    participant_username: str
+    inbound_text: str
+    inbound_timestamp_ms: int
+    reply_text: str
+    stage: str
+    state: str
+
+
+def _row_browser_reply_plan(row: sqlite3.Row) -> BrowserReplyPlan:
+    return BrowserReplyPlan(
+        id=int(row["id"]),
+        account_id=str(row["account_id"]),
+        conversation_id=str(row["conversation_id"]),
+        inbound_fingerprint=str(row["inbound_fingerprint"]),
+        participant_username=str(row["participant_username"]),
+        inbound_text=str(row["inbound_text"]),
+        inbound_timestamp_ms=int(row["inbound_timestamp_ms"]),
+        reply_text=str(row["reply_text"]),
+        stage=str(row["stage"]),
+        state=str(row["state"]),
+    )
+
+
+def _require_identity(*values: str) -> None:
+    if any(not value.strip() for value in values):
+        raise ValueError("identity values must be nonempty")
 
 
 def _row_profile_metrics(row: sqlite3.Row) -> ProfileMetrics | None:
@@ -220,6 +254,23 @@ class Database:
                 )
                 """
             )
+            web_conversation_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(web_conversations)")
+            }
+            conversation_columns = {
+                "stage": "TEXT NOT NULL DEFAULT 'new'",
+                "meaningful_turns": "INTEGER NOT NULL DEFAULT 0",
+                "auto_reply_count": "INTEGER NOT NULL DEFAULT 0",
+                "last_invited_at_ms": "INTEGER NOT NULL DEFAULT 0",
+                "contact_captured_at_ms": "INTEGER NOT NULL DEFAULT 0",
+                "human_required": "INTEGER NOT NULL DEFAULT 0",
+            }
+            for name, declaration in conversation_columns.items():
+                if name not in web_conversation_columns:
+                    connection.execute(
+                        f"ALTER TABLE web_conversations ADD COLUMN {name} {declaration}"
+                    )
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS web_messages (
@@ -234,6 +285,46 @@ class Database:
                     in_reply_to_message_id TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(account_id, message_id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS browser_reply_plans (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_id TEXT NOT NULL,
+                    conversation_id TEXT NOT NULL,
+                    inbound_fingerprint TEXT NOT NULL,
+                    participant_username TEXT NOT NULL DEFAULT '',
+                    inbound_text TEXT NOT NULL DEFAULT '',
+                    inbound_timestamp_ms INTEGER NOT NULL,
+                    reply_text TEXT NOT NULL DEFAULT '',
+                    stage TEXT NOT NULL DEFAULT 'new',
+                    state TEXT NOT NULL DEFAULT 'planning',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(account_id, inbound_fingerprint)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS browser_reply_plans_conversation_idx
+                ON browser_reply_plans(account_id, conversation_id)
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS browser_action_leases (
+                    account_id TEXT NOT NULL,
+                    action_type TEXT NOT NULL,
+                    action_key TEXT NOT NULL,
+                    owner_id TEXT NOT NULL,
+                    lease_expires_at_ms INTEGER NOT NULL,
+                    state TEXT NOT NULL DEFAULT 'claimed',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY(account_id, action_type, action_key)
                 )
                 """
             )
@@ -710,6 +801,177 @@ class Database:
                     int(timestamp_ms),
                     in_reply_to_message_id,
                 ),
+            )
+            return cursor.rowcount == 1
+
+    def reserve_browser_reply_plan(
+        self,
+        account_id: str,
+        conversation_id: str,
+        inbound_fingerprint: str,
+        participant_username: str,
+        inbound_text: str,
+        inbound_timestamp_ms: int,
+    ) -> tuple[BrowserReplyPlan, bool]:
+        _require_identity(account_id, conversation_id, inbound_fingerprint)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                INSERT OR IGNORE INTO browser_reply_plans(
+                    account_id, conversation_id, inbound_fingerprint,
+                    participant_username, inbound_text, inbound_timestamp_ms
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    account_id,
+                    conversation_id,
+                    inbound_fingerprint,
+                    participant_username,
+                    inbound_text,
+                    int(inbound_timestamp_ms),
+                ),
+            )
+            row = connection.execute(
+                """
+                SELECT * FROM browser_reply_plans
+                WHERE account_id=? AND inbound_fingerprint=?
+                """,
+                (account_id, inbound_fingerprint),
+            ).fetchone()
+            assert row is not None
+            return _row_browser_reply_plan(row), cursor.rowcount == 1
+
+    def get_browser_reply_plan(
+        self, account_id: str, inbound_fingerprint: str
+    ) -> BrowserReplyPlan | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM browser_reply_plans
+                WHERE account_id=? AND inbound_fingerprint=?
+                """,
+                (account_id, inbound_fingerprint),
+            ).fetchone()
+        return None if row is None else _row_browser_reply_plan(row)
+
+    def browser_reply_plan_by_id(self, plan_id: int) -> BrowserReplyPlan | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM browser_reply_plans WHERE id=?", (plan_id,)
+            ).fetchone()
+        return None if row is None else _row_browser_reply_plan(row)
+
+    def complete_browser_reply_plan(
+        self, plan_id: int, reply_text: str, stage: str
+    ) -> bool:
+        if not reply_text.strip() or not stage.strip():
+            raise ValueError("reply text and stage must be nonempty")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT reply_text, stage, state FROM browser_reply_plans WHERE id=?",
+                (plan_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(plan_id)
+            if row["reply_text"] == reply_text and row["stage"] == stage:
+                return True
+            if row["state"] != "planning":
+                return False
+            connection.execute(
+                """
+                UPDATE browser_reply_plans
+                SET reply_text=?, stage=?, state='planned',
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE id=? AND state='planning'
+                """,
+                (reply_text, stage, plan_id),
+            )
+            return True
+
+    def set_browser_reply_plan_state(self, plan_id: int, state: str) -> bool:
+        if state not in {"sent", "uncertain", "superseded"}:
+            raise ValueError(f"invalid browser reply plan state: {state}")
+        allowed_sources = {
+            "sent": ("planned", "uncertain", "sent"),
+            "uncertain": ("planned", "uncertain"),
+            "superseded": ("planned", "uncertain", "superseded"),
+        }
+        sources = allowed_sources[state]
+        placeholders = ", ".join("?" for _ in sources)
+        with self._connect() as connection:
+            cursor = connection.execute(
+                f"""
+                UPDATE browser_reply_plans
+                SET state=?, updated_at=CURRENT_TIMESTAMP
+                WHERE id=? AND state IN ({placeholders})
+                """,
+                (state, plan_id, *sources),
+            )
+            return cursor.rowcount == 1
+
+    def claim_browser_action(
+        self,
+        account_id: str,
+        action_type: str,
+        action_key: str,
+        owner_id: str,
+        now_ms: int,
+        lease_seconds: int = 30,
+    ) -> bool:
+        _require_identity(account_id, action_type, action_key, owner_id)
+        expires_at_ms = int(now_ms) + max(1, int(lease_seconds)) * 1_000
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                INSERT INTO browser_action_leases(
+                    account_id, action_type, action_key, owner_id,
+                    lease_expires_at_ms, state
+                ) VALUES (?, ?, ?, ?, ?, 'claimed')
+                ON CONFLICT(account_id, action_type, action_key) DO UPDATE SET
+                    owner_id=excluded.owner_id,
+                    lease_expires_at_ms=excluded.lease_expires_at_ms,
+                    state='claimed',
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE browser_action_leases.state != 'completed'
+                  AND (
+                      browser_action_leases.owner_id=excluded.owner_id
+                      OR browser_action_leases.lease_expires_at_ms <= ?
+                  )
+                """,
+                (
+                    account_id,
+                    action_type,
+                    action_key,
+                    owner_id,
+                    expires_at_ms,
+                    int(now_ms),
+                ),
+            )
+            return cursor.rowcount == 1
+
+    def finish_browser_action(
+        self,
+        account_id: str,
+        action_type: str,
+        action_key: str,
+        owner_id: str,
+        state: str,
+    ) -> bool:
+        if state not in {"completed", "uncertain", "superseded"}:
+            raise ValueError(f"invalid browser action state: {state}")
+        completed_guard = "" if state == "completed" else "AND state != 'completed'"
+        with self._connect() as connection:
+            cursor = connection.execute(
+                f"""
+                UPDATE browser_action_leases
+                SET state=?, updated_at=CURRENT_TIMESTAMP
+                WHERE account_id=? AND action_type=? AND action_key=?
+                  AND owner_id=? {completed_guard}
+                """,
+                (state, account_id, action_type, action_key, owner_id),
             )
             return cursor.rowcount == 1
 
