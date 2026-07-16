@@ -936,10 +936,7 @@ class Database:
                     state='claimed',
                     updated_at=CURRENT_TIMESTAMP
                 WHERE browser_action_leases.state != 'completed'
-                  AND (
-                      browser_action_leases.owner_id=excluded.owner_id
-                      OR browser_action_leases.lease_expires_at_ms <= ?
-                  )
+                  AND browser_action_leases.lease_expires_at_ms <= ?
                 """,
                 (
                     account_id,

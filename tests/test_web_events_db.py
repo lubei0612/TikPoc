@@ -1,6 +1,8 @@
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 
@@ -161,6 +163,32 @@ def test_reply_plan_is_unique_per_account_and_inbound_fingerprint(
     assert duplicate_created is False
     assert second.id == first.id
     assert second == first
+
+
+def test_reply_plan_reservation_has_one_creator_across_connections(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tasks.db"
+    Database(path).migrate()
+    barrier = Barrier(2)
+
+    def reserve(database: Database) -> tuple[BrowserReplyPlan, bool]:
+        barrier.wait()
+        return database.reserve_browser_reply_plan(
+            "account-01",
+            "conversation-01",
+            "fp-01",
+            "prospect",
+            "hello",
+            1_000,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(reserve, Database(path)) for _ in range(2)]
+        results = [future.result() for future in futures]
+
+    assert [created for _, created in results].count(True) == 1
+    assert results[0][0] == results[1][0]
 
 
 def test_browser_reply_plan_is_frozen() -> None:
@@ -455,7 +483,7 @@ def test_expired_browser_action_lease_can_be_reclaimed(tmp_path: Path) -> None:
     )
 
 
-def test_browser_action_same_owner_renews_and_accounts_are_scoped(
+def test_browser_action_same_owner_is_busy_until_expiry_and_accounts_are_scoped(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "tasks.db"
@@ -463,9 +491,9 @@ def test_browser_action_same_owner_renews_and_accounts_are_scoped(
     database.migrate()
 
     assert database.claim_browser_action(
-        "account-01", "dm_send", "plan-1", "tab-a", 1_000, 0
+        "account-01", "dm_send", "plan-1", "tab-a", 1_000, 1
     )
-    assert database.claim_browser_action(
+    assert not database.claim_browser_action(
         "account-01", "dm_send", "plan-1", "tab-a", 1_500, 30
     )
     assert database.claim_browser_action(
@@ -479,7 +507,33 @@ def test_browser_action_same_owner_renews_and_accounts_are_scoped(
               AND action_key='plan-1'
             """
         ).fetchone()[0]
-    assert expiry == 31_500
+    assert expiry == 2_000
+    assert database.claim_browser_action(
+        "account-01", "dm_send", "plan-1", "tab-a", 2_000, 30
+    )
+
+
+def test_browser_action_claim_has_one_winner_across_connections(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tasks.db"
+    Database(path).migrate()
+    barrier = Barrier(2)
+
+    def claim(database: Database, owner_id: str) -> bool:
+        barrier.wait()
+        return database.claim_browser_action(
+            "account-01", "dm_send", "plan-1", owner_id, 1_000, 30
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(claim, Database(path), owner_id)
+            for owner_id in ("tab-a", "tab-b")
+        ]
+        results = [future.result() for future in futures]
+
+    assert results.count(True) == 1
 
 
 @pytest.mark.parametrize("empty_index", range(4))
@@ -541,6 +595,26 @@ def test_finish_browser_action_checks_owner_and_completed_is_terminal(
         )
 
 
+def test_uncertain_browser_action_is_busy_for_same_owner_until_expiry(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "tasks.db")
+    database.migrate()
+    assert database.claim_browser_action(
+        "account-01", "dm_send", "plan-1", "tab-a", 1_000, 1
+    )
+    assert database.finish_browser_action(
+        "account-01", "dm_send", "plan-1", "tab-a", "uncertain"
+    )
+
+    assert not database.claim_browser_action(
+        "account-01", "dm_send", "plan-1", "tab-a", 1_500, 1
+    )
+    assert database.claim_browser_action(
+        "account-01", "dm_send", "plan-1", "tab-a", 2_000, 1
+    )
+
+
 def test_uncertain_and_superseded_browser_actions_can_be_reclaimed_after_expiry(
     tmp_path: Path,
 ) -> None:
@@ -560,4 +634,13 @@ def test_uncertain_and_superseded_browser_actions_can_be_reclaimed_after_expiry(
     )
     assert database.finish_browser_action(
         "account-01", "dm_send", "plan-1", "tab-b", "superseded"
+    )
+    assert not database.claim_browser_action(
+        "account-01", "dm_send", "plan-1", "tab-b", 2_500, 1
+    )
+    assert not database.claim_browser_action(
+        "account-01", "dm_send", "plan-1", "tab-c", 2_500, 1
+    )
+    assert database.claim_browser_action(
+        "account-01", "dm_send", "plan-1", "tab-c", 3_000, 1
     )
