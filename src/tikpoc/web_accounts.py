@@ -4,14 +4,27 @@ from pathlib import Path
 import yaml
 
 
+def _parse_bool(value: object, *, field: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "on", "1"}:
+            return True
+        if normalized in {"false", "no", "off", "0"}:
+            return False
+    raise ValueError(f"{field} must be a boolean")
+
+
 @dataclass(frozen=True)
 class WebAccount:
     account_id: str
     device_id: str
     business_id: str = ""
     token_file: Path | None = None
-    mode: str = "browser"
     private_channel_hint: str = ""
+    enabled: bool = True
+    mode: str | None = None
     offer_context: str = ""
     faq_text: str = ""
     reply_language: str = "auto"
@@ -22,7 +35,17 @@ class WebAccount:
     )
     browser_followback_enabled: bool = True
     browser_dm_enabled: bool = True
-    enabled: bool = True
+
+    def __post_init__(self) -> None:
+        if self.mode is None:
+            mode = "business" if self.business_id or self.token_file else "browser"
+        elif isinstance(self.mode, str):
+            mode = self.mode.strip().lower()
+        else:
+            raise ValueError("mode must be browser or business")
+        if mode not in {"browser", "business"}:
+            raise ValueError("mode must be browser or business")
+        object.__setattr__(self, "mode", mode)
 
 
 class WebAccountRegistry:
@@ -120,11 +143,18 @@ class WebAccountRegistry:
                         item.get("fallback_acknowledgement")
                         or "Thanks for your message. What are you looking for?"
                     ).strip(),
-                    browser_followback_enabled=bool(
-                        item.get("browser_followback_enabled", True)
+                    browser_followback_enabled=_parse_bool(
+                        item.get("browser_followback_enabled", True),
+                        field="browser_followback_enabled",
                     ),
-                    browser_dm_enabled=bool(item.get("browser_dm_enabled", True)),
-                    enabled=bool(item.get("enabled", True)),
+                    browser_dm_enabled=_parse_bool(
+                        item.get("browser_dm_enabled", True),
+                        field="browser_dm_enabled",
+                    ),
+                    enabled=_parse_bool(
+                        item.get("enabled", True),
+                        field="enabled",
+                    ),
                 )
             )
         return cls(tuple(accounts))

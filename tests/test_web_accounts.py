@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from tikpoc.business_messaging import BusinessToken, JsonTokenStore
-from tikpoc.web_accounts import WebAccountRegistry
+from tikpoc.web_accounts import WebAccount, WebAccountRegistry
 
 
 def test_web_account_registry_loads_and_resolves_relative_token_file(
@@ -69,6 +69,123 @@ def test_browser_account_does_not_require_business_credentials(tmp_path: Path) -
     assert account.fallback_acknowledgement == "Thanks for your message."
     assert account.browser_followback_enabled is False
     assert account.browser_dm_enabled is True
+
+
+def test_quoted_false_disables_boolean_account_settings(tmp_path: Path) -> None:
+    config = tmp_path / "accounts.yaml"
+    config.write_text(
+        "accounts:\n"
+        "  - account_id: account-01\n"
+        "    device_id: phone-01\n"
+        "    browser_followback_enabled: 'false'\n"
+        "    browser_dm_enabled: 'false'\n"
+        "    enabled: 'false'\n",
+        encoding="utf-8",
+    )
+
+    account = WebAccountRegistry.from_path(config).by_account_id("account-01")
+
+    assert account.browser_followback_enabled is False
+    assert account.browser_dm_enabled is False
+    assert account.enabled is False
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("TrUe", True),
+        ("FaLsE", False),
+        ("YES", True),
+        ("no", False),
+        ("On", True),
+        ("OFF", False),
+        ("1", True),
+        ("0", False),
+    ],
+)
+def test_boolean_account_settings_accept_recognized_strings(
+    tmp_path: Path, value: str, expected: bool
+) -> None:
+    config = tmp_path / "accounts.yaml"
+    config.write_text(
+        "accounts:\n"
+        "  - account_id: account-01\n"
+        "    device_id: phone-01\n"
+        f"    browser_dm_enabled: '{value}'\n",
+        encoding="utf-8",
+    )
+
+    account = WebAccountRegistry.from_path(config).by_account_id("account-01")
+
+    assert account.browser_dm_enabled is expected
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["browser_followback_enabled", "browser_dm_enabled", "enabled"],
+)
+def test_invalid_boolean_account_settings_name_the_field(
+    tmp_path: Path, field: str
+) -> None:
+    config = tmp_path / "accounts.yaml"
+    config.write_text(
+        "accounts:\n"
+        "  - account_id: account-01\n"
+        "    device_id: phone-01\n"
+        f"    {field}: 'sometimes'\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=field):
+        WebAccountRegistry.from_path(config)
+
+
+@pytest.mark.parametrize(
+    "value_yaml",
+    ["1", "0", "[]", "{}", "null"],
+    ids=["one", "zero", "list", "object", "null"],
+)
+def test_boolean_account_settings_reject_non_boolean_types(
+    tmp_path: Path, value_yaml: str
+) -> None:
+    config = tmp_path / "accounts.yaml"
+    config.write_text(
+        "accounts:\n"
+        "  - account_id: account-01\n"
+        "    device_id: phone-01\n"
+        f"    browser_dm_enabled: {value_yaml}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="browser_dm_enabled"):
+        WebAccountRegistry.from_path(config)
+
+
+def test_web_account_preserves_legacy_positional_constructor() -> None:
+    token_file = Path("token")
+
+    account = WebAccount("a", "d", "b", token_file, "hint", False)
+
+    assert account.account_id == "a"
+    assert account.device_id == "d"
+    assert account.business_id == "b"
+    assert account.token_file == token_file
+    assert account.private_channel_hint == "hint"
+    assert account.enabled is False
+    assert account.mode == "business"
+
+
+def test_web_account_example_loads_without_external_faq_file() -> None:
+    config = Path(__file__).parents[1] / "config" / "web-accounts.example.yaml"
+
+    registry = WebAccountRegistry.from_path(config)
+
+    assert [account.account_id for account in registry.accounts] == [
+        "account-01",
+        "account-02",
+    ]
+    assert registry.by_account_id("account-01").faq_text == ""
+    assert registry.by_account_id("account-02").enabled is False
 
 
 def test_business_mode_still_requires_business_fields(tmp_path: Path) -> None:

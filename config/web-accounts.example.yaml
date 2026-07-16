@@ -4,7 +4,7 @@ accounts:
     mode: browser
     private_channel_hint: "WhatsApp: replace-with-your-contact"
     offer_context: "Products from the account-01 catalog"
-    faq_file: replace-with-account-01-faq.md
+    faq_file: ""
     reply_language: auto
     max_auto_replies: 12
     invite_after_meaningful_turns: 2
