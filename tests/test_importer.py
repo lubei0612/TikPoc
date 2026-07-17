@@ -36,8 +36,8 @@ def test_read_comment_export_deduplicates_user_id(tmp_path: Path) -> None:
     source = tmp_path / "comments.csv"
     source.write_text(
         HEADER
-        + "1,comment_panel,744,https://video,707,sec,Sample,Name,https://profile,,a,0,0,false,now\n"
-        + "2,comment_panel,744,https://video,707,sec,Changed,Name,https://profile,,b,0,1,true,now\n",
+        + "1,comment_panel,744,https://video,707,,Sample,Name,https://profile,,a,0,0,false,now\n"
+        + "2,comment_panel,744,https://video,707,,Changed,Name,https://profile,,b,0,1,true,now\n",
         encoding="utf-8",
     )
 
@@ -45,6 +45,41 @@ def test_read_comment_export_deduplicates_user_id(tmp_path: Path) -> None:
 
     assert [target.username for target in result.targets] == ["sample"]
     assert result.skipped_duplicates == 1
+
+
+def test_read_comment_export_deduplicates_sec_uid_before_user_id(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "comments.csv"
+    source.write_text(
+        HEADER
+        + "1,comment_panel,744,https://video,user-1,sec-shared,First,Name,https://profile,,a,0,0,false,now\n"
+        + "2,comment_panel,744,https://video,user-2,sec-shared,Second,Name,https://profile,,b,0,1,true,now\n",
+        encoding="utf-8-sig",
+    )
+
+    result = read_targets(source)
+
+    assert len(result.targets) == 1
+    assert result.targets[0].identity_key == "sec:sec-shared"
+    assert result.targets[0].source_line_numbers == (2, 3)
+    assert result.skipped_duplicates == 1
+
+
+def test_read_comment_export_falls_back_to_user_id_when_sec_uid_is_empty(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "comments.csv"
+    source.write_text(
+        HEADER
+        + "1,comment_panel,744,https://video,user-1,,Buyer,Name,https://profile,,a,0,0,false,now\n",
+        encoding="utf-8",
+    )
+
+    target = read_targets(source).targets[0]
+
+    assert target.identity_key == "uid:user-1"
+    assert target.source_line_numbers == (2,)
 
 
 def test_read_comment_export_requires_identity_columns(tmp_path: Path) -> None:

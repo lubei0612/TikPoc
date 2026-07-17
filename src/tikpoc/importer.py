@@ -1,5 +1,5 @@
 import csv
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -35,6 +35,8 @@ class Target:
     sec_uid: str
     profile_metrics: ProfileMetrics | None = None
     private_account: bool | None = None
+    identity_key: str = ""
+    source_line_numbers: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,16 @@ class ImportResult:
     targets: tuple[Target, ...]
     skipped_duplicates: int
     skipped_invalid: int = 0
+
+
+def target_identity_key(*, sec_uid: str, target_id: str, username: str) -> str:
+    if normalized := sec_uid.strip():
+        return f"sec:{normalized}"
+    if normalized := target_id.strip():
+        return f"uid:{normalized}"
+    if normalized := username.strip().removeprefix("@").lower():
+        return f"handle:{normalized}"
+    raise ValueError("target identity is empty")
 
 
 def read_targets(path: Path) -> ImportResult:
@@ -59,24 +71,38 @@ def _read_comment_export(path: Path) -> ImportResult:
             raise ValueError(f"missing required CSV columns: {', '.join(missing)}")
 
         targets: list[Target] = []
-        seen_ids: set[str] = set()
+        target_indexes: dict[str, int] = {}
         skipped_duplicates = 0
         for line_number, row in enumerate(reader, start=2):
             target_id = (row["commenter_user_id"] or "").strip()
             username = (row["commenter_handle"] or "").strip().removeprefix("@").lower()
             if not target_id or not username:
                 raise ValueError(f"missing target identity on CSV line {line_number}")
-            if target_id in seen_ids:
+            sec_uid = (row.get("commenter_sec_uid") or "").strip()
+            identity_key = target_identity_key(
+                sec_uid=sec_uid,
+                target_id=target_id,
+                username=username,
+            )
+            if identity_key in target_indexes:
+                index = target_indexes[identity_key]
+                existing = targets[index]
+                targets[index] = replace(
+                    existing,
+                    source_line_numbers=existing.source_line_numbers + (line_number,),
+                )
                 skipped_duplicates += 1
                 continue
-            seen_ids.add(target_id)
+            target_indexes[identity_key] = len(targets)
             targets.append(
                 Target(
                     target_id=target_id,
                     username=username,
                     profile_url=(row["commenter_profile_url"] or "").strip(),
                     source_video_id=(row["video_id"] or "").strip(),
-                    sec_uid=(row.get("commenter_sec_uid") or "").strip(),
+                    sec_uid=sec_uid,
+                    identity_key=identity_key,
+                    source_line_numbers=(line_number,),
                 )
             )
 
