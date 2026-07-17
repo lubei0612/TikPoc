@@ -9,11 +9,12 @@ them here.
 
 - The user resumed the project goal on 2026-07-17 and requested continuous
   execution after the revised design and plan are accepted.
-- The current phase is written design review. Do not begin implementation, run
-  live account actions, start fleet workers, or change runtime services until
-  the user accepts the written design and the implementation plan is complete.
-- Inspection, documentation, status reporting, and workspace auditing are
-  allowed during this review gate.
+- The user accepted the written design and authorized continuous execution on
+  2026-07-17. Implementation may proceed through the approved roadmap.
+- Live account actions, fleet workers, and runtime-service changes still require
+  the applicable written live-test step, a healthy controlled account/device,
+  and visible-state evidence. Do not treat implementation authorization as a
+  blanket live-action command.
 - Continue from the checkpoint in this file. Do not restart the project or
   repeat completed tasks.
 
@@ -48,6 +49,14 @@ Read these before implementing related work:
   1-12 and their test-first implementation steps.
 - `docs/superpowers/plans/2026-07-16-seven-device-capacity.md` contains Fleet
   Tasks 1-6 and the capacity acceptance gates.
+- `docs/superpowers/plans/2026-07-17-seven-account-acquisition-roadmap.md`
+  defines the current cross-plan execution order and records which historical
+  capacity assumptions it supersedes.
+- `docs/superpowers/plans/2026-07-17-acquisition-rounds-reliable-mobile.md`
+  contains the current target-pool, round, snapshot, interaction, MYT, mobile,
+  and capacity implementation tasks.
+- `docs/superpowers/plans/2026-07-17-operator-console.md` contains the FastAPI,
+  React, human-control, lead-inbox, and analytics tasks.
 - `docs/superpowers/specs/2026-07-11-tiktok-mobile-automation-design.md` and
   `docs/superpowers/plans/2026-07-11-single-device-poc.md` describe the original
   mobile worker foundation.
@@ -232,15 +241,13 @@ Completed on `feat/web-lead-conversion`:
 - Last focused Task 3 verification: `52 passed`.
 - Ruff check passed; the two Task 3 files were already formatted.
 
-Outstanding at the pause point:
+Outstanding at the current checkpoint:
 
-1. Obtain user review of the written seven-account system design.
-2. Write and review the revised implementation plan.
-3. Repeat independent Task 3 specification review after `d7423f8`.
-4. Run independent Task 3 code-quality review and fix material findings.
-5. Execute the approved mobile, management-console, and browser tasks in the
+1. Repeat independent Task 3 specification review after `d7423f8`.
+2. Run independent Task 3 code-quality review and fix material findings.
+3. Execute the approved mobile, management-console, and browser tasks in the
    delivery order defined by the new design and plan.
-6. Finish full regression, two-device live calibration, four-/eight-hour
+4. Finish full regression, two-device live calibration, four-/eight-hour
    endurance tests, seven-device benchmark, runbooks, branch integration, and
    GitHub setup.
 
@@ -249,8 +256,8 @@ Outstanding at the pause point:
 1. Enter the active feature worktree and read this file plus both current plans.
 2. Run `git status --short --branch` and `git log -5 --oneline`.
 3. Preserve any new user changes and inspect them before proceeding.
-4. Confirm that the written system design and revised implementation plan have
-   passed their user-review gates.
+4. Confirm the written system design, roadmap, and component plan paths are
+   present and read the current task before editing.
 5. Run the Task 3 focused tests and full regression to re-establish the baseline.
 6. Perform the outstanding Task 3 specification review, then quality review.
 7. Update this checkpoint after Task 3 is accepted.
