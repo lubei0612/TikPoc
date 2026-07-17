@@ -8,11 +8,15 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .acquisition_models import (
+    ActionPlan,
+    ActionPlanState,
     AssignmentPhase,
+    OutcomeKind,
     PoolImport,
     PoolTarget,
     ProfileAccessState,
     ProfileSnapshot,
+    QuotaWindow,
     RoundAssignment,
 )
 from .importer import Target, target_identity_key
@@ -176,6 +180,39 @@ class AcquisitionRepository:
                     observed_at_ms INTEGER NOT NULL,
                     PRIMARY KEY(round_id, identity_key),
                     FOREIGN KEY(round_id) REFERENCES exposure_rounds(round_id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS device_action_plans (
+                    plan_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    round_id TEXT NOT NULL,
+                    identity_key TEXT NOT NULL,
+                    device_id TEXT NOT NULL,
+                    seed TEXT NOT NULL,
+                    requested_outcome TEXT NOT NULL,
+                    effective_outcome TEXT NOT NULL,
+                    quota_window_start_ms INTEGER,
+                    quota_reason TEXT,
+                    video_key TEXT,
+                    state TEXT NOT NULL DEFAULT 'planned',
+                    created_at_ms INTEGER NOT NULL,
+                    UNIQUE(round_id, identity_key, device_id),
+                    FOREIGN KEY(round_id) REFERENCES exposure_rounds(round_id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS acquisition_quota_windows (
+                    device_id TEXT NOT NULL,
+                    outcome TEXT NOT NULL,
+                    window_start_ms INTEGER NOT NULL,
+                    reserved_count INTEGER NOT NULL DEFAULT 0,
+                    confirmed_count INTEGER NOT NULL DEFAULT 0,
+                    uncertain_count INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(device_id, outcome, window_start_ms)
                 )
                 """
             )
@@ -736,6 +773,133 @@ class AcquisitionRepository:
         with self._connect() as connection:
             return self._profile_snapshot(connection, round_id, identity_key)
 
+    def create_action_plan(
+        self,
+        *,
+        round_id: str,
+        identity_key: str,
+        device_id: str,
+        seed: str,
+        requested_outcome: OutcomeKind | str,
+        now_ms: int,
+        hourly_limits: Mapping[OutcomeKind, int],
+    ) -> ActionPlan:
+        requested = OutcomeKind(requested_outcome)
+        if now_ms < 0:
+            raise ValueError("action plan timestamp must be nonnegative")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = self._action_plan(connection, round_id, identity_key, device_id)
+            if existing is not None:
+                return existing
+            snapshot = self._profile_snapshot(connection, round_id, identity_key)
+            if snapshot is None:
+                raise ValueError("profile snapshot is not ready")
+            assignment = connection.execute(
+                """
+                SELECT visit_confirmed_at_ms
+                FROM round_assignments
+                WHERE round_id = ? AND identity_key = ? AND device_id = ?
+                """,
+                (round_id, identity_key, device_id),
+            ).fetchone()
+            if assignment is None or assignment["visit_confirmed_at_ms"] is None:
+                raise ValueError(
+                    "device has no confirmed profile visit for action plan"
+                )
+
+            effective = requested
+            quota_window_start_ms: int | None = None
+            quota_reason: str | None = None
+            if not snapshot.eligible:
+                requested = OutcomeKind.TRACE
+                effective = OutcomeKind.TRACE
+                quota_reason = "profile_ineligible"
+            elif requested is not OutcomeKind.TRACE:
+                try:
+                    limit = int(hourly_limits[requested])
+                except KeyError as error:
+                    raise ValueError(
+                        f"missing hourly limit for {requested.value}"
+                    ) from error
+                if limit < 0:
+                    raise ValueError("hourly limits must be nonnegative")
+                quota_window_start_ms = now_ms - now_ms % 3_600_000
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO acquisition_quota_windows(
+                        device_id, outcome, window_start_ms
+                    ) VALUES (?, ?, ?)
+                    """,
+                    (device_id, requested.value, quota_window_start_ms),
+                )
+                reserved = connection.execute(
+                    """
+                    UPDATE acquisition_quota_windows
+                    SET reserved_count = reserved_count + 1
+                    WHERE device_id = ? AND outcome = ? AND window_start_ms = ?
+                      AND reserved_count < ?
+                    """,
+                    (device_id, requested.value, quota_window_start_ms, limit),
+                )
+                if reserved.rowcount != 1:
+                    effective = OutcomeKind.TRACE
+                    quota_reason = f"{requested.value}_limit_reached"
+
+            cursor = connection.execute(
+                """
+                INSERT INTO device_action_plans(
+                    round_id, identity_key, device_id, seed,
+                    requested_outcome, effective_outcome,
+                    quota_window_start_ms, quota_reason, state, created_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'planned', ?)
+                """,
+                (
+                    round_id,
+                    identity_key,
+                    device_id,
+                    seed,
+                    requested.value,
+                    effective.value,
+                    quota_window_start_ms,
+                    quota_reason,
+                    now_ms,
+                ),
+            )
+            return self._action_plan_by_id(connection, int(cursor.lastrowid))
+
+    def action_plan(
+        self, round_id: str, identity_key: str, device_id: str
+    ) -> ActionPlan | None:
+        with self._connect() as connection:
+            return self._action_plan(connection, round_id, identity_key, device_id)
+
+    def quota_window(
+        self,
+        device_id: str,
+        outcome: OutcomeKind | str,
+        window_start_ms: int,
+    ) -> QuotaWindow | None:
+        normalized_outcome = OutcomeKind(outcome)
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM acquisition_quota_windows
+                WHERE device_id = ? AND outcome = ? AND window_start_ms = ?
+                """,
+                (device_id, normalized_outcome.value, window_start_ms),
+            ).fetchone()
+            if row is None:
+                return None
+            return QuotaWindow(
+                device_id=str(row["device_id"]),
+                outcome=OutcomeKind(str(row["outcome"])),
+                window_start_ms=int(row["window_start_ms"]),
+                reserved_count=int(row["reserved_count"]),
+                confirmed_count=int(row["confirmed_count"]),
+                uncertain_count=int(row["uncertain_count"]),
+            )
+
     @staticmethod
     def _normalize_target(pool_id: str, target: Target, ordinal: int) -> PoolTarget:
         identity_key = target_identity_key(
@@ -886,3 +1050,51 @@ class AcquisitionRepository:
     @staticmethod
     def _normalize_username(value: str) -> str:
         return str(value).strip().removeprefix("@").lower()
+
+    @staticmethod
+    def _action_plan(
+        connection: sqlite3.Connection,
+        round_id: str,
+        identity_key: str,
+        device_id: str,
+    ) -> ActionPlan | None:
+        row = connection.execute(
+            """
+            SELECT * FROM device_action_plans
+            WHERE round_id = ? AND identity_key = ? AND device_id = ?
+            """,
+            (round_id, identity_key, device_id),
+        ).fetchone()
+        return None if row is None else AcquisitionRepository._row_action_plan(row)
+
+    @staticmethod
+    def _action_plan_by_id(connection: sqlite3.Connection, plan_id: int) -> ActionPlan:
+        row = connection.execute(
+            "SELECT * FROM device_action_plans WHERE plan_id = ?", (plan_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(plan_id)
+        return AcquisitionRepository._row_action_plan(row)
+
+    @staticmethod
+    def _row_action_plan(row: sqlite3.Row) -> ActionPlan:
+        return ActionPlan(
+            plan_id=int(row["plan_id"]),
+            round_id=str(row["round_id"]),
+            identity_key=str(row["identity_key"]),
+            device_id=str(row["device_id"]),
+            seed=str(row["seed"]),
+            requested_outcome=OutcomeKind(str(row["requested_outcome"])),
+            effective_outcome=OutcomeKind(str(row["effective_outcome"])),
+            quota_window_start_ms=(
+                None
+                if row["quota_window_start_ms"] is None
+                else int(row["quota_window_start_ms"])
+            ),
+            quota_reason=(
+                None if row["quota_reason"] is None else str(row["quota_reason"])
+            ),
+            video_key=None if row["video_key"] is None else str(row["video_key"]),
+            state=ActionPlanState(str(row["state"])),
+            created_at_ms=int(row["created_at_ms"]),
+        )

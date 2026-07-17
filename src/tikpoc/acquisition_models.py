@@ -33,6 +33,20 @@ class ProfileAccessState(StrEnum):
     INACCESSIBLE = "inaccessible"
 
 
+class OutcomeKind(StrEnum):
+    LIKE = "like"
+    FAVORITE = "favorite"
+    REPOST = "repost"
+    TRACE = "trace"
+
+
+class ActionPlanState(StrEnum):
+    PLANNED = "planned"
+    EXECUTING = "executing"
+    CONFIRMED = "confirmed"
+    UNCERTAIN = "uncertain"
+
+
 @dataclass(frozen=True)
 class PoolImport:
     pool_id: str
@@ -99,3 +113,29 @@ class ProfileSnapshot:
     eligible: bool
     reason: str
     observed_at_ms: int
+
+
+@dataclass(frozen=True)
+class ActionPlan:
+    plan_id: int
+    round_id: str
+    identity_key: str
+    device_id: str
+    seed: str
+    requested_outcome: OutcomeKind
+    effective_outcome: OutcomeKind
+    quota_window_start_ms: int | None
+    quota_reason: str | None
+    video_key: str | None
+    state: ActionPlanState
+    created_at_ms: int
+
+
+@dataclass(frozen=True)
+class QuotaWindow:
+    device_id: str
+    outcome: OutcomeKind
+    window_start_ms: int
+    reserved_count: int
+    confirmed_count: int
+    uncertain_count: int
