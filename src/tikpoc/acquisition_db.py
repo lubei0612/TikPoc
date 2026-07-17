@@ -11,9 +11,13 @@ from .acquisition_models import (
     AssignmentPhase,
     PoolImport,
     PoolTarget,
+    ProfileAccessState,
+    ProfileSnapshot,
     RoundAssignment,
 )
 from .importer import Target, target_identity_key
+from .models import ProfileMetrics
+from .rules import evaluate_profile
 
 
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
@@ -140,6 +144,38 @@ class AcquisitionRepository:
                 CREATE INDEX IF NOT EXISTS round_assignment_target_activity_idx
                 ON round_assignments(
                     identity_key, lease_expires_at_ms, visit_confirmed_at_ms
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS profile_snapshot_leases (
+                    round_id TEXT NOT NULL,
+                    identity_key TEXT NOT NULL,
+                    owner_device_id TEXT NOT NULL,
+                    expires_at_ms INTEGER NOT NULL,
+                    PRIMARY KEY(round_id, identity_key),
+                    FOREIGN KEY(round_id) REFERENCES exposure_rounds(round_id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS profile_snapshots (
+                    round_id TEXT NOT NULL,
+                    identity_key TEXT NOT NULL,
+                    observed_by_device_id TEXT NOT NULL,
+                    observed_username TEXT NOT NULL,
+                    following_count INTEGER,
+                    followers_count INTEGER,
+                    post_count INTEGER,
+                    private_account INTEGER NOT NULL DEFAULT 0,
+                    access_state TEXT NOT NULL DEFAULT 'public',
+                    eligible INTEGER NOT NULL,
+                    reason TEXT NOT NULL,
+                    observed_at_ms INTEGER NOT NULL,
+                    PRIMARY KEY(round_id, identity_key),
+                    FOREIGN KEY(round_id) REFERENCES exposure_rounds(round_id)
                 )
                 """
             )
@@ -510,6 +546,196 @@ class AcquisitionRepository:
         with self._connect() as connection:
             return self._assignment_by_id(connection, assignment_id)
 
+    def claim_snapshot_lease(
+        self,
+        round_id: str,
+        identity_key: str,
+        device_id: str,
+        *,
+        now_ms: int,
+        ttl_ms: int,
+    ) -> bool:
+        if ttl_ms <= 0:
+            raise ValueError("snapshot lease TTL must be positive")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            snapshot = connection.execute(
+                """
+                SELECT 1 FROM profile_snapshots
+                WHERE round_id = ? AND identity_key = ?
+                """,
+                (round_id, identity_key),
+            ).fetchone()
+            if snapshot is not None:
+                return False
+            assignment = connection.execute(
+                """
+                SELECT 1 FROM round_assignments
+                WHERE round_id = ? AND identity_key = ? AND device_id = ?
+                  AND visit_confirmed_at_ms IS NOT NULL
+                """,
+                (round_id, identity_key, device_id),
+            ).fetchone()
+            if assignment is None:
+                raise ValueError(
+                    "device has no confirmed profile visit for snapshot target"
+                )
+            existing = connection.execute(
+                """
+                SELECT owner_device_id, expires_at_ms
+                FROM profile_snapshot_leases
+                WHERE round_id = ? AND identity_key = ?
+                """,
+                (round_id, identity_key),
+            ).fetchone()
+            expires_at_ms = now_ms + ttl_ms
+            if existing is None:
+                connection.execute(
+                    """
+                    INSERT INTO profile_snapshot_leases(
+                        round_id, identity_key, owner_device_id, expires_at_ms
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (round_id, identity_key, device_id, expires_at_ms),
+                )
+                return True
+            if (
+                str(existing["owner_device_id"]) == device_id
+                or int(existing["expires_at_ms"]) <= now_ms
+            ):
+                connection.execute(
+                    """
+                    UPDATE profile_snapshot_leases
+                    SET owner_device_id = ?, expires_at_ms = ?
+                    WHERE round_id = ? AND identity_key = ?
+                    """,
+                    (device_id, expires_at_ms, round_id, identity_key),
+                )
+                return True
+            return False
+
+    def publish_profile_snapshot(
+        self,
+        round_id: str,
+        identity_key: str,
+        *,
+        device_id: str,
+        observed_username: str,
+        metrics: ProfileMetrics | None,
+        private_account: bool,
+        observed_at_ms: int,
+        access_state: ProfileAccessState | str = ProfileAccessState.PUBLIC,
+    ) -> ProfileSnapshot:
+        state = ProfileAccessState(access_state)
+        is_private = bool(private_account or state is ProfileAccessState.PRIVATE)
+        if is_private:
+            state = ProfileAccessState.PRIVATE
+        if state is ProfileAccessState.PUBLIC and metrics is None:
+            raise ValueError("public profile metrics are incomplete")
+
+        normalized_observed_username = self._normalize_username(observed_username)
+        if state is ProfileAccessState.PUBLIC:
+            decision = evaluate_profile(metrics)
+            eligible = decision.eligible
+            reason = "eligible" if decision.eligible else ",".join(decision.reasons)
+        else:
+            eligible = False
+            reason = (
+                "private_account"
+                if state is ProfileAccessState.PRIVATE
+                else f"profile_{state.value}"
+            )
+        candidate = ProfileSnapshot(
+            round_id=round_id,
+            identity_key=identity_key,
+            observed_by_device_id=device_id,
+            observed_username=normalized_observed_username,
+            metrics=metrics,
+            private_account=is_private,
+            access_state=state,
+            eligible=eligible,
+            reason=reason,
+            observed_at_ms=observed_at_ms,
+        )
+
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = self._profile_snapshot(connection, round_id, identity_key)
+            if existing is not None:
+                if existing == candidate:
+                    return existing
+                raise ValueError("profile snapshot is immutable")
+            target = connection.execute(
+                """
+                SELECT target.username
+                FROM exposure_rounds AS round
+                JOIN pool_targets AS target ON target.pool_id = round.pool_id
+                WHERE round.round_id = ? AND target.identity_key = ?
+                """,
+                (round_id, identity_key),
+            ).fetchone()
+            if target is None:
+                raise ValueError("snapshot target is not assigned to the round")
+            expected_username = self._normalize_username(str(target["username"]))
+            if state in {ProfileAccessState.PUBLIC, ProfileAccessState.PRIVATE} and (
+                not normalized_observed_username
+                or normalized_observed_username != expected_username
+            ):
+                raise ValueError("profile snapshot identity mismatch")
+            lease = connection.execute(
+                """
+                SELECT owner_device_id, expires_at_ms
+                FROM profile_snapshot_leases
+                WHERE round_id = ? AND identity_key = ?
+                """,
+                (round_id, identity_key),
+            ).fetchone()
+            if (
+                lease is None
+                or str(lease["owner_device_id"]) != device_id
+                or int(lease["expires_at_ms"])
+                <= max(observed_at_ms, int(self.clock_ms()))
+            ):
+                raise ValueError("device does not hold the snapshot lease")
+            connection.execute(
+                """
+                INSERT INTO profile_snapshots(
+                    round_id, identity_key, observed_by_device_id,
+                    observed_username, following_count, followers_count,
+                    post_count, private_account, access_state, eligible,
+                    reason, observed_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    candidate.round_id,
+                    candidate.identity_key,
+                    candidate.observed_by_device_id,
+                    candidate.observed_username,
+                    None if metrics is None else metrics.following,
+                    None if metrics is None else metrics.followers,
+                    None if metrics is None else metrics.posts,
+                    int(candidate.private_account),
+                    candidate.access_state.value,
+                    int(candidate.eligible),
+                    candidate.reason,
+                    candidate.observed_at_ms,
+                ),
+            )
+            connection.execute(
+                """
+                DELETE FROM profile_snapshot_leases
+                WHERE round_id = ? AND identity_key = ?
+                """,
+                (round_id, identity_key),
+            )
+            return candidate
+
+    def profile_snapshot(
+        self, round_id: str, identity_key: str
+    ) -> ProfileSnapshot | None:
+        with self._connect() as connection:
+            return self._profile_snapshot(connection, round_id, identity_key)
+
     @staticmethod
     def _normalize_target(pool_id: str, target: Target, ordinal: int) -> PoolTarget:
         identity_key = target_identity_key(
@@ -624,3 +850,39 @@ class AcquisitionRepository:
             ),
             lease_expires_at_ms=int(row["lease_expires_at_ms"]),
         )
+
+    @staticmethod
+    def _profile_snapshot(
+        connection: sqlite3.Connection, round_id: str, identity_key: str
+    ) -> ProfileSnapshot | None:
+        row = connection.execute(
+            """
+            SELECT * FROM profile_snapshots
+            WHERE round_id = ? AND identity_key = ?
+            """,
+            (round_id, identity_key),
+        ).fetchone()
+        if row is None:
+            return None
+        counts = (row["following_count"], row["followers_count"], row["post_count"])
+        metrics = (
+            None
+            if any(value is None for value in counts)
+            else ProfileMetrics(*(int(value) for value in counts))
+        )
+        return ProfileSnapshot(
+            round_id=str(row["round_id"]),
+            identity_key=str(row["identity_key"]),
+            observed_by_device_id=str(row["observed_by_device_id"]),
+            observed_username=str(row["observed_username"]),
+            metrics=metrics,
+            private_account=bool(row["private_account"]),
+            access_state=ProfileAccessState(str(row["access_state"])),
+            eligible=bool(row["eligible"]),
+            reason=str(row["reason"]),
+            observed_at_ms=int(row["observed_at_ms"]),
+        )
+
+    @staticmethod
+    def _normalize_username(value: str) -> str:
+        return str(value).strip().removeprefix("@").lower()

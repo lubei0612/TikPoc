@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from enum import StrEnum
 
+from .models import ProfileMetrics
+
 
 class RoundState(StrEnum):
     PENDING = "pending"
@@ -21,6 +23,14 @@ class AssignmentPhase(StrEnum):
     ACTION_RECONCILING = "action_reconciling"
     DEFERRED = "deferred"
     COMPLETED = "completed"
+
+
+class ProfileAccessState(StrEnum):
+    PUBLIC = "public"
+    PRIVATE = "private"
+    SUSPENDED = "suspended"
+    MISSING = "missing"
+    INACCESSIBLE = "inaccessible"
 
 
 @dataclass(frozen=True)
@@ -75,3 +85,17 @@ class RoundAssignment:
     last_error_code: str | None
     lease_owner: str | None
     lease_expires_at_ms: int
+
+
+@dataclass(frozen=True)
+class ProfileSnapshot:
+    round_id: str
+    identity_key: str
+    observed_by_device_id: str
+    observed_username: str
+    metrics: ProfileMetrics | None
+    private_account: bool
+    access_state: ProfileAccessState
+    eligible: bool
+    reason: str
+    observed_at_ms: int
