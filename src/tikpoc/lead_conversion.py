@@ -55,6 +55,12 @@ _LABELED_PHONE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _PLAUSIBLE_PHONE_PATTERN = re.compile(r"(?<!\w)(\+?\d[\d ()-]{7,24}\d)(?!\w)")
+_IDENTIFIER_CONTEXT_PATTERN = re.compile(
+    r"(?:order|tracking|reference|invoice|product|item|id|code|price|"
+    r"订单|单号|运单|物流|编号|货号)"
+    r"(?:\s+(?:number|id))?\s*[:：#-]?\s*$",
+    re.IGNORECASE,
+)
 
 _ACKNOWLEDGEMENTS = {
     "hello",
@@ -90,8 +96,15 @@ _HUMAN_REASONS = (
     (
         "human_handoff",
         re.compile(
-            r"\b(human|agent|operator|representative|manager)\b|"
-            r"转人工|人工(?:客服|服务)?|客服|经理",
+            r"\b(?:need|want|request)\s+(?:an?\s+|the\s+)?"
+            r"(?:human(?:\s+agent)?|agent|operator|representative|manager|real\s+person)\b|"
+            r"\b(?:connect|speak|talk|transfer)\b.{0,40}"
+            r"\b(?:human(?:\s+agent)?|agent|operator|representative|manager|real\s+person)\b|"
+            r"\b(?:human(?:\s+agent)?|agent|operator|representative|manager|real\s+person)\s+please\b|"
+            r"转(?:接)?(?:到|给)?人工(?:客服|服务)?|"
+            r"(?:找|联系|接通|请让|让|转给).{0,10}"
+            r"(?:人工(?:客服|服务)?|客服|经理)|"
+            r"(?:需要|要|请给我).{0,6}(?:人工(?:客服|服务)|真人客服)",
             re.IGNORECASE,
         ),
     ),
@@ -149,12 +162,19 @@ def extract_contact(text: str) -> str:
         handle = pattern.search(normalized)
         if handle:
             return handle.group(1)
-    for pattern in (_LABELED_PHONE_PATTERN, _PLAUSIBLE_PHONE_PATTERN):
-        for match in pattern.finditer(normalized):
-            candidate = match.group(1).strip(" -()")
-            digit_count = sum(character.isdigit() for character in candidate)
-            if 7 <= digit_count <= 15:
-                return candidate
+    for match in _LABELED_PHONE_PATTERN.finditer(normalized):
+        candidate = match.group(1).strip(" -()")
+        digit_count = sum(character.isdigit() for character in candidate)
+        if 7 <= digit_count <= 15:
+            return candidate
+    for match in _PLAUSIBLE_PHONE_PATTERN.finditer(normalized):
+        prefix = normalized[max(0, match.start(1) - 40) : match.start(1)]
+        if _IDENTIFIER_CONTEXT_PATTERN.search(prefix):
+            continue
+        candidate = match.group(1).strip(" -()")
+        digit_count = sum(character.isdigit() for character in candidate)
+        if 7 <= digit_count <= 15:
+            return candidate
     return ""
 
 

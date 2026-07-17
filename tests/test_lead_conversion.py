@@ -102,6 +102,23 @@ def test_explicit_handoff_request_requires_human(text: str) -> None:
 @pytest.mark.parametrize(
     "text",
     [
+        "The agent was helpful yesterday",
+        "This manager bag looks good",
+        "I want this manager bag",
+        "你们客服回复很快",
+        "经理款的包还有吗",
+        "我想要经理款的包",
+    ],
+)
+def test_human_role_mentions_without_a_request_do_not_trigger_handoff(
+    text: str,
+) -> None:
+    assert requires_human(text) is False
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
         "Do you have this product in stock?",
         "What is the price?",
         "Can you ship to London?",
@@ -152,8 +169,18 @@ def test_extracts_english_and_chinese_contacts(text: str, expected: str) -> None
     assert extract_contact(text) == expected
 
 
-@pytest.mark.parametrize("text", ["order 1234", "ID: 99881", "code 123456"])
-def test_does_not_extract_obvious_short_numeric_ids(text: str) -> None:
+@pytest.mark.parametrize(
+    "text",
+    [
+        "order 1234",
+        "ID: 99881",
+        "code 123456",
+        "order number 1234567890",
+        "tracking number 123456789012",
+        "商品编号 12345678",
+    ],
+)
+def test_does_not_extract_numeric_identifiers_as_contacts(text: str) -> None:
     assert extract_contact(text) == ""
 
 
