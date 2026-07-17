@@ -10,7 +10,10 @@ from pathlib import Path
 from .acquisition_models import (
     ActionPlan,
     ActionPlanState,
+    ActionResult,
     AssignmentPhase,
+    AssignmentTransition,
+    DeviceDiagnostics,
     OutcomeKind,
     PoolImport,
     PoolTarget,
@@ -18,6 +21,7 @@ from .acquisition_models import (
     ProfileSnapshot,
     QuotaWindow,
     RoundAssignment,
+    RoundCompletion,
 )
 from .importer import Target, target_identity_key
 from .models import ProfileMetrics
@@ -25,6 +29,47 @@ from .rules import evaluate_profile
 
 
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
+_ALLOWED_PHASE_TRANSITIONS = {
+    AssignmentPhase.PROFILE_OPENING: {
+        AssignmentPhase.IDENTITY_CONFIRMED,
+        AssignmentPhase.DEFERRED,
+    },
+    AssignmentPhase.IDENTITY_CONFIRMED: {
+        AssignmentPhase.WAITING_SNAPSHOT,
+        AssignmentPhase.VIDEO_OPENING,
+        AssignmentPhase.COMPLETED,
+        AssignmentPhase.DEFERRED,
+    },
+    AssignmentPhase.WAITING_SNAPSHOT: {
+        AssignmentPhase.VIDEO_OPENING,
+        AssignmentPhase.COMPLETED,
+        AssignmentPhase.DEFERRED,
+    },
+    AssignmentPhase.VIDEO_OPENING: {
+        AssignmentPhase.VIDEO_CONFIRMED,
+        AssignmentPhase.DEFERRED,
+    },
+    AssignmentPhase.VIDEO_CONFIRMED: {
+        AssignmentPhase.QUOTA_RESERVED,
+        AssignmentPhase.ACTION_RECONCILING,
+        AssignmentPhase.COMPLETED,
+        AssignmentPhase.DEFERRED,
+    },
+    AssignmentPhase.QUOTA_RESERVED: {
+        AssignmentPhase.ACTION_EXECUTING,
+        AssignmentPhase.DEFERRED,
+    },
+    AssignmentPhase.ACTION_EXECUTING: {
+        AssignmentPhase.ACTION_RECONCILING,
+        AssignmentPhase.COMPLETED,
+        AssignmentPhase.DEFERRED,
+    },
+    AssignmentPhase.ACTION_RECONCILING: {
+        AssignmentPhase.ACTION_EXECUTING,
+        AssignmentPhase.COMPLETED,
+        AssignmentPhase.DEFERRED,
+    },
+}
 
 
 def _clock_ms() -> int:
@@ -213,6 +258,33 @@ class AcquisitionRepository:
                     confirmed_count INTEGER NOT NULL DEFAULT 0,
                     uncertain_count INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY(device_id, outcome, window_start_ms)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS assignment_phase_history (
+                    history_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    assignment_id INTEGER NOT NULL,
+                    from_phase TEXT NOT NULL,
+                    to_phase TEXT NOT NULL,
+                    details_json TEXT NOT NULL DEFAULT '{}',
+                    changed_at_ms INTEGER NOT NULL,
+                    FOREIGN KEY(assignment_id) REFERENCES round_assignments(assignment_id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS action_attempts (
+                    attempt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    plan_id INTEGER NOT NULL,
+                    attempt_index INTEGER NOT NULL,
+                    result TEXT NOT NULL,
+                    diagnostics_json TEXT NOT NULL DEFAULT '{}',
+                    attempted_at_ms INTEGER NOT NULL,
+                    UNIQUE(plan_id, attempt_index),
+                    FOREIGN KEY(plan_id) REFERENCES device_action_plans(plan_id)
                 )
                 """
             )
@@ -470,7 +542,7 @@ class AcquisitionRepository:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 """
-                SELECT assignment.assignment_id
+                SELECT assignment.assignment_id, assignment.phase
                 FROM round_assignments AS assignment
                 JOIN exposure_rounds AS round
                   ON round.round_id = assignment.round_id
@@ -507,6 +579,7 @@ class AcquisitionRepository:
             if row is None:
                 return None
             assignment_id = int(row["assignment_id"])
+            previous_phase = AssignmentPhase(str(row["phase"]))
             connection.execute(
                 """
                 UPDATE round_assignments
@@ -517,6 +590,14 @@ class AcquisitionRepository:
                 WHERE assignment_id = ?
                 """,
                 (owner_id, now_ms + lease_ttl_ms, assignment_id),
+            )
+            self._insert_phase_history(
+                connection,
+                assignment_id,
+                previous_phase,
+                AssignmentPhase.PROFILE_OPENING,
+                now_ms,
+                {"owner_id": owner_id},
             )
             connection.execute(
                 """
@@ -531,6 +612,20 @@ class AcquisitionRepository:
         self, assignment_id: int, owner_id: str, *, now_ms: int
     ) -> None:
         with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT phase FROM round_assignments
+                WHERE assignment_id = ? AND lease_owner = ?
+                """,
+                (assignment_id, owner_id),
+            ).fetchone()
+            if row is None:
+                raise ValueError("assignment visit owner does not hold the lease")
+            previous_phase = AssignmentPhase(str(row["phase"]))
+            if AssignmentPhase.IDENTITY_CONFIRMED not in _ALLOWED_PHASE_TRANSITIONS.get(
+                previous_phase, set()
+            ):
+                raise ValueError("assignment phase cannot confirm profile identity")
             cursor = connection.execute(
                 """
                 UPDATE round_assignments
@@ -542,6 +637,14 @@ class AcquisitionRepository:
             )
             if cursor.rowcount != 1:
                 raise ValueError("assignment visit owner does not hold the lease")
+            self._insert_phase_history(
+                connection,
+                assignment_id,
+                previous_phase,
+                AssignmentPhase.IDENTITY_CONFIRMED,
+                now_ms,
+                {},
+            )
 
     def release_assignment_lease(self, assignment_id: int, owner_id: str) -> None:
         with self._connect() as connection:
@@ -556,32 +659,263 @@ class AcquisitionRepository:
             if cursor.rowcount != 1:
                 raise ValueError("assignment owner does not hold the lease")
 
-    def recover_expired_assignment_leases(self, *, now_ms: int) -> int:
+    def renew_assignment_lease(
+        self,
+        assignment_id: int,
+        owner_id: str,
+        *,
+        now_ms: int,
+        ttl_ms: int,
+    ) -> int:
+        if ttl_ms <= 0:
+            raise ValueError("assignment lease TTL must be positive")
+        expires_at_ms = now_ms + ttl_ms
         with self._connect() as connection:
             cursor = connection.execute(
                 """
                 UPDATE round_assignments
-                SET phase = CASE
-                        WHEN visit_confirmed_at_ms IS NULL THEN 'pending'
-                        ELSE 'deferred'
-                    END,
-                    lease_owner = NULL,
-                    lease_expires_at_ms = 0,
-                    next_attempt_at_ms = CASE
-                        WHEN next_attempt_at_ms > ? THEN next_attempt_at_ms
-                        ELSE ?
-                    END
+                SET lease_expires_at_ms = ?
+                WHERE assignment_id = ? AND lease_owner = ?
+                  AND lease_expires_at_ms > ? AND phase <> 'completed'
+                """,
+                (expires_at_ms, assignment_id, owner_id, now_ms),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("assignment lease is not active for renewal")
+        return expires_at_ms
+
+    def recover_expired_assignment_leases(self, *, now_ms: int) -> int:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                """
+                SELECT assignment_id, phase, visit_confirmed_at_ms,
+                       next_attempt_at_ms
+                FROM round_assignments
                 WHERE lease_owner IS NOT NULL
                   AND lease_expires_at_ms <= ?
                   AND phase <> 'completed'
                 """,
-                (now_ms, now_ms, now_ms),
-            )
-            return int(cursor.rowcount)
+                (now_ms,),
+            ).fetchall()
+            for row in rows:
+                assignment_id = int(row["assignment_id"])
+                previous = AssignmentPhase(str(row["phase"]))
+                next_phase = (
+                    AssignmentPhase.PENDING
+                    if row["visit_confirmed_at_ms"] is None
+                    else AssignmentPhase.DEFERRED
+                )
+                next_attempt_at_ms = max(int(row["next_attempt_at_ms"]), now_ms)
+                connection.execute(
+                    """
+                    UPDATE round_assignments
+                    SET phase = ?, lease_owner = NULL,
+                        lease_expires_at_ms = 0, next_attempt_at_ms = ?
+                    WHERE assignment_id = ?
+                    """,
+                    (next_phase.value, next_attempt_at_ms, assignment_id),
+                )
+                self._insert_phase_history(
+                    connection,
+                    assignment_id,
+                    previous,
+                    next_phase,
+                    now_ms,
+                    {"reason": "lease_expired"},
+                )
+            return len(rows)
 
     def assignment(self, assignment_id: int) -> RoundAssignment:
         with self._connect() as connection:
             return self._assignment_by_id(connection, assignment_id)
+
+    def assignment_phase_history(
+        self, assignment_id: int
+    ) -> tuple[AssignmentTransition, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM assignment_phase_history
+                WHERE assignment_id = ?
+                ORDER BY history_id
+                """,
+                (assignment_id,),
+            ).fetchall()
+            return tuple(
+                AssignmentTransition(
+                    history_id=int(row["history_id"]),
+                    assignment_id=int(row["assignment_id"]),
+                    from_phase=AssignmentPhase(str(row["from_phase"])),
+                    to_phase=AssignmentPhase(str(row["to_phase"])),
+                    details=dict(json.loads(row["details_json"])),
+                    changed_at_ms=int(row["changed_at_ms"]),
+                )
+                for row in rows
+            )
+
+    def transition_assignment(
+        self,
+        assignment_id: int,
+        owner_id: str,
+        expected_phase: AssignmentPhase | str,
+        next_phase: AssignmentPhase | str,
+        *,
+        now_ms: int,
+        details: Mapping[str, object] | None = None,
+    ) -> RoundAssignment:
+        expected = AssignmentPhase(expected_phase)
+        next_value = AssignmentPhase(next_phase)
+        if next_value not in _ALLOWED_PHASE_TRANSITIONS.get(expected, set()):
+            raise ValueError(f"invalid assignment transition: {expected}->{next_value}")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE round_assignments
+                SET phase = ?
+                WHERE assignment_id = ? AND lease_owner = ? AND phase = ?
+                """,
+                (next_value.value, assignment_id, owner_id, expected.value),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("assignment phase or lease owner changed")
+            self._insert_phase_history(
+                connection,
+                assignment_id,
+                expected,
+                next_value,
+                now_ms,
+                details or {},
+            )
+            return self._assignment_by_id(connection, assignment_id)
+
+    def defer_assignment(
+        self,
+        assignment_id: int,
+        owner_id: str,
+        *,
+        now_ms: int,
+        retry_delay_ms: int,
+        error_code: str,
+        diagnostics: DeviceDiagnostics,
+    ) -> RoundAssignment:
+        if retry_delay_ms < 0:
+            raise ValueError("retry delay must be nonnegative")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT phase FROM round_assignments
+                WHERE assignment_id = ? AND lease_owner = ?
+                """,
+                (assignment_id, owner_id),
+            ).fetchone()
+            if row is None:
+                raise ValueError("assignment owner does not hold the lease")
+            previous = AssignmentPhase(str(row["phase"]))
+            if previous is AssignmentPhase.COMPLETED:
+                raise ValueError("completed assignment cannot be deferred")
+            connection.execute(
+                """
+                UPDATE round_assignments
+                SET phase = 'deferred', next_attempt_at_ms = ?,
+                    last_error_code = ?, lease_owner = NULL,
+                    lease_expires_at_ms = 0
+                WHERE assignment_id = ?
+                """,
+                (now_ms + retry_delay_ms, error_code, assignment_id),
+            )
+            self._insert_phase_history(
+                connection,
+                assignment_id,
+                previous,
+                AssignmentPhase.DEFERRED,
+                now_ms,
+                {
+                    "error_code": error_code,
+                    "screenshot_path": diagnostics.screenshot_path,
+                    "ui_summary": diagnostics.ui_summary,
+                },
+            )
+            return self._assignment_by_id(connection, assignment_id)
+
+    def complete_assignment(
+        self,
+        assignment_id: int,
+        owner_id: str,
+        expected_phase: AssignmentPhase | str,
+        *,
+        now_ms: int,
+    ) -> RoundAssignment:
+        expected = AssignmentPhase(expected_phase)
+        if AssignmentPhase.COMPLETED not in _ALLOWED_PHASE_TRANSITIONS.get(
+            expected, set()
+        ):
+            raise ValueError("assignment phase cannot complete")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT round_id FROM round_assignments WHERE assignment_id = ?",
+                (assignment_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(assignment_id)
+            cursor = connection.execute(
+                """
+                UPDATE round_assignments
+                SET phase = 'completed', completed_at_ms = ?,
+                    last_error_code = NULL, lease_owner = NULL,
+                    lease_expires_at_ms = 0
+                WHERE assignment_id = ? AND lease_owner = ? AND phase = ?
+                """,
+                (now_ms, assignment_id, owner_id, expected.value),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("assignment phase or lease owner changed")
+            self._insert_phase_history(
+                connection,
+                assignment_id,
+                expected,
+                AssignmentPhase.COMPLETED,
+                now_ms,
+                {},
+            )
+            round_id = str(row["round_id"])
+            incomplete = connection.execute(
+                """
+                SELECT 1 FROM round_assignments
+                WHERE round_id = ? AND phase <> 'completed'
+                LIMIT 1
+                """,
+                (round_id,),
+            ).fetchone()
+            if incomplete is None:
+                connection.execute(
+                    "UPDATE exposure_rounds SET state = 'completed' WHERE round_id = ?",
+                    (round_id,),
+                )
+            return self._assignment_by_id(connection, assignment_id)
+
+    def round_completion(self, round_id: str) -> RoundCompletion:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS total,
+                       SUM(CASE WHEN visit_confirmed_at_ms IS NOT NULL THEN 1 ELSE 0 END) AS visits,
+                       SUM(CASE WHEN phase = 'completed' THEN 1 ELSE 0 END) AS completed,
+                       SUM(CASE WHEN phase = 'deferred' THEN 1 ELSE 0 END) AS deferred
+                FROM round_assignments
+                WHERE round_id = ?
+                """,
+                (round_id,),
+            ).fetchone()
+            return RoundCompletion(
+                total=int(row["total"] or 0),
+                visits_confirmed=int(row["visits"] or 0),
+                completed=int(row["completed"] or 0),
+                deferred=int(row["deferred"] or 0),
+            )
 
     def claim_snapshot_lease(
         self,
@@ -900,6 +1234,158 @@ class AcquisitionRepository:
                 uncertain_count=int(row["uncertain_count"]),
             )
 
+    def set_plan_video(self, plan_id: int, video_key: str) -> ActionPlan:
+        normalized = str(video_key).strip()
+        if not normalized:
+            raise ValueError("video key is empty")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            plan = self._action_plan_by_id(connection, plan_id)
+            if plan.video_key is not None and plan.video_key != normalized:
+                raise ValueError("action plan video is immutable")
+            if plan.video_key is None:
+                connection.execute(
+                    "UPDATE device_action_plans SET video_key = ? WHERE plan_id = ?",
+                    (normalized, plan_id),
+                )
+            return self._action_plan_by_id(connection, plan_id)
+
+    def mark_action_executing(self, plan_id: int) -> ActionPlan:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            plan = self._action_plan_by_id(connection, plan_id)
+            if plan.state is ActionPlanState.CONFIRMED:
+                return plan
+            if plan.state is ActionPlanState.UNCERTAIN:
+                raise ValueError("uncertain action must be reconciled before execution")
+            if plan.state is ActionPlanState.PLANNED:
+                connection.execute(
+                    "UPDATE device_action_plans SET state = 'executing' WHERE plan_id = ?",
+                    (plan_id,),
+                )
+            return self._action_plan_by_id(connection, plan_id)
+
+    def confirm_trace_plan(self, plan_id: int) -> ActionPlan:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            plan = self._action_plan_by_id(connection, plan_id)
+            if plan.effective_outcome is not OutcomeKind.TRACE:
+                raise ValueError("interaction plan cannot be confirmed as trace")
+            connection.execute(
+                "UPDATE device_action_plans SET state = 'confirmed' WHERE plan_id = ?",
+                (plan_id,),
+            )
+            return self._action_plan_by_id(connection, plan_id)
+
+    def record_action_result(
+        self,
+        plan_id: int,
+        result: ActionResult | str,
+        *,
+        now_ms: int,
+        diagnostics: DeviceDiagnostics | None = None,
+    ) -> ActionPlan:
+        normalized_result = ActionResult(result)
+        diagnostic_value = diagnostics or DeviceDiagnostics()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            plan = self._action_plan_by_id(connection, plan_id)
+            attempt_row = connection.execute(
+                """
+                SELECT COALESCE(MAX(attempt_index), 0) + 1 AS next_index
+                FROM action_attempts WHERE plan_id = ?
+                """,
+                (plan_id,),
+            ).fetchone()
+            connection.execute(
+                """
+                INSERT INTO action_attempts(
+                    plan_id, attempt_index, result, diagnostics_json, attempted_at_ms
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    plan_id,
+                    int(attempt_row["next_index"]),
+                    normalized_result.value,
+                    json.dumps(
+                        {
+                            "screenshot_path": diagnostic_value.screenshot_path,
+                            "ui_summary": diagnostic_value.ui_summary,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    now_ms,
+                ),
+            )
+            if plan.state is ActionPlanState.CONFIRMED:
+                return plan
+
+            has_quota = (
+                plan.effective_outcome is not OutcomeKind.TRACE
+                and plan.quota_window_start_ms is not None
+            )
+            if normalized_result is ActionResult.CONFIRMED:
+                if has_quota:
+                    connection.execute(
+                        """
+                        UPDATE acquisition_quota_windows
+                        SET confirmed_count = confirmed_count + 1,
+                            uncertain_count = CASE
+                                WHEN ? = 'uncertain' AND uncertain_count > 0
+                                THEN uncertain_count - 1
+                                ELSE uncertain_count
+                            END
+                        WHERE device_id = ? AND outcome = ? AND window_start_ms = ?
+                        """,
+                        (
+                            plan.state.value,
+                            plan.device_id,
+                            plan.effective_outcome.value,
+                            plan.quota_window_start_ms,
+                        ),
+                    )
+                next_state = ActionPlanState.CONFIRMED
+            elif normalized_result is ActionResult.UNCERTAIN:
+                if has_quota and plan.state is not ActionPlanState.UNCERTAIN:
+                    connection.execute(
+                        """
+                        UPDATE acquisition_quota_windows
+                        SET uncertain_count = uncertain_count + 1
+                        WHERE device_id = ? AND outcome = ? AND window_start_ms = ?
+                        """,
+                        (
+                            plan.device_id,
+                            plan.effective_outcome.value,
+                            plan.quota_window_start_ms,
+                        ),
+                    )
+                next_state = ActionPlanState.UNCERTAIN
+            else:
+                if has_quota and plan.state is ActionPlanState.UNCERTAIN:
+                    connection.execute(
+                        """
+                        UPDATE acquisition_quota_windows
+                        SET uncertain_count = CASE
+                            WHEN uncertain_count > 0 THEN uncertain_count - 1 ELSE 0 END
+                        WHERE device_id = ? AND outcome = ? AND window_start_ms = ?
+                        """,
+                        (
+                            plan.device_id,
+                            plan.effective_outcome.value,
+                            plan.quota_window_start_ms,
+                        ),
+                    )
+                next_state = ActionPlanState.PLANNED
+            connection.execute(
+                "UPDATE device_action_plans SET state = ? WHERE plan_id = ?",
+                (next_state.value, plan_id),
+            )
+            return self._action_plan_by_id(connection, plan_id)
+
+    def action_plan_by_id(self, plan_id: int) -> ActionPlan:
+        with self._connect() as connection:
+            return self._action_plan_by_id(connection, plan_id)
+
     @staticmethod
     def _normalize_target(pool_id: str, target: Target, ordinal: int) -> PoolTarget:
         identity_key = target_identity_key(
@@ -1097,4 +1583,28 @@ class AcquisitionRepository:
             video_key=None if row["video_key"] is None else str(row["video_key"]),
             state=ActionPlanState(str(row["state"])),
             created_at_ms=int(row["created_at_ms"]),
+        )
+
+    @staticmethod
+    def _insert_phase_history(
+        connection: sqlite3.Connection,
+        assignment_id: int,
+        from_phase: AssignmentPhase,
+        to_phase: AssignmentPhase,
+        changed_at_ms: int,
+        details: Mapping[str, object],
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO assignment_phase_history(
+                assignment_id, from_phase, to_phase, details_json, changed_at_ms
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                assignment_id,
+                from_phase.value,
+                to_phase.value,
+                json.dumps(details, ensure_ascii=False, separators=(",", ":")),
+                changed_at_ms,
+            ),
         )

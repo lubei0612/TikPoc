@@ -190,6 +190,10 @@ def test_expired_assignment_lease_returns_to_pending(tmp_path: Path) -> None:
     assert repository.recover_expired_assignment_leases(now_ms=1_049) == 0
     assert repository.recover_expired_assignment_leases(now_ms=1_050) == 1
     assert repository.assignment(claimed.assignment_id).phase is AssignmentPhase.PENDING
+    transition = repository.assignment_phase_history(claimed.assignment_id)[-1]
+    assert transition.from_phase is AssignmentPhase.PROFILE_OPENING
+    assert transition.to_phase is AssignmentPhase.PENDING
+    assert transition.details["reason"] == "lease_expired"
     assert (
         repository.claim_next_assignment(
             round_id, "phone-01", "worker-2", now_ms=1_051, lease_ttl_ms=50

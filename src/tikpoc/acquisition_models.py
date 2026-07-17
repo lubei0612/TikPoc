@@ -47,6 +47,12 @@ class ActionPlanState(StrEnum):
     UNCERTAIN = "uncertain"
 
 
+class ActionResult(StrEnum):
+    CONFIRMED = "confirmed"
+    NOT_APPLIED = "not_applied"
+    UNCERTAIN = "uncertain"
+
+
 @dataclass(frozen=True)
 class PoolImport:
     pool_id: str
@@ -139,3 +145,35 @@ class QuotaWindow:
     reserved_count: int
     confirmed_count: int
     uncertain_count: int
+
+
+@dataclass(frozen=True)
+class ProfileObservation:
+    observed_username: str
+    metrics: ProfileMetrics | None
+    private_account: bool
+    access_state: ProfileAccessState
+
+
+@dataclass(frozen=True)
+class DeviceDiagnostics:
+    screenshot_path: str = ""
+    ui_summary: str = ""
+
+
+@dataclass(frozen=True)
+class RoundCompletion:
+    total: int
+    visits_confirmed: int
+    completed: int
+    deferred: int
+
+
+@dataclass(frozen=True)
+class AssignmentTransition:
+    history_id: int
+    assignment_id: int
+    from_phase: AssignmentPhase
+    to_phase: AssignmentPhase
+    details: dict[str, object]
+    changed_at_ms: int
