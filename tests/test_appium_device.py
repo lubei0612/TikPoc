@@ -1,21 +1,30 @@
 from tests.test_profile_parser import PROFILE_XML
 import pytest
+from tikpoc.acquisition_models import ActionResult, OutcomeKind
 from tikpoc.device import AppiumTikTokDevice
 from tikpoc.models import ProfileMetrics
 
 
 class FakeElement:
-    def __init__(self, text: str = "") -> None:
+    def __init__(self, text: str = "", *, on_click=None, attributes=None) -> None:
         self.clicked = False
         self.value = ""
         self.text = text
+        self.on_click = on_click
+        self.attributes = attributes or {}
         self.rect = {"x": 800, "y": 700, "width": 200, "height": 80}
 
     def click(self) -> None:
         self.clicked = True
+        if self.on_click is not None:
+            self.on_click()
 
     def send_keys(self, value: str) -> None:
         self.value = value
+
+    def get_attribute(self, name: str):
+        value = self.attributes.get(name)
+        return value() if callable(value) else value
 
     @property
     def screenshot_as_png(self) -> bytes:
@@ -27,11 +36,24 @@ class FakeDriver:
         self.page_source = PROFILE_XML
         self.scripts: list[tuple[str, dict[str, str]]] = []
         self.posts = [FakeElement(), FakeElement(), FakeElement(), FakeElement()]
+        self.liked = False
+        self.favorite = False
+        self.share_open = False
+        self.reposted = False
         self.action_elements = {
-            '//*[starts-with(@content-desc, "Like video.")]': FakeElement(),
-            '//*[@content-desc="Add or remove this video from Favorites."]/..': FakeElement(),
-            '//*[starts-with(@content-desc, "Share video.")]': FakeElement(),
-            '//*[@text="Repost" or @content-desc="Repost"]': FakeElement(),
+            '//*[starts-with(@content-desc, "Like video.")]': FakeElement(
+                on_click=lambda: setattr(self, "liked", True)
+            ),
+            '//*[@content-desc="Add or remove this video from Favorites."]/..': FakeElement(
+                on_click=lambda: setattr(self, "favorite", True),
+                attributes={"selected": lambda: "true" if self.favorite else "false"},
+            ),
+            '//*[starts-with(@content-desc, "Share video.")]': FakeElement(
+                on_click=lambda: setattr(self, "share_open", True)
+            ),
+            '//*[@text="Repost" or @content-desc="Repost"]': FakeElement(
+                on_click=lambda: setattr(self, "reposted", True)
+            ),
         }
         self.back_calls = 0
 
@@ -42,10 +64,26 @@ class FakeDriver:
         if by == "id":
             assert value == "com.zhiliaoapp.musically:id/eqx"
             return self.posts
-        if value == '//*[@content-desc="Video liked"]':
-            return [FakeElement()]
-        if "You reposted" in value:
-            return [FakeElement()]
+        if "Video liked" in value or "Unlike video" in value:
+            return [FakeElement()] if self.liked else []
+        if "Like video" in value:
+            return [] if self.liked else [self.action_elements[value]]
+        if "Remove from Favorites" in value or "Added to Favorites" in value:
+            return [FakeElement()] if self.favorite else []
+        if "Favorites" in value:
+            return [
+                self.action_elements[
+                    '//*[@content-desc="Add or remove this video from Favorites."]/..'
+                ]
+            ]
+        if "You reposted" in value or "Remove repost" in value:
+            return [FakeElement()] if self.reposted else []
+        if "Share video" in value:
+            return [self.action_elements[value]]
+        if "Repost" in value and self.share_open:
+            return [
+                self.action_elements['//*[@text="Repost" or @content-desc="Repost"]']
+            ]
         return []
 
     def find_element(self, by: str, value: str) -> FakeElement:
@@ -254,13 +292,158 @@ def test_appium_device_greets_one_new_follower_after_follow_back() -> None:
 
 class UnverifiedLikeDriver(FakeDriver):
     def find_elements(self, by: str, value: str):
-        if value == '//*[@content-desc="Video liked"]':
+        if "Video liked" in value or "Unlike video" in value:
             return []
         return super().find_elements(by, value)
 
 
 def test_appium_device_rejects_unverified_like() -> None:
-    device = AppiumTikTokDevice(UnverifiedLikeDriver(), action_delay=0)
+    device = AppiumTikTokDevice(
+        UnverifiedLikeDriver(), action_delay=0, action_timeout=0
+    )
 
     with pytest.raises(RuntimeError, match="like action was not verified"):
         device.perform_action("like")
+
+
+class SemanticElement(FakeElement):
+    def __init__(self, label: str, callback=None, attributes=None) -> None:
+        super().__init__(label)
+        self.label = label
+        self.callback = callback
+        self.attributes = attributes or {}
+
+    def click(self) -> None:
+        super().click()
+        if self.callback is not None:
+            self.callback()
+
+    def get_attribute(self, name: str):
+        value = self.attributes.get(name)
+        return value() if callable(value) else value
+
+
+class SemanticActionDriver:
+    def __init__(self, *, delayed_like_reads: int = 0) -> None:
+        self.clicked_labels: list[str] = []
+        self.liked = False
+        self.favorite = False
+        self.share_open = False
+        self.reposted = False
+        self.delayed_like_reads = delayed_like_reads
+        self.like_active_reads = 0
+        self.like = SemanticElement("Like", self._click_like)
+        self.favorite_control = SemanticElement(
+            "Favorite",
+            self._click_favorite,
+            {"selected": lambda: "true" if self.favorite else "false"},
+        )
+        self.share = SemanticElement("Share", self._click_share)
+        self.repost = SemanticElement("Repost", self._click_repost)
+
+    @property
+    def page_source(self) -> str:
+        return "<hierarchy />"
+
+    def _click_like(self) -> None:
+        self.clicked_labels.append("Like")
+        self.liked = True
+
+    def _click_favorite(self) -> None:
+        self.clicked_labels.append("Favorite")
+        self.favorite = True
+
+    def _click_share(self) -> None:
+        self.clicked_labels.append("Share")
+        self.share_open = True
+
+    def _click_repost(self) -> None:
+        self.clicked_labels.append("Repost")
+        self.reposted = True
+
+    def find_elements(self, by: str, value: str):
+        if "Video liked" in value or "Unlike video" in value:
+            if self.liked:
+                self.like_active_reads += 1
+            return (
+                [SemanticElement("Video liked")]
+                if self.liked and self.like_active_reads > self.delayed_like_reads
+                else []
+            )
+        if "Like video" in value:
+            return [] if self.liked else [self.like]
+        if "Remove from Favorites" in value or "Added to Favorites" in value:
+            return [SemanticElement("Added to Favorites")] if self.favorite else []
+        if "Favorites" in value:
+            return [self.favorite_control]
+        if "You reposted" in value or "Remove repost" in value:
+            return [SemanticElement("You reposted")] if self.reposted else []
+        if "Share video" in value:
+            return [self.share]
+        if "Repost" in value and self.share_open:
+            return [self.repost]
+        return []
+
+    def find_element(self, by: str, value: str):
+        elements = self.find_elements(by, value)
+        if not elements:
+            raise LookupError(value)
+        return elements[0]
+
+
+class SteppingClock:
+    def __init__(self) -> None:
+        self.value = 0.0
+
+    def __call__(self) -> float:
+        self.value += 0.1
+        return self.value
+
+
+def test_execute_like_waits_for_delayed_selected_state() -> None:
+    driver = SemanticActionDriver(delayed_like_reads=2)
+    device = AppiumTikTokDevice(
+        driver,
+        poll_interval=0,
+        action_timeout=2,
+        clock=SteppingClock(),
+        sleeper=lambda _: None,
+    )
+
+    assert device.execute_outcome(OutcomeKind.LIKE) is ActionResult.CONFIRMED
+    assert driver.clicked_labels == ["Like"]
+
+
+def test_execute_favorite_requires_semantic_selected_state() -> None:
+    driver = SemanticActionDriver()
+    device = AppiumTikTokDevice(driver, poll_interval=0, action_timeout=0)
+
+    assert device.execute_outcome(OutcomeKind.FAVORITE) is ActionResult.CONFIRMED
+    assert driver.clicked_labels == ["Favorite"]
+
+
+def test_execute_repost_clicks_share_then_repost_and_verifies_state() -> None:
+    driver = SemanticActionDriver()
+    device = AppiumTikTokDevice(driver, poll_interval=0, action_timeout=0)
+
+    assert device.execute_outcome(OutcomeKind.REPOST) is ActionResult.CONFIRMED
+    assert driver.clicked_labels == ["Share", "Repost"]
+
+
+def test_reconcile_liked_video_does_not_click_again() -> None:
+    driver = SemanticActionDriver()
+    driver.liked = True
+    device = AppiumTikTokDevice(driver, poll_interval=0, action_timeout=0)
+
+    assert device.reconcile_outcome(OutcomeKind.LIKE) is ActionResult.CONFIRMED
+    assert driver.clicked_labels == []
+
+
+def test_repost_resume_uses_already_open_share_surface() -> None:
+    driver = SemanticActionDriver()
+    driver.share_open = True
+    device = AppiumTikTokDevice(driver, poll_interval=0, action_timeout=0)
+
+    assert device.reconcile_outcome(OutcomeKind.REPOST) is ActionResult.NOT_APPLIED
+    assert device.execute_outcome(OutcomeKind.REPOST) is ActionResult.CONFIRMED
+    assert driver.clicked_labels == ["Repost"]
