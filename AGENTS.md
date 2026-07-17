@@ -7,13 +7,15 @@ them here.
 
 ## Current Control State
 
-- The project goal is paused at the user's request.
-- Do not resume implementation, run live account actions, start fleet workers,
-  or change runtime services until the user explicitly says `继续 goal`.
-- While paused, inspection, documentation, status reporting, and explicitly
-  requested maintenance are allowed.
-- Resume from the checkpoint in this file. Do not restart the project or repeat
-  completed tasks.
+- The user resumed the project goal on 2026-07-17 and requested continuous
+  execution after the revised design and plan are accepted.
+- The current phase is written design review. Do not begin implementation, run
+  live account actions, start fleet workers, or change runtime services until
+  the user accepts the written design and the implementation plan is complete.
+- Inspection, documentation, status reporting, and workspace auditing are
+  allowed during this review gate.
+- Continue from the checkpoint in this file. Do not restart the project or
+  repeat completed tasks.
 
 ## Mission
 
@@ -36,6 +38,10 @@ identity checks, action verification, idempotency, or coverage accounting.
 
 Read these before implementing related work:
 
+- `docs/superpowers/specs/2026-07-17-seven-account-acquisition-system-design.md`
+  is the current system-level product and acceptance contract. It supersedes
+  conflicting scheduling, interaction, coverage, and capacity details in older
+  documents.
 - `docs/superpowers/specs/2026-07-16-web-lead-conversion-design.md`
   defines the browser lead-conversion architecture and product behavior.
 - `docs/superpowers/plans/2026-07-16-web-lead-conversion.md` contains Web Tasks
@@ -63,7 +69,7 @@ user-approved document and update this guide in the same change.
   evenly weighted before quota constraints are applied.
 - Trace-only means the confirmed profile/video visit is retained without an
   interaction action.
-- Per-account rolling one-hour limits are: like `100`, favorite `14`, repost
+- Per-account fixed natural-hour limits are: like `100`, favorite `14`, repost
   `25`.
 - A repost is complete only after the visible repost control inside the share
   surface has been activated and its resulting state has been verified.
@@ -212,7 +218,7 @@ for the affected path has been performed and recorded.
 - Committed examples must use placeholders and synthetic fixtures.
 - Redact secrets from test output, review notes, commits, and issue/PR text.
 
-## Pause Checkpoint (2026-07-17)
+## Checkpoint (2026-07-17)
 
 Completed on `feat/web-lead-conversion`:
 
@@ -220,32 +226,36 @@ Completed on `feat/web-lead-conversion`:
 - Web Task 2: durable reply plans and exclusive browser action leases.
 - Web Task 3 implementation: pure lead-conversation policy.
 - Task 3 review fix: bilingual explicit human-handoff recognition.
-- Latest commit: `d7423f8` (`fix: recognize explicit human handoff requests`).
+- Latest code commit: `d7423f8` (`fix: recognize explicit human handoff
+  requests`). The later `e6a8f5a` commit added this agent guide.
 - Last fresh full Python verification: `208 passed`.
 - Last focused Task 3 verification: `52 passed`.
 - Ruff check passed; the two Task 3 files were already formatted.
 
 Outstanding at the pause point:
 
-1. Repeat independent Task 3 specification review after `d7423f8`.
-2. Run independent Task 3 code-quality review and fix material findings.
-3. Start Web Task 4 only after both Task 3 reviews pass.
-4. Continue Web Tasks 4-12 in order.
-5. Continue Fleet Tasks 1-6 in order.
-6. Finish full regression, real Chrome calibration, seven-device benchmark,
-   runbooks, branch integration, and GitHub setup.
+1. Obtain user review of the written seven-account system design.
+2. Write and review the revised implementation plan.
+3. Repeat independent Task 3 specification review after `d7423f8`.
+4. Run independent Task 3 code-quality review and fix material findings.
+5. Execute the approved mobile, management-console, and browser tasks in the
+   delivery order defined by the new design and plan.
+6. Finish full regression, two-device live calibration, four-/eight-hour
+   endurance tests, seven-device benchmark, runbooks, branch integration, and
+   GitHub setup.
 
-## Resume Procedure
-
-When the user explicitly says `继续 goal`:
+## Next Execution Procedure
 
 1. Enter the active feature worktree and read this file plus both current plans.
 2. Run `git status --short --branch` and `git log -5 --oneline`.
 3. Preserve any new user changes and inspect them before proceeding.
-4. Run the Task 3 focused tests and full regression to re-establish the baseline.
-5. Perform the outstanding Task 3 specification review, then quality review.
-6. Update this checkpoint after Task 3 is accepted.
-7. Begin Web Task 4 using its written red-green steps.
+4. Confirm that the written system design and revised implementation plan have
+   passed their user-review gates.
+5. Run the Task 3 focused tests and full regression to re-establish the baseline.
+6. Perform the outstanding Task 3 specification review, then quality review.
+7. Update this checkpoint after Task 3 is accepted.
+8. Begin the first task in the revised implementation plan using its written
+   red-green steps.
 
 If runtime state differs from this checkpoint, report the concrete difference,
 update the checkpoint, and continue from the latest verified state.
