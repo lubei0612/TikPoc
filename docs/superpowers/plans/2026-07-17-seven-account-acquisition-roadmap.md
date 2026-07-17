@@ -43,14 +43,14 @@
 Execute Tasks 1-9 from
 `docs/superpowers/plans/2026-07-17-acquisition-rounds-reliable-mobile.md` in order.
 
-- [ ] Task 1: stable CSV identity and duplicate lineage.
-- [ ] Task 2: acquisition repository and immutable target pools.
-- [ ] Task 3: exposure rounds and deterministic device ordering.
-- [ ] Task 4: first-visitor qualification snapshots.
-- [ ] Task 5: independent outcome plans and fixed-hour quotas.
-- [ ] Task 6: durable mobile assignment state machine.
-- [ ] Task 7: Appium semantic action verification.
-- [ ] Task 8: MYT discovery, allowlisted proxy relay, and fleet ownership.
+- [x] Task 1: stable CSV identity and duplicate lineage.
+- [x] Task 2: acquisition repository and immutable target pools.
+- [x] Task 3: exposure rounds and deterministic device ordering.
+- [x] Task 4: first-visitor qualification snapshots.
+- [x] Task 5: independent outcome plans and fixed-hour quotas.
+- [x] Task 6: durable mobile assignment state machine.
+- [x] Task 7: Appium semantic action verification.
+- [x] Task 8: MYT discovery, allowlisted proxy relay, and fleet ownership.
 - [ ] Task 9: CLI operations, capacity report, and coverage gate.
 
 After every task, run its focused tests, the applicable full suite, Ruff check,

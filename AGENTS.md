@@ -227,31 +227,37 @@ for the affected path has been performed and recorded.
 - Committed examples must use placeholders and synthetic fixtures.
 - Redact secrets from test output, review notes, commits, and issue/PR text.
 
-## Checkpoint (2026-07-17)
+## Checkpoint (2026-07-18)
 
 Completed on `feat/web-lead-conversion`:
 
 - Web Task 1: browser-only account configuration.
 - Web Task 2: durable reply plans and exclusive browser action leases.
-- Web Task 3 implementation: pure lead-conversation policy.
-- Task 3 review fix: bilingual explicit human-handoff recognition.
-- Task 3 repeated specification and quality reviews passed after narrowing
-  handoff-role false positives and excluding long order/tracking identifiers
-  from contact capture.
-- Latest code commit: `1b2c312` (`fix: reduce lead policy false positives`).
-- Last fresh full Python verification: `217 passed`.
-- Last focused Task 3 verification: `61 passed`.
-- Ruff check and focused format check passed for the two Task 3 files.
+- Web Task 3: reviewed lead-conversation policy with bilingual handoff,
+  monotonic stages, invitation cooldown, contact priority, and prompt limits.
+- Mobile Tasks 1-8: stable target identity, immutable pools, deterministic
+  rounds, shared qualification snapshots, independent quota-controlled plans,
+  durable workers, semantic Appium verification, MYT discovery, proxy relay,
+  and fenced fleet ownership.
+- Latest code commit: `9a356de` (`feat: manage MYT fleet and local proxy relay`).
+- Task 8 repeated specification and quality reviews passed with no Critical,
+  Important, or Minor findings after the final concurrency fixes.
+- Last fresh full Python verification: `312 passed`.
+- Last focused Task 8 verification: `56 passed`.
+- Ruff check, focused format check for all seven Task 8 Python files, and
+  `git diff --check` passed.
+- Read-only MYT discovery found running slot 1 at ADB/web ports `30000/30001`
+  and slot 2 at `30100/30101`. No account action was performed.
 - Full-repository Ruff format check has a pre-existing 14-file formatting
   baseline; do not reformat those unrelated files as part of a narrow task.
 
 Outstanding at the current checkpoint:
 
-1. Audit and safely clean generated workspace artifacts according to Roadmap
-   Phase 2.
-2. Execute the approved mobile, management-console, and browser tasks in the
-   delivery order defined by the new design and plan.
-3. Finish full regression, two-device live calibration, four-/eight-hour
+1. Execute Mobile Task 9: acquisition CLI operations, the capacity report, and
+   the strict coverage gate.
+2. Continue Web Tasks 4-10 and the operator-console plan in roadmap order.
+3. Execute Mobile Task 10 only at the roadmap's two-device live gate.
+4. Finish full regression, two-device calibration, four-/eight-hour
    endurance tests, seven-device benchmark, runbooks, branch integration, and
    GitHub setup.
 
@@ -260,11 +266,12 @@ Outstanding at the current checkpoint:
 1. Enter the active feature worktree and read this file plus both current plans.
 2. Run `git status --short --branch` and `git log -5 --oneline`.
 3. Preserve any new user changes and inspect them before proceeding.
-4. Confirm the written system design, roadmap, and component plan paths are
-   present and read the current task before editing.
-5. Run the focused tests and applicable regression for the next roadmap task.
-6. Begin the next task in the revised implementation plan using its written
-   red-green steps.
+4. Read Mobile Task 9 plus the current CLI and acquisition repository before
+   editing.
+5. Add the strict capacity and CLI tests, run them to observe the expected
+   failure, and implement only enough behavior to pass each red-green slice.
+6. Repeat focused and full verification plus specification and quality review
+   before committing Task 9.
 
 If runtime state differs from this checkpoint, report the concrete difference,
 update the checkpoint, and continue from the latest verified state.
