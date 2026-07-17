@@ -42,7 +42,7 @@
 - Modify: `src/tikpoc/importer.py`
 - Modify: `tests/test_importer.py`
 
-- [ ] **Step 1: Write failing identity-precedence tests**
+- [x] **Step 1: Write failing identity-precedence tests**
 
 ```python
 def test_comment_export_deduplicates_by_sec_uid_before_user_id(tmp_path: Path) -> None:
@@ -74,13 +74,13 @@ def test_comment_export_falls_back_to_user_id_when_sec_uid_is_empty(tmp_path: Pa
 `write_comment_csv` emits the current 15-column Chinese header and writes with
 `utf-8-sig`, retaining BOM coverage.
 
-- [ ] **Step 2: Run the focused importer tests**
+- [x] **Step 2: Run the focused importer tests**
 
 Run: `uv run pytest tests/test_importer.py -q`
 
 Expected: FAIL because `Target` has no `identity_key` or lineage.
 
-- [ ] **Step 3: Extend the structured import result**
+- [x] **Step 3: Extend the structured import result**
 
 ```python
 @dataclass(frozen=True)
@@ -109,13 +109,13 @@ def target_identity_key(*, sec_uid: str, target_id: str, username: str) -> str:
 Build a dictionary keyed by `identity_key`. On a duplicate, replace the stored
 target with `dataclasses.replace(existing, source_line_numbers=existing.source_line_numbers + (line_number,))`.
 
-- [ ] **Step 4: Run importer regression**
+- [x] **Step 4: Run importer regression**
 
 Run: `uv run pytest tests/test_importer.py -q`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the identity contract**
+- [x] **Step 5: Commit the identity contract**
 
 ```bash
 git add src/tikpoc/importer.py tests/test_importer.py
@@ -129,7 +129,7 @@ git commit -m "feat: preserve stable target identity lineage"
 - Create: `src/tikpoc/acquisition_db.py`
 - Create: `tests/test_acquisition_db.py`
 
-- [ ] **Step 1: Write failing pool idempotency tests**
+- [x] **Step 1: Write failing pool idempotency tests**
 
 ```python
 def test_import_pool_is_idempotent_by_source_checksum(tmp_path: Path) -> None:
@@ -157,13 +157,13 @@ def test_existing_pool_is_immutable(tmp_path: Path) -> None:
         repository.import_pool("other.csv", checksum, (pool_target("s2"),))
 ```
 
-- [ ] **Step 2: Run the repository test**
+- [x] **Step 2: Run the repository test**
 
 Run: `uv run pytest tests/test_acquisition_db.py -q`
 
 Expected: FAIL because `tikpoc.acquisition_db` and its models do not exist.
 
-- [ ] **Step 3: Define focused acquisition value types**
+- [x] **Step 3: Define focused acquisition value types**
 
 ```python
 class AssignmentPhase(StrEnum):
@@ -197,7 +197,7 @@ class PoolImport:
 Also define `PoolTarget`, `ExposureRound`, `RoundAssignment`,
 `ProfileSnapshot`, and `ActionPlan` with explicit identifiers and timestamps.
 
-- [ ] **Step 4: Implement acquisition-only migrations**
+- [x] **Step 4: Implement acquisition-only migrations**
 
 `AcquisitionRepository.migrate()` creates these initial tables in one WAL-mode
 transaction:
@@ -231,13 +231,13 @@ as `pool-` followed by its first 20 characters.
 Validate an existing checksum against target count and identities before returning
 the existing pool.
 
-- [ ] **Step 5: Run repository and importer tests**
+- [x] **Step 5: Run repository and importer tests**
 
 Run: `uv run pytest tests/test_acquisition_db.py tests/test_importer.py -q`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit immutable pools**
+- [x] **Step 6: Commit immutable pools**
 
 ```bash
 git add src/tikpoc/acquisition_models.py src/tikpoc/acquisition_db.py tests/test_acquisition_db.py
@@ -252,7 +252,7 @@ git commit -m "feat: persist immutable acquisition target pools"
 - Create: `tests/test_rounds.py`
 - Modify: `tests/test_acquisition_db.py`
 
-- [ ] **Step 1: Write failing materialization and order tests**
+- [x] **Step 1: Write failing materialization and order tests**
 
 ```python
 def test_round_materializes_every_target_for_every_device(tmp_path: Path) -> None:
@@ -279,13 +279,13 @@ def test_order_is_stable_across_repository_restart(tmp_path: Path) -> None:
     assert reopened.device_target_order(round_id, "phone-01") == before
 ```
 
-- [ ] **Step 2: Run the new round tests**
+- [x] **Step 2: Run the new round tests**
 
 Run: `uv run pytest tests/test_rounds.py tests/test_acquisition_db.py -q`
 
 Expected: FAIL because exposure-round tables and APIs are absent.
 
-- [ ] **Step 3: Add round and assignment schema**
+- [x] **Step 3: Add round and assignment schema**
 
 ```sql
 CREATE TABLE IF NOT EXISTS exposure_rounds (
@@ -318,7 +318,7 @@ CREATE INDEX IF NOT EXISTS round_assignment_claim_idx
 ON round_assignments(round_id, device_id, phase, next_attempt_at_ms, order_key);
 ```
 
-- [ ] **Step 4: Implement stable order keys and round creation**
+- [x] **Step 4: Implement stable order keys and round creation**
 
 ```python
 def device_order_key(round_id: str, device_seed: str, identity_key: str) -> str:
@@ -330,7 +330,7 @@ def device_order_key(round_id: str, device_seed: str, identity_key: str) -> str:
 transaction. Reject duplicate device IDs, blank seeds, a round earlier than the
 pool's previous repeat-gap boundary, or a second active round for the pool.
 
-- [ ] **Step 5: Implement spaced claims and lease recovery**
+- [x] **Step 5: Implement spaced claims and lease recovery**
 
 `claim_next_assignment(round_id, device_id, owner_id, now_ms)` selects the first
 eligible order key and excludes targets with an unexpired assignment lease or a
@@ -338,13 +338,13 @@ confirmed visit by another device inside `min_inter_device_gap_ms`. It atomicall
 sets a 120-second assignment lease. `recover_expired_assignment_leases(now_ms)`
 returns interrupted work to `pending` or its prior `deferred` schedule.
 
-- [ ] **Step 6: Run round and repository tests**
+- [x] **Step 6: Run round and repository tests**
 
 Run: `uv run pytest tests/test_rounds.py tests/test_acquisition_db.py -q`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit exposure rounds**
+- [x] **Step 7: Commit exposure rounds**
 
 ```bash
 git add src/tikpoc/rounds.py src/tikpoc/acquisition_db.py tests/test_rounds.py tests/test_acquisition_db.py
@@ -359,7 +359,7 @@ git commit -m "feat: schedule deterministic exposure rounds"
 - Modify: `tests/test_acquisition_db.py`
 - Create: `tests/test_qualification.py`
 
-- [ ] **Step 1: Write failing exclusive-snapshot tests**
+- [x] **Step 1: Write failing exclusive-snapshot tests**
 
 ```python
 def test_only_one_device_owns_snapshot_lease(tmp_path: Path) -> None:
@@ -387,13 +387,13 @@ def test_completed_snapshot_is_shared_but_action_plan_is_not(tmp_path: Path) -> 
     assert repository.action_plan(round_id, identity_key, "phone-02") is None
 ```
 
-- [ ] **Step 2: Run the snapshot tests**
+- [x] **Step 2: Run the snapshot tests**
 
 Run: `uv run pytest tests/test_qualification.py tests/test_acquisition_db.py -q`
 
 Expected: FAIL because snapshot lease operations are absent.
 
-- [ ] **Step 3: Add lease and snapshot tables**
+- [x] **Step 3: Add lease and snapshot tables**
 
 ```sql
 CREATE TABLE IF NOT EXISTS profile_snapshot_leases (
@@ -420,14 +420,14 @@ CREATE TABLE IF NOT EXISTS profile_snapshots (
 );
 ```
 
-- [ ] **Step 4: Implement transactional publication**
+- [x] **Step 4: Implement transactional publication**
 
 Require the publishing device to hold the unexpired lease. Evaluate public
 metrics with the existing `evaluate_profile`; map private, suspended, missing,
 and inaccessible visible states to explicit ineligible reasons. Insert the
 snapshot and delete its lease in one transaction. Reject partial public metrics.
 
-- [ ] **Step 5: Test expiry takeover and round isolation**
+- [x] **Step 5: Test expiry takeover and round isolation**
 
 Add assertions that phone 2 can acquire after expiry, that a late phone 1
 publication is rejected, and that round 2 receives no snapshot from round 1.
@@ -436,7 +436,7 @@ Run: `uv run pytest tests/test_qualification.py tests/test_acquisition_db.py tes
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit shared qualification**
+- [x] **Step 6: Commit shared qualification**
 
 ```bash
 git add src/tikpoc/acquisition_db.py src/tikpoc/acquisition_models.py tests/test_acquisition_db.py tests/test_qualification.py
@@ -450,7 +450,7 @@ git commit -m "feat: share round qualification snapshots"
 - Modify: `src/tikpoc/acquisition_db.py`
 - Create: `tests/test_outcome_planner.py`
 
-- [ ] **Step 1: Write failing independent-plan tests**
+- [x] **Step 1: Write failing independent-plan tests**
 
 ```python
 def test_each_device_persists_an_independent_equal_weight_draw(tmp_path: Path) -> None:
@@ -480,13 +480,13 @@ def test_full_selected_quota_becomes_trace_without_redraw(tmp_path: Path) -> Non
     assert plan.quota_reason == "favorite_limit_reached"
 ```
 
-- [ ] **Step 2: Run outcome tests**
+- [x] **Step 2: Run outcome tests**
 
 Run: `uv run pytest tests/test_outcome_planner.py -q`
 
 Expected: FAIL because outcome planning does not exist.
 
-- [ ] **Step 3: Implement deterministic independent draws**
+- [x] **Step 3: Implement deterministic independent draws**
 
 ```python
 OUTCOMES = (
@@ -511,7 +511,7 @@ def fixed_hour_start_ms(now_ms: int) -> int:
 
 `forced_draw` is a keyword-only test seam; production callers omit it.
 
-- [ ] **Step 4: Add action-plan and quota schema**
+- [x] **Step 4: Add action-plan and quota schema**
 
 ```sql
 CREATE TABLE IF NOT EXISTS device_action_plans (
@@ -544,7 +544,7 @@ Use limits `like=100`, `favorite=14`, `repost=25`. Insert the immutable plan and
 reserve quota in one `BEGIN IMMEDIATE` transaction. An ineligible snapshot always
 produces an effective trace without consuming a draw quota.
 
-- [ ] **Step 5: Test quota rollover, crash reuse, and draw distribution**
+- [x] **Step 5: Test quota rollover, crash reuse, and draw distribution**
 
 Check 4,000 distinct deterministic identities and require every outcome between
 22 and 28 percent. Check that a plan created at `3_599_999` uses hour zero and a
@@ -555,7 +555,7 @@ Run: `uv run pytest tests/test_outcome_planner.py -q`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit action planning**
+- [x] **Step 6: Commit action planning**
 
 ```bash
 git add src/tikpoc/outcome_planner.py src/tikpoc/acquisition_db.py tests/test_outcome_planner.py
@@ -571,7 +571,7 @@ git commit -m "feat: plan independent quota controlled outcomes"
 - Modify: `tests/fakes.py`
 - Create: `tests/test_mobile_worker.py`
 
-- [ ] **Step 1: Write failing no-early-advance tests**
+- [x] **Step 1: Write failing no-early-advance tests**
 
 ```python
 def test_worker_does_not_complete_until_visible_action_is_confirmed(tmp_path: Path) -> None:
@@ -601,13 +601,13 @@ def test_slow_action_is_deferred_without_false_completion(tmp_path: Path) -> Non
     assert repository.round_completion(assignment.round_id).completed == 0
 ```
 
-- [ ] **Step 2: Run the mobile worker tests**
+- [x] **Step 2: Run the mobile worker tests**
 
 Run: `uv run pytest tests/test_mobile_worker.py -q`
 
 Expected: FAIL because the worker and verified device contract do not exist.
 
-- [ ] **Step 3: Define the verified device boundary**
+- [x] **Step 3: Define the verified device boundary**
 
 ```python
 class ActionResult(StrEnum):
@@ -629,7 +629,7 @@ class VerifiedTikTokDevice(Protocol):
     def recover(self, phase: AssignmentPhase) -> None: ...
 ```
 
-- [ ] **Step 4: Add validated transitions and history**
+- [x] **Step 4: Add validated transitions and history**
 
 Create `assignment_phase_history` and `action_attempts`. Implement
 `transition_assignment(id, expected_phase, next_phase, now_ms, details)` with an
@@ -638,7 +638,7 @@ explicit transition map. A mismatched expected phase raises
 `IDENTITY_CONFIRMED`; record completion only after the required trace or action
 is confirmed.
 
-- [ ] **Step 5: Implement orchestration and recovery budget**
+- [x] **Step 5: Implement orchestration and recovery budget**
 
 The worker executes the persisted phase sequence, publishes or waits for a
 snapshot, obtains one immutable plan, stores one random video key, and calls the
@@ -647,7 +647,7 @@ three recoveries and 90 seconds from the first action attempt. On exhaustion,
 store diagnostics, set `next_attempt_at_ms = now_ms + 300_000`, transition to
 `DEFERRED`, and release the assignment lease.
 
-- [ ] **Step 6: Add restart and ineligible-trace tests**
+- [x] **Step 6: Add restart and ineligible-trace tests**
 
 Restart a worker from every persisted phase and assert it resumes without a
 second draw or duplicate quota reservation. Assert an ineligible profile
@@ -658,7 +658,7 @@ Run: `uv run pytest tests/test_mobile_worker.py tests/test_acquisition_db.py tes
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit the durable worker**
+- [x] **Step 7: Commit the durable worker**
 
 ```bash
 git add src/tikpoc/mobile_worker.py src/tikpoc/acquisition_db.py src/tikpoc/acquisition_models.py tests/fakes.py tests/test_mobile_worker.py
@@ -674,7 +674,7 @@ git commit -m "feat: execute durable verified mobile assignments"
 - Create: `tests/fixtures/appium_video.xml`
 - Create: `tests/fixtures/appium_share_repost.xml`
 
-- [ ] **Step 1: Write failing lag and reconciliation tests**
+- [x] **Step 1: Write failing lag and reconciliation tests**
 
 ```python
 def test_like_waits_for_selected_state_instead_of_sleeping() -> None:
@@ -698,14 +698,14 @@ def test_repost_requires_share_control_repost_control_and_completed_state() -> N
     assert driver.clicked_labels == ["Share", "Repost"]
 ```
 
-- [ ] **Step 2: Run Appium device tests**
+- [x] **Step 2: Run Appium device tests**
 
 Run: `uv run pytest tests/test_appium_device.py -q`
 
 Expected: FAIL because the current implementation uses fixed sleeps, screenshot
 comparison for favorite, and the legacy `share` name.
 
-- [ ] **Step 3: Add condition-based wait helpers**
+- [x] **Step 3: Add condition-based wait helpers**
 
 ```python
 def _wait_until(self, predicate: Callable[[], bool], description: str) -> None:
@@ -721,7 +721,7 @@ Inject `clock` and `sleeper`. Parse Appium page source with structured XML and
 semantic labels/resource IDs. Do not use native `uiautomator dump` for the
 animated TikTok feed.
 
-- [ ] **Step 4: Implement explicit state probes**
+- [x] **Step 4: Implement explicit state probes**
 
 Implement `_like_state`, `_favorite_state`, and `_repost_state` returning active,
 inactive, or unknown. Use calibrated English and Chinese labels plus stable
@@ -729,20 +729,20 @@ resource IDs. Favorite success requires an active semantic state or visible
 saved confirmation; pixel inequality alone is not accepted. Repost success
 requires Reposted/Remove repost/You reposted or a calibrated equivalent.
 
-- [ ] **Step 5: Implement execute then reconcile behavior**
+- [x] **Step 5: Implement execute then reconcile behavior**
 
 `execute_outcome` records pre-state, clicks once only when inactive, waits for
 active state, and returns uncertain on timeout. `reconcile_outcome` only reads
 state. Retain `perform_action("share")` as a legacy adapter that delegates to
 `execute_outcome(OutcomeKind.REPOST)` until legacy callers are migrated.
 
-- [ ] **Step 6: Run device, parser, legacy worker, and new worker tests**
+- [x] **Step 6: Run device, parser, legacy worker, and new worker tests**
 
 Run: `uv run pytest tests/test_appium_device.py tests/test_profile_parser.py tests/test_worker.py tests/test_mobile_worker.py -q`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit visible verification**
+- [x] **Step 7: Commit visible verification**
 
 ```bash
 git add src/tikpoc/device.py tests/test_appium_device.py tests/fixtures/appium_profile_public.xml tests/fixtures/appium_video.xml tests/fixtures/appium_share_repost.xml
@@ -760,7 +760,7 @@ git commit -m "fix: verify mobile interactions before advancing"
 - Create: `tests/test_proxy_relay.py`
 - Create: `tests/test_fleet.py`
 
-- [ ] **Step 1: Write failing MYT response tests**
+- [x] **Step 1: Write failing MYT response tests**
 
 ```python
 def test_myt_lists_running_slots_with_mapped_adb_ports() -> None:
@@ -774,7 +774,7 @@ def test_myt_lists_running_slots_with_mapped_adb_ports() -> None:
     assert slots[0].slot_index == 1
 ```
 
-- [ ] **Step 2: Write failing relay allowlist tests**
+- [x] **Step 2: Write failing relay allowlist tests**
 
 ```python
 def test_relay_rejects_a_source_outside_allowlist() -> None:
@@ -791,20 +791,20 @@ def test_relay_forwards_bytes_to_loopback_upstream() -> None:
         assert tcp_exchange("127.0.0.1", relay.port, payload) == payload
 ```
 
-- [ ] **Step 3: Run MYT, relay, and fleet tests**
+- [x] **Step 3: Run MYT, relay, and fleet tests**
 
 Run: `uv run pytest tests/test_myt.py tests/test_proxy_relay.py tests/test_fleet.py -q`
 
 Expected: FAIL because the modules do not exist.
 
-- [ ] **Step 4: Implement the MYT client with standard HTTP APIs**
+- [x] **Step 4: Implement the MYT client with standard HTTP APIs**
 
 Define `JsonTransport.request(method, url, json_body=None)` and a production
 `UrllibJsonTransport`. Implement `/info` and `/android`, unwrap `code/data`, and
 parse name, status, slot index, ADB host port, web port, image, and raw health.
 Raise `MytSdkError` with HTTP status or SDK code; never include credentials.
 
-- [ ] **Step 5: Implement the TCP relay**
+- [x] **Step 5: Implement the TCP relay**
 
 Use `socketserver.ThreadingTCPServer`. Bind only the configured Mac LAN address,
 reject clients whose source IP is outside `allowed_sources`, connect upstream to
@@ -812,7 +812,7 @@ reject clients whose source IP is outside `allowed_sources`, connect upstream to
 Expose a context-managed handle and health snapshot. Do not change Clash's
 `allow-lan` setting.
 
-- [ ] **Step 6: Implement typed fleet configuration and ownership**
+- [x] **Step 6: Implement typed fleet configuration and ownership**
 
 ```python
 @dataclass(frozen=True)
@@ -839,7 +839,7 @@ SQLite worker lease per device/account before creating its Appium session.
 Unexpected child exit marks that device unhealthy and leaves assignments
 recoverable; it does not terminate healthy workers.
 
-- [ ] **Step 7: Run focused tests and commit infrastructure**
+- [x] **Step 7: Run focused tests and commit infrastructure**
 
 Run: `uv run pytest tests/test_myt.py tests/test_proxy_relay.py tests/test_fleet.py -q`
 

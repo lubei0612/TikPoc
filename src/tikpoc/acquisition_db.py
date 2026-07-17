@@ -288,6 +288,349 @@ class AcquisitionRepository:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS device_worker_leases (
+                    device_id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL UNIQUE,
+                    owner_id TEXT NOT NULL,
+                    fence_token INTEGER NOT NULL,
+                    expires_at_ms INTEGER NOT NULL,
+                    updated_at_ms INTEGER NOT NULL
+                )
+                """
+            )
+            lease_columns = {
+                str(row["name"])
+                for row in connection.execute(
+                    "PRAGMA table_info(device_worker_leases)"
+                ).fetchall()
+            }
+            if "fence_token" not in lease_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE device_worker_leases
+                    ADD COLUMN fence_token INTEGER NOT NULL DEFAULT 0
+                    """
+                )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS device_worker_fence_counters (
+                    device_id TEXT PRIMARY KEY,
+                    last_token INTEGER NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS fleet_device_health (
+                    device_id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL,
+                    state TEXT NOT NULL CHECK(
+                        state IN ('starting', 'healthy', 'unhealthy', 'stopped')
+                    ),
+                    owner_id TEXT,
+                    fence_token INTEGER NOT NULL,
+                    process_id INTEGER,
+                    error_code TEXT,
+                    updated_at_ms INTEGER NOT NULL
+                )
+                """
+            )
+            health_columns = {
+                str(row["name"])
+                for row in connection.execute(
+                    "PRAGMA table_info(fleet_device_health)"
+                ).fetchall()
+            }
+            if "fence_token" not in health_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE fleet_device_health
+                    ADD COLUMN fence_token INTEGER NOT NULL DEFAULT 0
+                    """
+                )
+
+    def claim_device_worker_lease(
+        self,
+        device_id: str,
+        account_id: str,
+        owner_id: str,
+        *,
+        now_ms: int,
+        ttl_ms: int,
+    ) -> int | None:
+        device_id, account_id, owner_id = self._worker_lease_identifiers(
+            device_id, account_id, owner_id
+        )
+        if ttl_ms <= 0:
+            raise ValueError("device worker lease TTL must be positive")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                DELETE FROM device_worker_leases
+                WHERE expires_at_ms <= ?
+                  AND (device_id = ? OR account_id = ?)
+                """,
+                (now_ms, device_id, account_id),
+            )
+            conflict = connection.execute(
+                """
+                SELECT 1 FROM device_worker_leases
+                WHERE device_id = ? OR account_id = ?
+                """,
+                (device_id, account_id),
+            ).fetchone()
+            if conflict is not None:
+                return None
+            connection.execute(
+                """
+                INSERT INTO device_worker_fence_counters(device_id, last_token)
+                VALUES (?, 1)
+                ON CONFLICT(device_id) DO UPDATE SET
+                    last_token = last_token + 1
+                """,
+                (device_id,),
+            )
+            counter = connection.execute(
+                """
+                SELECT last_token FROM device_worker_fence_counters
+                WHERE device_id = ?
+                """,
+                (device_id,),
+            ).fetchone()
+            fence_token = int(counter["last_token"])
+            connection.execute(
+                """
+                INSERT INTO device_worker_leases(
+                    device_id, account_id, owner_id, fence_token,
+                    expires_at_ms, updated_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    device_id,
+                    account_id,
+                    owner_id,
+                    fence_token,
+                    now_ms + ttl_ms,
+                    now_ms,
+                ),
+            )
+        return fence_token
+
+    def renew_device_worker_lease(
+        self,
+        device_id: str,
+        account_id: str,
+        owner_id: str,
+        *,
+        now_ms: int,
+        ttl_ms: int,
+        fence_token: int,
+    ) -> int:
+        device_id, account_id, owner_id = self._worker_lease_identifiers(
+            device_id, account_id, owner_id
+        )
+        if ttl_ms <= 0:
+            raise ValueError("device worker lease TTL must be positive")
+        expires_at_ms = now_ms + ttl_ms
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE device_worker_leases
+                SET expires_at_ms = ?, updated_at_ms = ?
+                WHERE device_id = ? AND account_id = ? AND owner_id = ?
+                  AND expires_at_ms > ? AND fence_token = ?
+                """,
+                (
+                    expires_at_ms,
+                    now_ms,
+                    device_id,
+                    account_id,
+                    owner_id,
+                    now_ms,
+                    int(fence_token),
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("device worker lease is not active for renewal")
+        return expires_at_ms
+
+    def release_device_worker_lease(
+        self,
+        device_id: str,
+        account_id: str,
+        owner_id: str,
+        *,
+        fence_token: int,
+    ) -> None:
+        device_id, account_id, owner_id = self._worker_lease_identifiers(
+            device_id, account_id, owner_id
+        )
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM device_worker_leases
+                WHERE device_id = ? AND account_id = ? AND owner_id = ?
+                  AND fence_token = ?
+                """,
+                (device_id, account_id, owner_id, int(fence_token)),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("device worker lease owner does not match")
+
+    def device_worker_lease(self, device_id: str) -> dict[str, object] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM device_worker_leases WHERE device_id = ?",
+                (str(device_id).strip(),),
+            ).fetchone()
+        return None if row is None else dict(row)
+
+    def device_worker_fence_is_active(
+        self,
+        device_id: str,
+        account_id: str,
+        owner_id: str,
+        fence_token: int,
+        *,
+        now_ms: int,
+    ) -> bool:
+        device_id, account_id, owner_id = self._worker_lease_identifiers(
+            device_id, account_id, owner_id
+        )
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM device_worker_leases
+                WHERE device_id = ? AND account_id = ? AND owner_id = ?
+                  AND fence_token = ? AND expires_at_ms > ?
+                """,
+                (device_id, account_id, owner_id, int(fence_token), now_ms),
+            ).fetchone()
+        return row is not None
+
+    def record_fleet_device_health(
+        self,
+        device_id: str,
+        account_id: str,
+        state: str,
+        *,
+        now_ms: int,
+        owner_id: str | None = None,
+        process_id: int | None = None,
+        error_code: str | None = None,
+        fence_token: int,
+        expected_owner_id: str | None = None,
+        expected_fence_token: int | None = None,
+        require_active_lease: bool = False,
+    ) -> bool:
+        device_id = str(device_id).strip()
+        account_id = str(account_id).strip()
+        normalized_state = str(state).strip()
+        owner_id = None if owner_id is None else str(owner_id).strip() or None
+        expected_owner_id = (
+            None
+            if expected_owner_id is None
+            else str(expected_owner_id).strip() or None
+        )
+        if not device_id or not account_id:
+            raise ValueError("fleet device and account identifiers are required")
+        if normalized_state not in {"starting", "healthy", "unhealthy", "stopped"}:
+            raise ValueError("fleet device health state is invalid")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            current = connection.execute(
+                """
+                SELECT owner_id, fence_token FROM fleet_device_health
+                WHERE device_id = ?
+                """,
+                (device_id,),
+            ).fetchone()
+            active_lease = connection.execute(
+                """
+                SELECT owner_id, fence_token FROM device_worker_leases
+                WHERE device_id = ? AND account_id = ? AND expires_at_ms > ?
+                """,
+                (device_id, account_id, now_ms),
+            ).fetchone()
+            active_owner = (
+                None if active_lease is None else str(active_lease["owner_id"])
+            )
+            active_token = (
+                None if active_lease is None else int(active_lease["fence_token"])
+            )
+            if require_active_lease and (
+                owner_id is None
+                or active_owner != owner_id
+                or active_token != int(fence_token)
+            ):
+                return False
+            if expected_owner_id is not None:
+                current_owner = (
+                    None
+                    if current is None or current["owner_id"] is None
+                    else str(current["owner_id"])
+                )
+                if current_owner != expected_owner_id:
+                    return False
+                current_token = None if current is None else int(current["fence_token"])
+                if expected_fence_token is None or current_token != int(
+                    expected_fence_token
+                ):
+                    return False
+                if active_owner is not None and (
+                    active_owner != expected_owner_id
+                    or active_token != int(expected_fence_token)
+                ):
+                    return False
+            connection.execute(
+                """
+                INSERT INTO fleet_device_health(
+                    device_id, account_id, state, owner_id, fence_token,
+                    process_id, error_code, updated_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(device_id) DO UPDATE SET
+                    account_id = excluded.account_id,
+                    state = excluded.state,
+                    owner_id = excluded.owner_id,
+                    fence_token = excluded.fence_token,
+                    process_id = excluded.process_id,
+                    error_code = excluded.error_code,
+                    updated_at_ms = excluded.updated_at_ms
+                """,
+                (
+                    device_id,
+                    account_id,
+                    normalized_state,
+                    owner_id,
+                    int(fence_token),
+                    process_id,
+                    None if error_code is None else str(error_code).strip() or None,
+                    now_ms,
+                ),
+            )
+        return True
+
+    def fleet_device_health(self, device_id: str) -> dict[str, object] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM fleet_device_health WHERE device_id = ?",
+                (str(device_id).strip(),),
+            ).fetchone()
+        return None if row is None else dict(row)
+
+    @staticmethod
+    def _worker_lease_identifiers(
+        device_id: str, account_id: str, owner_id: str
+    ) -> tuple[str, str, str]:
+        values = tuple(
+            str(value).strip() for value in (device_id, account_id, owner_id)
+        )
+        if any(not value for value in values):
+            raise ValueError("device, account, and worker identifiers are required")
+        return values
 
     def import_pool(
         self,
