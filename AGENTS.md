@@ -235,19 +235,23 @@ Completed on `feat/web-lead-conversion`:
 - Web Task 2: durable reply plans and exclusive browser action leases.
 - Web Task 3 implementation: pure lead-conversation policy.
 - Task 3 review fix: bilingual explicit human-handoff recognition.
-- Latest code commit: `d7423f8` (`fix: recognize explicit human handoff
-  requests`). The later `e6a8f5a` commit added this agent guide.
-- Last fresh full Python verification: `208 passed`.
-- Last focused Task 3 verification: `52 passed`.
-- Ruff check passed; the two Task 3 files were already formatted.
+- Task 3 repeated specification and quality reviews passed after narrowing
+  handoff-role false positives and excluding long order/tracking identifiers
+  from contact capture.
+- Latest code commit: `1b2c312` (`fix: reduce lead policy false positives`).
+- Last fresh full Python verification: `217 passed`.
+- Last focused Task 3 verification: `61 passed`.
+- Ruff check and focused format check passed for the two Task 3 files.
+- Full-repository Ruff format check has a pre-existing 14-file formatting
+  baseline; do not reformat those unrelated files as part of a narrow task.
 
 Outstanding at the current checkpoint:
 
-1. Repeat independent Task 3 specification review after `d7423f8`.
-2. Run independent Task 3 code-quality review and fix material findings.
-3. Execute the approved mobile, management-console, and browser tasks in the
+1. Audit and safely clean generated workspace artifacts according to Roadmap
+   Phase 2.
+2. Execute the approved mobile, management-console, and browser tasks in the
    delivery order defined by the new design and plan.
-4. Finish full regression, two-device live calibration, four-/eight-hour
+3. Finish full regression, two-device live calibration, four-/eight-hour
    endurance tests, seven-device benchmark, runbooks, branch integration, and
    GitHub setup.
 
@@ -258,10 +262,8 @@ Outstanding at the current checkpoint:
 3. Preserve any new user changes and inspect them before proceeding.
 4. Confirm the written system design, roadmap, and component plan paths are
    present and read the current task before editing.
-5. Run the Task 3 focused tests and full regression to re-establish the baseline.
-6. Perform the outstanding Task 3 specification review, then quality review.
-7. Update this checkpoint after Task 3 is accepted.
-8. Begin the first task in the revised implementation plan using its written
+5. Run the focused tests and applicable regression for the next roadmap task.
+6. Begin the next task in the revised implementation plan using its written
    red-green steps.
 
 If runtime state differs from this checkpoint, report the concrete difference,
