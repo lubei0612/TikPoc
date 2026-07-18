@@ -408,7 +408,7 @@ git commit -m "feat: add conversion context to AI replies"
 - Create: `tests/test_browser_dm.py`
 - Modify: `src/tikpoc/db.py`
 
-- [ ] **Step 1: Write failing idempotency and result tests**
+- [x] **Step 1: Write failing idempotency and result tests**
 
 ```python
 class FakeReplyClient:
@@ -461,13 +461,13 @@ budget. Define `service_with_confirmed_history()` by appending alternating
 inbound/outbound rows through `Database.append_web_message` before constructing
 the service.
 
-- [ ] **Step 2: Run the tests and verify module import failure**
+- [x] **Step 2: Run the tests and verify module import failure**
 
 Run: `uv run pytest tests/test_browser_dm.py -q`
 
 Expected: FAIL because `tikpoc.browser_dm` does not exist.
 
-- [ ] **Step 3: Implement immutable request and response records**
+- [x] **Step 3: Implement immutable request and response records**
 
 ```python
 @dataclass(frozen=True)
@@ -490,7 +490,7 @@ class BrowserReply:
     stage: str
 ```
 
-- [ ] **Step 4: Implement `BrowserDmService`**
+- [x] **Step 4: Implement `BrowserDmService`**
 
 Use one `threading.Lock` per `account_id`. Validate the registry mapping, return
 an existing completed plan before calling AI, append the inbound message with its
@@ -501,13 +501,13 @@ complete the plan, and update stage counters atomically. `record_result` accepts
 advances reply/funnel counters. Record `invite_configuration_missing` when the
 policy requests an invitation and the account has no destination.
 
-- [ ] **Step 5: Run service, database, and messaging tests**
+- [x] **Step 5: Run service, database, and messaging tests**
 
 Run: `uv run pytest tests/test_browser_dm.py tests/test_web_events_db.py tests/test_messaging.py -q`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit the service**
+- [x] **Step 6: Commit the service**
 
 ```bash
 git add src/tikpoc/browser_dm.py src/tikpoc/db.py tests/test_browser_dm.py

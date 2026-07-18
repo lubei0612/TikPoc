@@ -237,6 +237,8 @@ Completed on `feat/web-lead-conversion`:
   monotonic stages, invitation cooldown, contact priority, and prompt limits.
 - Web Task 4: bounded account offer, FAQ, stage, conditional invitation, and
   per-account fallback context for AI replies.
+- Web Task 5: idempotent browser DM planning, durable reply budgets, uncertain
+  reconciliation gates, and migration-safe invitation evidence.
 - Mobile Tasks 1-9: stable target identity, immutable pools, deterministic
   rounds, shared qualification snapshots, independent quota-controlled plans,
   durable workers, semantic Appium verification, MYT discovery, proxy relay,
@@ -250,12 +252,15 @@ Completed on `feat/web-lead-conversion`:
   Important, or Minor findings after the final lease-release fixes.
 - Web Task 4 implementation commit: `a9c01d1`
   (`feat: add conversion context to AI replies`).
-- Latest code commit: `9bbb172`
-  (`fix: preserve AI reply error boundaries`).
+- Latest code commit: `e5ab519`
+  (`fix: preserve browser invitation evidence`).
 - Web Task 4 repeated specification and quality reviews passed with no Critical
   or Important findings after the fallback and provider-boundary fixes.
-- Last fresh full Python verification: `425 passed`.
-- Last focused Web Task 4 verification: `93 passed`.
+- Web Task 5 repeated specification and quality reviews passed with no Critical
+  or Important findings. One future multi-process locking note is nonblocking
+  for the single localhost service architecture.
+- Last fresh full Python verification: `467 passed`.
+- Last focused Web Task 5 verification: `101 passed`.
 - Ruff check, focused format check for the two Web Task 4 Python files, and
   `git diff --check` passed.
 - Two nonblocking Task 4 review notes remain: explicitly migrate the dormant
@@ -268,7 +273,7 @@ Completed on `feat/web-lead-conversion`:
 
 Outstanding at the current checkpoint:
 
-1. Continue Web Tasks 5-10 and the operator-console plan in roadmap order.
+1. Continue Web Tasks 6-10 and the operator-console plan in roadmap order.
 2. Execute Mobile Task 10 only at the roadmap's two-device live gate.
 3. Finish full regression, two-device calibration, four-/eight-hour
    endurance tests, seven-device benchmark, runbooks, branch integration, and
@@ -279,13 +284,12 @@ Outstanding at the current checkpoint:
 1. Enter the active feature worktree and read this file plus both current plans.
 2. Run `git status --short --branch` and `git log -5 --oneline`.
 3. Preserve any new user changes and inspect them before proceeding.
-4. Read Web Task 5 plus the current database reply-plan APIs, account registry,
-   lead policy, messaging client, and nearby tests before editing.
-5. Add the browser DM idempotency and result tests, run them to observe the
-   expected module-import failure, and implement only enough behavior to pass
-   each red-green slice.
+4. Read Web Task 6 plus the current dashboard, browser DM service, action lease,
+   account registry, and nearby API tests before editing.
+5. Add the browser endpoint tests, observe the expected 404 failures, and
+   implement only enough behavior to pass each red-green slice.
 6. Repeat focused and full verification plus specification and quality review
-   before committing Web Task 5.
+   before committing Web Task 6.
 
 If runtime state differs from this checkpoint, report the concrete difference,
 update the checkpoint, and continue from the latest verified state.
