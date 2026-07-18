@@ -1,4 +1,4 @@
-import { RefreshCw, ShieldCheck, Smartphone, Target } from "lucide-react";
+import { Activity, Gauge, RefreshCw, Smartphone, Target, Timer } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -167,14 +167,20 @@ export function OperationsView({
   if (!snapshot || !coverage) return <div className="workspace-state error-state" role="alert">{loadError || "轮次数据暂不可用"}</div>;
 
   const healthyDevices = snapshot.devices.filter((device) => device.health === "healthy").length;
+  const slowestMeanMs = Math.max(0, ...snapshot.devices.map((device) => device.mean_ms));
+  const slowestP90Ms = Math.max(0, ...snapshot.devices.map((device) => device.p90_ms));
+  const projectedTwentyHourCapacity = slowestMeanMs > 0 ? Math.floor(72_000_000 / slowestMeanMs) : null;
+  const formatDuration = (milliseconds: number) => milliseconds > 0 ? `${(milliseconds / 1_000).toFixed(2)}秒` : "暂无样本";
   const stateLabel = localizeValue(snapshot.round.state);
   return (
     <main className="operations-workspace">
-      <section className="round-strip">
-        <div><span className="eyebrow">轮次状态</span><span className={`state-block state-${snapshot.round.state}`}>{stateLabel}</span></div>
-        <div><Target size={16} aria-hidden="true" /><span><strong>{snapshot.coverage.fully_covered}</strong> / {snapshot.coverage.targets} 个目标已覆盖</span></div>
-        <div><Smartphone size={16} aria-hidden="true" /><span><strong>{healthyDevices}</strong> / {snapshot.devices.length} 台设备健康</span></div>
-        <div><ShieldCheck size={16} aria-hidden="true" /><span><strong>{Math.round(snapshot.coverage.coverage_rate * 100)}%</strong> 覆盖率</span></div>
+      <section aria-label="轮次关键指标" className="round-strip">
+        <div><span className="eyebrow">轮次状态</span><strong className={`state-block state-${snapshot.round.state}`}>{stateLabel}</strong></div>
+        <div><Target size={16} aria-hidden="true" /><span><small>完整覆盖</small><strong>{snapshot.coverage.fully_covered} / {snapshot.coverage.targets}</strong></span></div>
+        <div><Smartphone size={16} aria-hidden="true" /><span><small>健康设备</small><strong>{healthyDevices} / {snapshot.devices.length}</strong></span></div>
+        <div><Activity size={16} aria-hidden="true" /><span><small>最慢平均耗时</small><strong>{formatDuration(slowestMeanMs)}</strong></span></div>
+        <div><Gauge size={16} aria-hidden="true" /><span><small>最慢 P90</small><strong>{formatDuration(slowestP90Ms)}</strong></span></div>
+        <div><Timer size={16} aria-hidden="true" /><span><small>20小时预计容量 <em>预测</em></small><strong>{projectedTwentyHourCapacity?.toLocaleString("zh-CN") ?? "暂无样本"}</strong></span></div>
         <button aria-label="刷新运营数据" className="icon-only" onClick={() => void load()} title="刷新运营数据" type="button"><RefreshCw size={17} /></button>
       </section>
 
@@ -192,18 +198,18 @@ export function OperationsView({
       </section>
 
       <section className="workspace-section split-section">
-        <div>
+        <div className="pacing-pane">
           <header className="section-heading"><div><span className="section-index">02</span><div><h2>滚动一小时配额</h2><p>按动作节奏均匀补充，待协调结果持续占用额度</p></div></div></header>
           <QuotaTable quotas={snapshot.quotas} />
         </div>
         <aside className="coverage-ledger">
-          <span className="eyebrow">覆盖账本</span>
-          <dl>
-            <div><dt>确认访问</dt><dd>{snapshot.coverage.confirmed_visits}</dd></div>
-            <div><dt>完成动作</dt><dd>{snapshot.coverage.completed_assignments}</dd></div>
-            <div><dt>每目标所需账号</dt><dd>{snapshot.coverage.required_devices}</dd></div>
-            <div><dt>全部完成</dt><dd>{snapshot.coverage.fully_completed}</dd></div>
-          </dl>
+          <header className="ledger-heading"><span className="eyebrow">覆盖账本</span><strong>{Math.round(snapshot.coverage.coverage_rate * 100)}%</strong></header>
+          <div className="ledger-body"><dl>
+              <div><dt>确认访问</dt><dd>{snapshot.coverage.confirmed_visits}</dd></div>
+              <div><dt>完成动作</dt><dd>{snapshot.coverage.completed_assignments}</dd></div>
+              <div><dt>每目标所需账号</dt><dd>{snapshot.coverage.required_devices}</dd></div>
+              <div><dt>全部完成</dt><dd>{snapshot.coverage.fully_completed}</dd></div>
+          </dl></div>
         </aside>
       </section>
 

@@ -206,6 +206,24 @@ it("loads the operations snapshot and coverage for the selected round", async ()
   );
 });
 
+it("shows dense capacity KPIs before devices and preserves the operations section order", async () => {
+  mockInitialLoad();
+  render(<OperationsView roundId="round-1" />);
+
+  await screen.findByRole("heading", { name: "设备运行状态" });
+  const kpis = screen.getByLabelText("轮次关键指标");
+  expect(within(kpis).getByText("最慢平均耗时")).toBeVisible();
+  expect(within(kpis).getByText("6.10秒")).toBeVisible();
+  expect(within(kpis).getByText("最慢 P90")).toBeVisible();
+  expect(within(kpis).getByText("8.80秒")).toBeVisible();
+  expect(within(kpis).getByText("20小时预计容量")).toBeVisible();
+  expect(within(kpis).getByText("11,803")).toBeVisible();
+  expect(within(kpis).getByText("预测")).toBeVisible();
+
+  const headings = screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent);
+  expect(headings).toEqual(["设备运行状态", "滚动一小时配额", "目标覆盖", "运行证据"]);
+});
+
 it("clears the previous round while the selected round loads", async () => {
   const nextOperations = deferredResponse();
   const nextCoverage = deferredResponse();
