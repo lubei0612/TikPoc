@@ -919,3 +919,176 @@ def test_atomic_inbound_reservation_has_one_creator_across_connections(
         "account-01", "conversation-01", limit=20
     )
     assert [item["message_id"] for item in messages] == ["fp-atomic"]
+
+
+def test_pending_drafts_reserve_reply_budget(tmp_path: Path) -> None:
+    database = Database(tmp_path / "db.sqlite")
+    database.migrate()
+    for index in range(11):
+        database.append_web_message(
+            "account-01",
+            "conversation-01",
+            f"inbound-budget-{index}",
+            direction="inbound",
+            message_type="TEXT",
+            text="question",
+            timestamp_ms=index * 2,
+            participant_username="buyer",
+        )
+        database.append_web_message(
+            "account-01",
+            "conversation-01",
+            f"outbound-budget-{index}",
+            direction="outbound",
+            message_type="TEXT",
+            text="answer",
+            timestamp_ms=index * 2 + 1,
+            in_reply_to_message_id=f"inbound-budget-{index}",
+        )
+    with sqlite3.connect(database.path) as connection:
+        connection.execute(
+            """
+            UPDATE web_conversations SET auto_reply_count=11
+            WHERE account_id='account-01' AND conversation_id='conversation-01'
+            """
+        )
+    ai = FakeReplyClient(("First pending draft", "Second draft"))
+    service = BrowserDmService(database, registry_with_browser_account(), ai)
+
+    first = service.plan(
+        BrowserInbound(
+            "account-01",
+            "phone-01",
+            "conversation-01",
+            "fp-pending-1",
+            "buyer",
+            "Tell me about this style",
+            100,
+        )
+    )
+    second = service.plan(
+        BrowserInbound(
+            "account-01",
+            "phone-01",
+            "conversation-01",
+            "fp-pending-2",
+            "buyer",
+            "Show me another style",
+            101,
+        )
+    )
+
+    assert first.reply_text == "First pending draft"
+    assert second.stage == "closed"
+    assert second.reply_text == ""
+    assert len(ai.calls) == 1
+    assert service.record_result("account-01", "phone-01", first.plan_id, "sent")
+    assert not service.record_result("account-01", "phone-01", second.plan_id, "sent")
+    assert (
+        database.browser_conversation_state(
+            "account-01", "conversation-01"
+        ).auto_reply_count
+        == 12
+    )
+    assert (
+        database.outbound_web_message_count_since(
+            "account-01", "conversation-01", since_timestamp_ms=0
+        )
+        == 12
+    )
+
+
+def test_contact_at_reply_budget_is_captured_before_closing(tmp_path: Path) -> None:
+    database = Database(tmp_path / "db.sqlite")
+    database.migrate()
+    for index in range(12):
+        database.append_web_message(
+            "account-01",
+            "conversation-01",
+            f"outbound-contact-{index}",
+            direction="outbound",
+            message_type="TEXT",
+            text="answer",
+            timestamp_ms=index,
+            participant_username="buyer",
+        )
+    ai = FakeReplyClient()
+    service = BrowserDmService(
+        database,
+        registry_with_browser_account(),
+        ai,
+        clock=lambda: 100.0,
+    )
+
+    reply = service.plan(
+        BrowserInbound(
+            "account-01",
+            "phone-01",
+            "conversation-01",
+            "fp-budget-contact",
+            "buyer",
+            "My WhatsApp is +44 7700 900123",
+            99_000,
+        )
+    )
+
+    state = database.browser_conversation_state("account-01", "conversation-01")
+    assert reply.stage == "closed"
+    assert reply.reply_text == ""
+    assert ai.calls == []
+    assert state.contact_captured_at_ms == 100_000
+
+
+def test_invitation_evidence_survives_normalization_and_configuration_reload(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "db.sqlite")
+    database.migrate()
+    configured_destination = "WhatsApp:   +1 555 0100"
+    rendered_destination = "WhatsApp: +1 555 0100"
+    planning_service = BrowserDmService(
+        database,
+        registry_with_browser_account(private_channel_hint=configured_destination),
+        FakeReplyClient((f"Continue on {rendered_destination}",)),
+        clock=lambda: 100.0,
+    )
+
+    plan = planning_service.plan(
+        BrowserInbound(
+            "account-01",
+            "phone-01",
+            "conversation-01",
+            "fp-persisted-invite",
+            "buyer",
+            "Do you ship?",
+            99_000,
+        )
+    )
+
+    assert plan.stage == "invited"
+    with sqlite3.connect(database.path) as connection:
+        invitation_included = connection.execute(
+            """
+            SELECT invitation_included FROM browser_reply_plans WHERE id=?
+            """,
+            (plan.plan_id,),
+        ).fetchone()[0]
+    assert invitation_included == 1
+
+    reconciliation_service = BrowserDmService(
+        database,
+        registry_with_browser_account(
+            private_channel_hint="", enabled=False, browser_dm_enabled=False
+        ),
+        FakeReplyClient(),
+        clock=lambda: 101.0,
+    )
+    assert reconciliation_service.record_result(
+        "account-01", "phone-01", plan.plan_id, "sent"
+    )
+    assert (
+        database.browser_conversation_state(
+            "account-01", "conversation-01"
+        ).last_invited_at_ms
+        == 101_000
+    )

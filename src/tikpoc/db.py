@@ -56,6 +56,7 @@ class BrowserReplyPlan:
     reply_text: str
     stage: str
     state: str
+    invitation_included: bool = False
 
 
 @dataclass(frozen=True)
@@ -82,6 +83,7 @@ def _row_browser_reply_plan(row: sqlite3.Row) -> BrowserReplyPlan:
         reply_text=str(row["reply_text"]),
         stage=str(row["stage"]),
         state=str(row["state"]),
+        invitation_included=bool(row["invitation_included"]),
     )
 
 
@@ -122,6 +124,42 @@ def _later_conversation_stage(current: str, proposed: str) -> str:
     if _CONVERSATION_STAGE_RANK[proposed] < _CONVERSATION_STAGE_RANK[current]:
         return current
     return proposed
+
+
+def _browser_reply_budget_usage(
+    connection: sqlite3.Connection,
+    account_id: str,
+    conversation_id: str,
+    *,
+    excluding_plan_id: int,
+) -> int:
+    conversation = connection.execute(
+        """
+        SELECT auto_reply_count FROM web_conversations
+        WHERE account_id=? AND conversation_id=?
+        """,
+        (account_id, conversation_id),
+    ).fetchone()
+    if conversation is None:
+        raise KeyError((account_id, conversation_id))
+    outbound_count = connection.execute(
+        """
+        SELECT COUNT(*) FROM web_messages
+        WHERE account_id=? AND conversation_id=? AND direction='outbound'
+        """,
+        (account_id, conversation_id),
+    ).fetchone()[0]
+    reserved_count = connection.execute(
+        """
+        SELECT COUNT(*) FROM browser_reply_plans
+        WHERE account_id=? AND conversation_id=? AND id != ?
+          AND state IN ('planned', 'uncertain') AND TRIM(reply_text) != ''
+        """,
+        (account_id, conversation_id, int(excluding_plan_id)),
+    ).fetchone()[0]
+    return max(int(conversation["auto_reply_count"]), int(outbound_count)) + int(
+        reserved_count
+    )
 
 
 def _row_profile_metrics(row: sqlite3.Row) -> ProfileMetrics | None:
@@ -347,12 +385,24 @@ class Database:
                     reply_text TEXT NOT NULL DEFAULT '',
                     stage TEXT NOT NULL DEFAULT 'new',
                     state TEXT NOT NULL DEFAULT 'planning',
+                    invitation_included INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(account_id, inbound_fingerprint)
                 )
                 """
             )
+            browser_reply_plan_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(browser_reply_plans)")
+            }
+            if "invitation_included" not in browser_reply_plan_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE browser_reply_plans
+                    ADD COLUMN invitation_included INTEGER NOT NULL DEFAULT 0
+                    """
+                )
             connection.execute(
                 """
                 CREATE INDEX IF NOT EXISTS browser_reply_plans_conversation_idx
@@ -986,6 +1036,22 @@ class Database:
             raise KeyError((account_id, conversation_id))
         return _row_browser_conversation_state(row)
 
+    def browser_reply_budget_usage(
+        self,
+        account_id: str,
+        conversation_id: str,
+        *,
+        excluding_plan_id: int,
+    ) -> int:
+        _require_identity(account_id, conversation_id)
+        with self._connect() as connection:
+            return _browser_reply_budget_usage(
+                connection,
+                account_id,
+                conversation_id,
+                excluding_plan_id=int(excluding_plan_id),
+            )
+
     def get_browser_reply_plan(
         self, account_id: str, inbound_fingerprint: str
     ) -> BrowserReplyPlan | None:
@@ -1044,11 +1110,16 @@ class Database:
         conversation_stage: str,
         meaningful: bool,
         now_ms: int,
+        max_auto_replies: int,
+        contact_captured: bool = False,
+        invitation_included: bool = False,
     ) -> BrowserReplyPlan:
         if plan_stage not in _CONVERSATION_STAGE_RANK:
             raise ValueError(f"invalid browser reply plan stage: {plan_stage}")
         if not reply_text.strip() and plan_stage not in {"closed", "human_required"}:
             raise ValueError("reply text must be nonempty for an actionable plan")
+        if int(max_auto_replies) < 1:
+            raise ValueError("max auto replies must be positive")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
@@ -1068,17 +1139,27 @@ class Database:
             ).fetchone()
             if conversation is None:
                 raise KeyError((row["account_id"], row["conversation_id"]))
+            if reply_text.strip() and _browser_reply_budget_usage(
+                connection,
+                str(row["account_id"]),
+                str(row["conversation_id"]),
+                excluding_plan_id=int(plan_id),
+            ) >= int(max_auto_replies):
+                reply_text = ""
+                plan_stage = "closed"
+                conversation_stage = "closed"
+                invitation_included = False
             next_stage = _later_conversation_stage(
                 str(conversation["stage"]), conversation_stage
             )
             connection.execute(
                 """
                 UPDATE browser_reply_plans
-                SET reply_text=?, stage=?, state='planned',
+                SET reply_text=?, stage=?, state='planned', invitation_included=?,
                     updated_at=CURRENT_TIMESTAMP
                 WHERE id=? AND state='planning'
                 """,
-                (reply_text, plan_stage, plan_id),
+                (reply_text, plan_stage, int(bool(invitation_included)), plan_id),
             )
             connection.execute(
                 """
@@ -1086,7 +1167,7 @@ class Database:
                 SET stage=?,
                     meaningful_turns=meaningful_turns + ?,
                     contact_captured_at_ms=CASE
-                        WHEN ?='contact_captured' AND contact_captured_at_ms=0
+                        WHEN ? AND contact_captured_at_ms=0
                         THEN ? ELSE contact_captured_at_ms
                     END,
                     human_required=CASE
@@ -1098,7 +1179,7 @@ class Database:
                 (
                     next_stage,
                     int(bool(meaningful)),
-                    next_stage,
+                    int(bool(contact_captured)),
                     int(now_ms),
                     next_stage,
                     row["account_id"],
@@ -1162,7 +1243,6 @@ class Database:
         state: str,
         *,
         now_ms: int,
-        invitation_sent: bool = False,
     ) -> bool:
         _require_identity(account_id)
         allowed_sources = {
@@ -1249,7 +1329,7 @@ class Database:
                 """,
                 (
                     next_stage,
-                    int(bool(invitation_sent)),
+                    int(bool(row["invitation_included"])),
                     int(now_ms),
                     account_id,
                     row["conversation_id"],

@@ -38,6 +38,10 @@ def _reply_from_plan(plan: BrowserReplyPlan) -> BrowserReply:
     )
 
 
+def _normalize_whitespace(value: str) -> str:
+    return " ".join(value.split())
+
+
 class BrowserDmService:
     def __init__(
         self,
@@ -128,18 +132,19 @@ class BrowserDmService:
                     conversation_stage=assessment.stage.value,
                     meaningful=assessment.meaningful,
                     now_ms=now_ms,
+                    max_auto_replies=account.max_auto_replies,
+                    contact_captured=(
+                        assessment.stage == ConversationStage.CONTACT_CAPTURED
+                    ),
                 )
                 return _reply_from_plan(completed)
 
-            confirmed_replies = max(
-                state.auto_reply_count,
-                self.database.outbound_web_message_count_since(
-                    account.account_id,
-                    plan.conversation_id,
-                    since_timestamp_ms=0,
-                ),
+            reply_budget_usage = self.database.browser_reply_budget_usage(
+                account.account_id,
+                plan.conversation_id,
+                excluding_plan_id=plan.id,
             )
-            if confirmed_replies >= account.max_auto_replies:
+            if reply_budget_usage >= account.max_auto_replies:
                 completed = self.database.finalize_browser_reply_plan(
                     plan.id,
                     reply_text="",
@@ -147,12 +152,15 @@ class BrowserDmService:
                     conversation_stage=ConversationStage.CLOSED.value,
                     meaningful=assessment.meaningful,
                     now_ms=now_ms,
+                    max_auto_replies=account.max_auto_replies,
+                    contact_captured=(
+                        assessment.stage == ConversationStage.CONTACT_CAPTURED
+                    ),
                 )
                 return _reply_from_plan(completed)
 
-            configured_invite = bool(
-                assessment.should_invite and account.private_channel_hint.strip()
-            )
+            private_channel_hint = _normalize_whitespace(account.private_channel_hint)
+            configured_invite = bool(assessment.should_invite and private_channel_hint)
             if assessment.should_invite and not configured_invite:
                 self.database.record_browser_diagnostic_event(
                     account.account_id,
@@ -165,7 +173,7 @@ class BrowserDmService:
             )
             reply_text = self.reply_client.reply_conversation(
                 history,
-                private_channel_hint=account.private_channel_hint,
+                private_channel_hint=private_channel_hint,
                 offer_context=account.offer_context,
                 faq_context=account.faq_text,
                 conversation_stage=assessment.stage.value,
@@ -174,7 +182,11 @@ class BrowserDmService:
                 max_history_messages=12,
             )
             stage = assessment.stage
-            if configured_invite and account.private_channel_hint.strip() in reply_text:
+            invitation_included = bool(
+                configured_invite
+                and private_channel_hint in _normalize_whitespace(reply_text)
+            )
+            if invitation_included:
                 stage = ConversationStage.INVITED
             completed = self.database.finalize_browser_reply_plan(
                 plan.id,
@@ -183,6 +195,11 @@ class BrowserDmService:
                 conversation_stage=assessment.stage.value,
                 meaningful=assessment.meaningful,
                 now_ms=now_ms,
+                max_auto_replies=account.max_auto_replies,
+                contact_captured=(
+                    assessment.stage == ConversationStage.CONTACT_CAPTURED
+                ),
+                invitation_included=invitation_included,
             )
             return _reply_from_plan(completed)
 
@@ -208,8 +225,4 @@ class BrowserDmService:
                 plan.id,
                 state,
                 now_ms=int(self.clock() * 1_000),
-                invitation_sent=bool(
-                    account.private_channel_hint.strip()
-                    and account.private_channel_hint.strip() in plan.reply_text
-                ),
             )

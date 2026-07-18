@@ -100,13 +100,14 @@ def test_conversation_history_is_deduplicated_and_returned_chronologically(
 
     assert [item["message_id"] for item in history] == ["message-1", "message-2"]
     assert [item["direction"] for item in history] == ["inbound", "outbound"]
-    assert database.outbound_web_message_count_since(
-        "account-01", "conversation-1", since_timestamp_ms=1_500
-    ) == 1
     assert (
-        database.web_reply_message_id(
-            "account-01", "conversation-1", "message-1"
+        database.outbound_web_message_count_since(
+            "account-01", "conversation-1", since_timestamp_ms=1_500
         )
+        == 1
+    )
+    assert (
+        database.web_reply_message_id("account-01", "conversation-1", "message-1")
         == "message-2"
     )
 
@@ -232,6 +233,36 @@ def test_browser_storage_migration_is_additive_and_idempotent(tmp_path: Path) ->
             VALUES ('account-01', 'conversation-01')
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE browser_reply_plans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id TEXT NOT NULL,
+                conversation_id TEXT NOT NULL,
+                inbound_fingerprint TEXT NOT NULL,
+                participant_username TEXT NOT NULL DEFAULT '',
+                inbound_text TEXT NOT NULL DEFAULT '',
+                inbound_timestamp_ms INTEGER NOT NULL,
+                reply_text TEXT NOT NULL DEFAULT '',
+                stage TEXT NOT NULL DEFAULT 'new',
+                state TEXT NOT NULL DEFAULT 'planning',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(account_id, inbound_fingerprint)
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO browser_reply_plans(
+                account_id, conversation_id, inbound_fingerprint,
+                inbound_timestamp_ms, reply_text, stage, state
+            ) VALUES (
+                'account-01', 'conversation-01', 'existing-fingerprint',
+                1000, 'existing draft', 'engaged', 'planned'
+            )
+            """
+        )
 
     database = Database(path)
     database.migrate()
@@ -240,9 +271,8 @@ def test_browser_storage_migration_is_additive_and_idempotent(tmp_path: Path) ->
     with sqlite3.connect(path) as connection:
         connection.row_factory = sqlite3.Row
         conversation_columns = {
-            row["name"]: row for row in connection.execute(
-                "PRAGMA table_info(web_conversations)"
-            )
+            row["name"]: row
+            for row in connection.execute("PRAGMA table_info(web_conversations)")
         }
         row = connection.execute(
             """
@@ -281,6 +311,14 @@ def test_browser_storage_migration_is_additive_and_idempotent(tmp_path: Path) ->
         assert plan_columns["reply_text"]["dflt_value"] == "''"
         assert plan_columns["stage"]["dflt_value"] == "'new'"
         assert plan_columns["state"]["dflt_value"] == "'planning'"
+        assert plan_columns["invitation_included"]["type"] == "INTEGER"
+        assert plan_columns["invitation_included"]["notnull"] == 1
+        assert plan_columns["invitation_included"]["dflt_value"] == "0"
+        migrated_plan = database.get_browser_reply_plan(
+            "account-01", "existing-fingerprint"
+        )
+        assert migrated_plan is not None
+        assert migrated_plan.invitation_included is False
         action_pk = {
             row["name"]: row["pk"]
             for row in connection.execute("PRAGMA table_info(browser_action_leases)")
@@ -293,9 +331,7 @@ def test_browser_storage_migration_is_additive_and_idempotent(tmp_path: Path) ->
         indexed_columns = {
             tuple(
                 column[2]
-                for column in connection.execute(
-                    f"PRAGMA index_info({index['name']})"
-                )
+                for column in connection.execute(f"PRAGMA index_info({index['name']})")
             )
             for index in plan_indexes
         }
@@ -389,9 +425,7 @@ def test_reply_plan_completion_validates_inputs_and_missing_plan(
     )
 
     with pytest.raises(ValueError):
-        database.complete_browser_reply_plan(
-            plan.id, reply_text="", stage="qualifying"
-        )
+        database.complete_browser_reply_plan(plan.id, reply_text="", stage="qualifying")
     with pytest.raises(ValueError):
         database.complete_browser_reply_plan(plan.id, reply_text="draft", stage=" ")
     with pytest.raises(KeyError):
