@@ -170,6 +170,22 @@ user-approved document and update this guide in the same change.
 
 ## Required Work Method
 
+### Delivery Priority
+
+- Optimize for the shortest path to a working acquisition-to-private-channel
+  business loop. Implement required business behavior before polish.
+- Fix every Critical and Important correctness, duplication, account-isolation,
+  state-integrity, or runtime-blocking issue before proceeding.
+- Defer Minor findings, speculative multi-process support, broad refactors,
+  style-only cleanup, and nonessential UI polish unless the fix is trivial and
+  directly reduces risk to the current business workflow.
+- Keep TDD and independent review gates focused: one clear red-green cycle, one
+  specification review, and one code-quality review per task. Do not repeat
+  review loops after only nonblocking Minor findings remain.
+- Prefer a complete, testable multi-account workflow over optimizing isolated
+  components that do not yet advance a lead toward private-channel conversion,
+  human takeover, or a recorded sale.
+
 For every plan task:
 
 1. Read the relevant design section, plan task, current implementation, and
