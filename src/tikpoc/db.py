@@ -114,25 +114,32 @@ _CONVERSATION_STAGE_RANK = {
     "human_required": 5,
     "closed": 6,
 }
+_CONVERSATION_STAGE_ALIASES = {"qualifying": "qualified"}
+
+
+def _canonical_conversation_stage(stage: str) -> str:
+    value = str(stage).strip()
+    canonical = _CONVERSATION_STAGE_ALIASES.get(value, value)
+    if canonical not in _CONVERSATION_STAGE_RANK:
+        raise ValueError(f"invalid conversation stage: {stage}")
+    return canonical
 
 
 def _later_conversation_stage(current: str, proposed: str) -> str:
-    if current not in _CONVERSATION_STAGE_RANK:
-        raise ValueError(f"invalid stored conversation stage: {current}")
-    if proposed not in _CONVERSATION_STAGE_RANK:
-        raise ValueError(f"invalid conversation stage: {proposed}")
+    current = _canonical_conversation_stage(current)
+    proposed = _canonical_conversation_stage(proposed)
     if _CONVERSATION_STAGE_RANK[proposed] < _CONVERSATION_STAGE_RANK[current]:
         return current
     return proposed
 
 
-def _browser_reply_budget_usage(
+def _browser_reply_budget_counts(
     connection: sqlite3.Connection,
     account_id: str,
     conversation_id: str,
     *,
     excluding_plan_id: int,
-) -> int:
+) -> tuple[int, int]:
     conversation = connection.execute(
         """
         SELECT auto_reply_count FROM web_conversations
@@ -157,9 +164,8 @@ def _browser_reply_budget_usage(
         """,
         (account_id, conversation_id, int(excluding_plan_id)),
     ).fetchone()[0]
-    return max(int(conversation["auto_reply_count"]), int(outbound_count)) + int(
-        reserved_count
-    )
+    confirmed_count = max(int(conversation["auto_reply_count"]), int(outbound_count))
+    return confirmed_count, int(reserved_count)
 
 
 def _row_profile_metrics(row: sqlite3.Row) -> ProfileMetrics | None:
@@ -357,6 +363,12 @@ class Database:
                     )
             connection.execute(
                 """
+                UPDATE web_conversations SET stage='qualified'
+                WHERE stage='qualifying'
+                """
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS web_messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     account_id TEXT NOT NULL,
@@ -403,6 +415,20 @@ class Database:
                     ADD COLUMN invitation_included INTEGER NOT NULL DEFAULT 0
                     """
                 )
+            connection.execute(
+                """
+                UPDATE browser_reply_plans SET stage='qualified'
+                WHERE stage='qualifying'
+                """
+            )
+            connection.execute(
+                """
+                UPDATE browser_reply_plans SET invitation_included=1
+                WHERE invitation_included=0 AND stage='invited'
+                  AND state IN ('planned', 'uncertain')
+                  AND TRIM(reply_text) != ''
+                """
+            )
             connection.execute(
                 """
                 CREATE INDEX IF NOT EXISTS browser_reply_plans_conversation_idx
@@ -1036,6 +1062,22 @@ class Database:
             raise KeyError((account_id, conversation_id))
         return _row_browser_conversation_state(row)
 
+    def browser_reply_budget_counts(
+        self,
+        account_id: str,
+        conversation_id: str,
+        *,
+        excluding_plan_id: int,
+    ) -> tuple[int, int]:
+        _require_identity(account_id, conversation_id)
+        with self._connect() as connection:
+            return _browser_reply_budget_counts(
+                connection,
+                account_id,
+                conversation_id,
+                excluding_plan_id=int(excluding_plan_id),
+            )
+
     def browser_reply_budget_usage(
         self,
         account_id: str,
@@ -1043,14 +1085,12 @@ class Database:
         *,
         excluding_plan_id: int,
     ) -> int:
-        _require_identity(account_id, conversation_id)
-        with self._connect() as connection:
-            return _browser_reply_budget_usage(
-                connection,
-                account_id,
-                conversation_id,
-                excluding_plan_id=int(excluding_plan_id),
-            )
+        confirmed, reserved = self.browser_reply_budget_counts(
+            account_id,
+            conversation_id,
+            excluding_plan_id=excluding_plan_id,
+        )
+        return confirmed + reserved
 
     def get_browser_reply_plan(
         self, account_id: str, inbound_fingerprint: str
@@ -1075,8 +1115,9 @@ class Database:
     def complete_browser_reply_plan(
         self, plan_id: int, *, reply_text: str, stage: str
     ) -> BrowserReplyPlan:
-        if not reply_text.strip() or not stage.strip():
-            raise ValueError("reply text and stage must be nonempty")
+        if not reply_text.strip():
+            raise ValueError("reply text must be nonempty")
+        stage = _canonical_conversation_stage(stage)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
@@ -1114,8 +1155,8 @@ class Database:
         contact_captured: bool = False,
         invitation_included: bool = False,
     ) -> BrowserReplyPlan:
-        if plan_stage not in _CONVERSATION_STAGE_RANK:
-            raise ValueError(f"invalid browser reply plan stage: {plan_stage}")
+        plan_stage = _canonical_conversation_stage(plan_stage)
+        conversation_stage = _canonical_conversation_stage(conversation_stage)
         if not reply_text.strip() and plan_stage not in {"closed", "human_required"}:
             raise ValueError("reply text must be nonempty for an actionable plan")
         if int(max_auto_replies) < 1:
@@ -1139,15 +1180,19 @@ class Database:
             ).fetchone()
             if conversation is None:
                 raise KeyError((row["account_id"], row["conversation_id"]))
-            if reply_text.strip() and _browser_reply_budget_usage(
+            confirmed_replies, reserved_replies = _browser_reply_budget_counts(
                 connection,
                 str(row["account_id"]),
                 str(row["conversation_id"]),
                 excluding_plan_id=int(plan_id),
-            ) >= int(max_auto_replies):
+            )
+            if reply_text.strip() and confirmed_replies + reserved_replies >= int(
+                max_auto_replies
+            ):
                 reply_text = ""
                 plan_stage = "closed"
-                conversation_stage = "closed"
+                if confirmed_replies >= int(max_auto_replies):
+                    conversation_stage = "closed"
                 invitation_included = False
             next_stage = _later_conversation_stage(
                 str(conversation["stage"]), conversation_stage

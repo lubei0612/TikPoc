@@ -998,6 +998,99 @@ def test_pending_drafts_reserve_reply_budget(tmp_path: Path) -> None:
     )
 
 
+def test_superseded_pending_draft_releases_budget_without_closing_conversation(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "db.sqlite")
+    database.migrate()
+    for index in range(11):
+        database.append_web_message(
+            "account-01",
+            "conversation-01",
+            f"inbound-release-{index}",
+            direction="inbound",
+            message_type="TEXT",
+            text="question",
+            timestamp_ms=index * 2,
+            participant_username="buyer",
+        )
+        database.append_web_message(
+            "account-01",
+            "conversation-01",
+            f"outbound-release-{index}",
+            direction="outbound",
+            message_type="TEXT",
+            text="answer",
+            timestamp_ms=index * 2 + 1,
+            in_reply_to_message_id=f"inbound-release-{index}",
+        )
+    with sqlite3.connect(database.path) as connection:
+        connection.execute(
+            """
+            UPDATE web_conversations SET auto_reply_count=11
+            WHERE account_id='account-01' AND conversation_id='conversation-01'
+            """
+        )
+    ai = FakeReplyClient(("Reserved draft", "Replacement draft"))
+    service = BrowserDmService(database, registry_with_browser_account(), ai)
+
+    reserved = service.plan(
+        BrowserInbound(
+            "account-01",
+            "phone-01",
+            "conversation-01",
+            "fp-release-a",
+            "buyer",
+            "Tell me about this style",
+            100,
+        )
+    )
+    blocked = service.plan(
+        BrowserInbound(
+            "account-01",
+            "phone-01",
+            "conversation-01",
+            "fp-release-b",
+            "buyer",
+            "Show me another style",
+            101,
+        )
+    )
+
+    assert reserved.reply_text == "Reserved draft"
+    assert blocked.stage == "closed"
+    assert blocked.reply_text == ""
+    assert (
+        database.browser_conversation_state("account-01", "conversation-01").stage
+        != "closed"
+    )
+    assert service.record_result(
+        "account-01", "phone-01", reserved.plan_id, "uncertain"
+    )
+    assert service.record_result(
+        "account-01", "phone-01", reserved.plan_id, "superseded"
+    )
+
+    replacement = service.plan(
+        BrowserInbound(
+            "account-01",
+            "phone-01",
+            "conversation-01",
+            "fp-release-c",
+            "buyer",
+            "Which colors are available?",
+            102,
+        )
+    )
+
+    assert replacement.reply_text == "Replacement draft"
+    assert len(ai.calls) == 2
+    assert (
+        database.browser_conversation_state("account-01", "conversation-01").stage
+        != "closed"
+    )
+
+
 def test_contact_at_reply_budget_is_captured_before_closing(tmp_path: Path) -> None:
     database = Database(tmp_path / "db.sqlite")
     database.migrate()

@@ -139,17 +139,24 @@ class BrowserDmService:
                 )
                 return _reply_from_plan(completed)
 
-            reply_budget_usage = self.database.browser_reply_budget_usage(
-                account.account_id,
-                plan.conversation_id,
-                excluding_plan_id=plan.id,
+            confirmed_replies, reserved_replies = (
+                self.database.browser_reply_budget_counts(
+                    account.account_id,
+                    plan.conversation_id,
+                    excluding_plan_id=plan.id,
+                )
             )
-            if reply_budget_usage >= account.max_auto_replies:
+            if confirmed_replies + reserved_replies >= account.max_auto_replies:
+                conversation_stage = (
+                    ConversationStage.CLOSED
+                    if confirmed_replies >= account.max_auto_replies
+                    else assessment.stage
+                )
                 completed = self.database.finalize_browser_reply_plan(
                     plan.id,
                     reply_text="",
                     plan_stage=ConversationStage.CLOSED.value,
-                    conversation_stage=ConversationStage.CLOSED.value,
+                    conversation_stage=conversation_stage.value,
                     meaningful=assessment.meaningful,
                     now_ms=now_ms,
                     max_auto_replies=account.max_auto_replies,

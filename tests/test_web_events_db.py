@@ -6,7 +6,9 @@ from threading import Barrier
 
 import pytest
 
+from tikpoc.browser_dm import BrowserDmService
 from tikpoc.db import BrowserReplyPlan, Database
+from tikpoc.web_accounts import WebAccount, WebAccountRegistry
 
 
 def test_web_event_is_deduplicated_and_can_be_claimed_by_account(
@@ -227,11 +229,17 @@ def test_browser_storage_migration_is_additive_and_idempotent(tmp_path: Path) ->
             )
             """
         )
-        connection.execute(
+        connection.executemany(
             """
             INSERT INTO web_conversations(account_id, conversation_id)
-            VALUES ('account-01', 'conversation-01')
-            """
+            VALUES ('account-01', ?)
+            """,
+            (
+                ("conversation-01",),
+                ("conversation-invited-planned",),
+                ("conversation-invited-uncertain",),
+                ("conversation-qualifying",),
+            ),
         )
         connection.execute(
             """
@@ -252,16 +260,43 @@ def test_browser_storage_migration_is_additive_and_idempotent(tmp_path: Path) ->
             )
             """
         )
-        connection.execute(
+        connection.executemany(
             """
             INSERT INTO browser_reply_plans(
                 account_id, conversation_id, inbound_fingerprint,
                 inbound_timestamp_ms, reply_text, stage, state
-            ) VALUES (
-                'account-01', 'conversation-01', 'existing-fingerprint',
-                1000, 'existing draft', 'engaged', 'planned'
-            )
-            """
+            ) VALUES ('account-01', ?, ?, 1000, ?, ?, ?)
+            """,
+            (
+                (
+                    "conversation-01",
+                    "existing-fingerprint",
+                    "existing draft",
+                    "engaged",
+                    "planned",
+                ),
+                (
+                    "conversation-invited-planned",
+                    "invited-planned-fingerprint",
+                    "Continue on WhatsApp: +1 555 0100",
+                    "invited",
+                    "planned",
+                ),
+                (
+                    "conversation-invited-uncertain",
+                    "invited-uncertain-fingerprint",
+                    "Continue on WhatsApp: +1 555 0100",
+                    "invited",
+                    "uncertain",
+                ),
+                (
+                    "conversation-qualifying",
+                    "qualifying-fingerprint",
+                    "Which style do you prefer?",
+                    "qualifying",
+                    "planned",
+                ),
+            ),
         )
 
     database = Database(path)
@@ -319,6 +354,21 @@ def test_browser_storage_migration_is_additive_and_idempotent(tmp_path: Path) ->
         )
         assert migrated_plan is not None
         assert migrated_plan.invitation_included is False
+        invited_planned = database.get_browser_reply_plan(
+            "account-01", "invited-planned-fingerprint"
+        )
+        assert invited_planned is not None
+        assert invited_planned.invitation_included is True
+        invited_uncertain = database.get_browser_reply_plan(
+            "account-01", "invited-uncertain-fingerprint"
+        )
+        assert invited_uncertain is not None
+        assert invited_uncertain.invitation_included is True
+        qualifying = database.get_browser_reply_plan(
+            "account-01", "qualifying-fingerprint"
+        )
+        assert qualifying is not None
+        assert qualifying.stage == "qualified"
         action_pk = {
             row["name"]: row["pk"]
             for row in connection.execute("PRAGMA table_info(browser_action_leases)")
@@ -337,6 +387,82 @@ def test_browser_storage_migration_is_additive_and_idempotent(tmp_path: Path) ->
         }
         assert ("account_id", "conversation_id") in indexed_columns
         assert ("account_id", "inbound_fingerprint") in indexed_columns
+
+    service = BrowserDmService(
+        database,
+        WebAccountRegistry(
+            (WebAccount(account_id="account-01", device_id="phone-01", mode="browser"),)
+        ),
+        object(),
+        clock=lambda: 100.0,
+    )
+    assert service.record_result("account-01", "phone-01", invited_planned.id, "sent")
+    assert service.record_result("account-01", "phone-01", invited_uncertain.id, "sent")
+    assert (
+        database.browser_conversation_state(
+            "account-01", "conversation-invited-planned"
+        ).last_invited_at_ms
+        == 100_000
+    )
+    assert (
+        database.browser_conversation_state(
+            "account-01", "conversation-invited-uncertain"
+        ).last_invited_at_ms
+        == 100_000
+    )
+
+
+def test_browser_storage_migration_backfills_existing_invitation_column(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "tasks.db")
+    database.migrate()
+    database.append_web_message(
+        "account-01",
+        "conversation-01",
+        "inbound-01",
+        direction="inbound",
+        message_type="TEXT",
+        text="Do you ship?",
+        timestamp_ms=1_000,
+        participant_username="prospect",
+    )
+    with sqlite3.connect(database.path) as connection:
+        connection.execute(
+            """
+            INSERT INTO browser_reply_plans(
+                account_id, conversation_id, inbound_fingerprint,
+                inbound_timestamp_ms, reply_text, stage, state,
+                invitation_included
+            ) VALUES (
+                'account-01', 'conversation-01', 'legacy-invitation',
+                1000, 'Continue on WhatsApp: +1 555 0100', 'invited',
+                'uncertain', 0
+            )
+            """
+        )
+
+    database.migrate()
+    database.migrate()
+
+    migrated = database.get_browser_reply_plan("account-01", "legacy-invitation")
+    assert migrated is not None
+    assert migrated.invitation_included is True
+    service = BrowserDmService(
+        database,
+        WebAccountRegistry(
+            (WebAccount(account_id="account-01", device_id="phone-01", mode="browser"),)
+        ),
+        object(),
+        clock=lambda: 100.0,
+    )
+    assert service.record_result("account-01", "phone-01", migrated.id, "sent")
+    assert (
+        database.browser_conversation_state(
+            "account-01", "conversation-01"
+        ).last_invited_at_ms
+        == 100_000
+    )
 
 
 def test_reply_plan_duplicates_preserve_original_and_are_account_scoped(
@@ -411,8 +537,47 @@ def test_reply_plan_completion_is_exactly_idempotent_and_preserves_draft(
     assert exact_retry == completed
     assert conflicting_retry == completed
     assert completed.reply_text == "draft reply"
-    assert completed.stage == "qualifying"
+    assert completed.stage == "qualified"
     assert completed.state == "planned"
+
+
+def test_legacy_qualifying_completion_records_canonical_sent_result(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "tasks.db")
+    database.migrate()
+    database.append_web_message(
+        "account-01",
+        "conversation-01",
+        "fp-qualifying",
+        direction="inbound",
+        message_type="TEXT",
+        text="Which style?",
+        timestamp_ms=1_000,
+        participant_username="prospect",
+    )
+    plan, _ = database.reserve_browser_reply_plan(
+        "account-01",
+        "conversation-01",
+        "fp-qualifying",
+        "prospect",
+        "Which style?",
+        1_000,
+    )
+
+    completed = database.complete_browser_reply_plan(
+        plan.id, reply_text="This style is available.", stage="qualifying"
+    )
+    assert completed.stage == "qualified"
+    assert database.record_browser_reply_result(
+        "account-01", completed.id, "sent", now_ms=2_000
+    )
+
+    state = database.browser_conversation_state("account-01", "conversation-01")
+    messages = database.recent_web_messages("account-01", "conversation-01", limit=20)
+    assert state.stage == "qualified"
+    assert state.auto_reply_count == 1
+    assert [message["direction"] for message in messages] == ["inbound", "outbound"]
 
 
 def test_reply_plan_completion_validates_inputs_and_missing_plan(
@@ -428,6 +593,10 @@ def test_reply_plan_completion_validates_inputs_and_missing_plan(
         database.complete_browser_reply_plan(plan.id, reply_text="", stage="qualifying")
     with pytest.raises(ValueError):
         database.complete_browser_reply_plan(plan.id, reply_text="draft", stage=" ")
+    with pytest.raises(ValueError, match="invalid.*stage"):
+        database.complete_browser_reply_plan(
+            plan.id, reply_text="draft", stage="unsupported-stage"
+        )
     with pytest.raises(KeyError):
         database.complete_browser_reply_plan(
             99_999, reply_text="draft", stage="qualifying"
