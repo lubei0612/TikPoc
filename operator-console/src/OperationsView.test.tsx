@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 
 import App from "./App";
 import { CommandBar } from "./components/CommandBar";
+import { DeviceTable } from "./components/DeviceTable";
 import { OperationsView } from "./views/OperationsView";
 
 const operationSnapshot = (state = "running") => ({
@@ -171,6 +172,17 @@ it("confirms fleet and round commands before dispatch", () => {
   expect(screen.getByRole("dialog", { name: "Confirm stop fleet" })).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "Confirm stop fleet" }));
   expect(onCommand).toHaveBeenCalledWith("stop", "fleet");
+});
+
+it("confirms a device stop before dispatch", () => {
+  const onCommand = vi.fn();
+  render(<DeviceTable devices={[operationSnapshot().devices[0]]} errors={{}} onCommand={onCommand} pendingKeys={new Set()} />);
+
+  fireEvent.click(screen.getByRole("button", { name: "Stop phone-01" }));
+
+  expect(onCommand).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Confirm stop phone-01" }));
+  expect(onCommand).toHaveBeenCalledWith("stop", "phone-01");
 });
 
 it("loads the operations snapshot and coverage for the selected round", async () => {

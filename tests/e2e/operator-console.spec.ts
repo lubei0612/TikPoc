@@ -92,6 +92,9 @@ test("operations shows mobile traces and sticky horizontal coverage", async ({ p
   expect(dialogBox!.x + dialogBox!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
   expect(dialogBox!.y + dialogBox!.height).toBeLessThanOrEqual(page.viewportSize()!.height);
   await page.getByRole("button", { name: "Cancel" }).click();
+  await page.getByRole("button", { name: "Stop phone-01-long-identity" }).click();
+  await expect(page.getByRole("dialog", { name: "Confirm stop phone-01-long-identity" })).toBeVisible();
+  await page.getByRole("button", { name: "Cancel" }).click();
 
   const scroller = page.getByTestId("coverage-scroller");
   await expect(scroller).toBeVisible();
@@ -151,6 +154,8 @@ test("navigation preserves direct routes and browser history", async ({ page }) 
   await expect(page).toHaveURL(/\/operations$/);
   await expect(page.getByRole("heading", { name: "Device runtime" })).toBeVisible();
   await page.goForward();
+  await expect(page).toHaveURL(/\/inbox$/);
+  await expect(page.getByRole("heading", { name: "Lead conversion" })).toBeVisible();
   await page.getByRole("button", { name: "Analytics" }).click();
   await expect(page).toHaveURL(/\/analytics$/);
   expect(errors).toEqual([]);

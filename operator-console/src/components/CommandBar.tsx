@@ -2,6 +2,7 @@ import { CirclePause, CirclePlay, Octagon, RadioTower } from "lucide-react";
 import { useState } from "react";
 
 import type { CommandAction, RoundState } from "../api";
+import { ConfirmCommandDialog } from "./ConfirmCommandDialog";
 
 interface CommandBarProps {
   roundState: RoundState;
@@ -23,7 +24,6 @@ const actions: Array<{
 
 export function CommandBar({ roundState, pendingKeys, errors, onCommand }: CommandBarProps) {
   const [confirmation, setConfirmation] = useState<{ action: CommandAction; scope: "fleet" | "round" } | null>(null);
-  const confirmationLabel = confirmation ? `${confirmation.action} ${confirmation.scope}` : "";
   return (
     <section className="command-band" aria-label="Fleet and round controls">
       <div className="command-context">
@@ -66,27 +66,15 @@ export function CommandBar({ roundState, pendingKeys, errors, onCommand }: Comma
         ))}
       </div>
       {confirmation && (
-        <div className="command-dialog-backdrop">
-          <div aria-label={`Confirm ${confirmationLabel}`} aria-modal="true" className="command-dialog" role="dialog">
-            <span className="eyebrow">Confirm command</span>
-            <strong>{confirmation.action[0].toUpperCase() + confirmation.action.slice(1)} {confirmation.scope}</strong>
-            <p>This changes the persisted control state for the selected {confirmation.scope}.</p>
-            <div>
-              <button className="action-button" onClick={() => setConfirmation(null)} type="button">Cancel</button>
-              <button
-                aria-label={`Confirm ${confirmationLabel}`}
-                className="action-button warning"
-                onClick={() => {
-                  onCommand(confirmation.action, confirmation.scope);
-                  setConfirmation(null);
-                }}
-                type="button"
-              >
-                Confirm
-              </button>
-            </div>
-          </div>
-        </div>
+        <ConfirmCommandDialog
+          label={`${confirmation.action} ${confirmation.scope}`}
+          onCancel={() => setConfirmation(null)}
+          onConfirm={() => {
+            onCommand(confirmation.action, confirmation.scope);
+            setConfirmation(null);
+          }}
+          subject={`the selected ${confirmation.scope}`}
+        />
       )}
     </section>
   );

@@ -347,7 +347,7 @@ update the checkpoint, and continue from the latest verified state.
   three workspaces, root overflow, control overlap, sticky coverage scrolling,
   long identities, and browser console errors. Evidence is ignored under
   `test-results/operator-console/`.
-- Final regression passed `554` Python tests, `27` Vitest tests, `31` Chrome
+- Final regression passed `554` Python tests, `28` Vitest tests, `31` Chrome
   extension tests, and `8` Playwright tests. Ruff check, focused Python format,
   production dependency audit, Vite build, and `git diff --check` also passed.
 - Independent Task 6 review findings were closed: console hosts are constrained

@@ -2,6 +2,7 @@ import { Activity, ChevronDown, ChevronUp, CirclePause, CirclePlay, Gauge, Image
 import { useState } from "react";
 
 import type { CommandAction, Device } from "../api";
+import { ConfirmCommandDialog } from "./ConfirmCommandDialog";
 
 interface DeviceTableProps {
   devices: Device[];
@@ -15,6 +16,7 @@ const duration = (milliseconds: number) =>
 
 export function DeviceTable({ devices, pendingKeys, errors, onCommand }: DeviceTableProps) {
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [stopDeviceId, setStopDeviceId] = useState<string | null>(null);
 
   return (
     <div className="table-frame responsive-kv-bands" data-testid="device-table">
@@ -39,7 +41,10 @@ export function DeviceTable({ devices, pendingKeys, errors, onCommand }: DeviceT
                 device={device}
                 errors={errors}
                 key={device.device_id}
-                onCommand={onCommand}
+                onCommand={(action, deviceId) => {
+                  if (action === "stop") setStopDeviceId(deviceId);
+                  else onCommand(action, deviceId);
+                }}
                 onToggle={() => setExpanded(active ? null : device.device_id)}
                 pendingKeys={pendingKeys}
               />
@@ -47,6 +52,17 @@ export function DeviceTable({ devices, pendingKeys, errors, onCommand }: DeviceT
           })}
         </tbody>
       </table>
+      {stopDeviceId && (
+        <ConfirmCommandDialog
+          label={`stop ${stopDeviceId}`}
+          onCancel={() => setStopDeviceId(null)}
+          onConfirm={() => {
+            onCommand("stop", stopDeviceId);
+            setStopDeviceId(null);
+          }}
+          subject={stopDeviceId}
+        />
+      )}
     </div>
   );
 }
