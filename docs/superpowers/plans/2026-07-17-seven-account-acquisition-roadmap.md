@@ -61,7 +61,7 @@ one coherent commit.
 
 Resume the browser plan after its accepted Task 3 checkpoint:
 
-- [ ] Web Task 4: context-aware AI replies.
+- [x] Web Task 4: context-aware AI replies.
 - [ ] Web Task 5: browser DM planning service.
 - [ ] Web Task 6: browser DM, lease, and health HTTP endpoints.
 - [ ] Web Task 7: pure JavaScript DM core.

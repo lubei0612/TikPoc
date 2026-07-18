@@ -347,7 +347,7 @@ git commit -m "feat: add lead conversation policy"
 - Modify: `src/tikpoc/messaging.py:50-109`
 - Modify: `tests/test_messaging.py`
 
-- [ ] **Step 1: Write a failing prompt-context test**
+- [x] **Step 1: Write a failing prompt-context test**
 
 ```python
 def test_lead_reply_prompt_contains_offer_stage_and_conditional_invite() -> None:
@@ -378,23 +378,23 @@ def test_lead_reply_prompt_contains_offer_stage_and_conditional_invite() -> None
     assert "WhatsApp: +1 555 0100" in system
 ```
 
-- [ ] **Step 2: Run the focused test and verify unexpected keyword failure**
+- [x] **Step 2: Run the focused test and verify unexpected keyword failure**
 
 Run: `uv run pytest tests/test_messaging.py -q`
 
 Expected: FAIL because `reply_conversation` lacks the new keyword arguments.
 
-- [ ] **Step 3: Extend `reply_conversation`**
+- [x] **Step 3: Extend `reply_conversation`**
 
 Add keyword-only `offer_context`, `faq_context`, `conversation_stage`, `should_invite`, and `fallback` parameters. Include the private channel only when `should_invite` is true. Use the per-account fallback for missing configuration or provider errors. Retain the same-language, concise, fact-bound response rules.
 
-- [ ] **Step 4: Run messaging tests**
+- [x] **Step 4: Run messaging tests**
 
 Run: `uv run pytest tests/test_messaging.py -q`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the AI prompt change**
+- [x] **Step 5: Commit the AI prompt change**
 
 ```bash
 git add src/tikpoc/messaging.py tests/test_messaging.py

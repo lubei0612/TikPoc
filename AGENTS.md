@@ -235,6 +235,8 @@ Completed on `feat/web-lead-conversion`:
 - Web Task 2: durable reply plans and exclusive browser action leases.
 - Web Task 3: reviewed lead-conversation policy with bilingual handoff,
   monotonic stages, invitation cooldown, contact priority, and prompt limits.
+- Web Task 4: bounded account offer, FAQ, stage, conditional invitation, and
+  per-account fallback context for AI replies.
 - Mobile Tasks 1-9: stable target identity, immutable pools, deterministic
   rounds, shared qualification snapshots, independent quota-controlled plans,
   durable workers, semantic Appium verification, MYT discovery, proxy relay,
@@ -242,14 +244,23 @@ Completed on `feat/web-lead-conversion`:
   coverage gates.
 - Task 9 implementation commit: `b22bf69`
   (`feat: operate and gate acquisition capacity`).
-- Latest code commit: `e58080c`
+- Task 9 quality-fix commit: `e58080c`
   (`fix: harden capacity and fleet shutdown gates`).
 - Task 9 repeated specification and quality reviews passed with no Critical,
   Important, or Minor findings after the final lease-release fixes.
-- Last fresh full Python verification: `402 passed`.
-- Last focused Task 9 verification: `162 passed`.
-- Ruff check, focused format check for all seven Task 9 review-fix files, and
+- Web Task 4 implementation commit: `a9c01d1`
+  (`feat: add conversion context to AI replies`).
+- Latest code commit: `9bbb172`
+  (`fix: preserve AI reply error boundaries`).
+- Web Task 4 repeated specification and quality reviews passed with no Critical
+  or Important findings after the fallback and provider-boundary fixes.
+- Last fresh full Python verification: `425 passed`.
+- Last focused Web Task 4 verification: `93 passed`.
+- Ruff check, focused format check for the two Web Task 4 Python files, and
   `git diff --check` passed.
+- Two nonblocking Task 4 review notes remain: explicitly migrate the dormant
+  Business Messaging caller if that path is reactivated, and consolidate the
+  duplicate prompt builders when Task 5 establishes the production call path.
 - Read-only MYT discovery found running slot 1 at ADB/web ports `30000/30001`
   and slot 2 at `30100/30101`. No account action was performed.
 - Full-repository Ruff format check has a pre-existing 14-file formatting
@@ -257,7 +268,7 @@ Completed on `feat/web-lead-conversion`:
 
 Outstanding at the current checkpoint:
 
-1. Continue Web Tasks 4-10 and the operator-console plan in roadmap order.
+1. Continue Web Tasks 5-10 and the operator-console plan in roadmap order.
 2. Execute Mobile Task 10 only at the roadmap's two-device live gate.
 3. Finish full regression, two-device calibration, four-/eight-hour
    endurance tests, seven-device benchmark, runbooks, branch integration, and
@@ -268,11 +279,13 @@ Outstanding at the current checkpoint:
 1. Enter the active feature worktree and read this file plus both current plans.
 2. Run `git status --short --branch` and `git log -5 --oneline`.
 3. Preserve any new user changes and inspect them before proceeding.
-4. Read Web Task 4 plus the current messaging client and tests before editing.
-5. Add the prompt-context test, run it to observe the expected failure, and
-   implement only enough behavior to pass the red-green slice.
+4. Read Web Task 5 plus the current database reply-plan APIs, account registry,
+   lead policy, messaging client, and nearby tests before editing.
+5. Add the browser DM idempotency and result tests, run them to observe the
+   expected module-import failure, and implement only enough behavior to pass
+   each red-green slice.
 6. Repeat focused and full verification plus specification and quality review
-   before committing Web Task 4.
+   before committing Web Task 5.
 
 If runtime state differs from this checkpoint, report the concrete difference,
 update the checkpoint, and continue from the latest verified state.
