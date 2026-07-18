@@ -683,23 +683,33 @@ class Database:
                   AND state IN ('planning', 'planned')
                 """
             )
-            duplicate_manual_plans = connection.execute(
+            structured_manual_plans = connection.execute(
                 """
-                SELECT id, account_id, conversation_id, source_inbound_fingerprint
+                SELECT id, account_id, conversation_id,
+                       source_inbound_fingerprint, state
                 FROM browser_reply_plans
                 WHERE plan_origin='manual' AND source_inbound_fingerprint != ''
-                  AND state IN ('planning', 'planned', 'uncertain')
+                  AND state IN ('planning', 'planned', 'uncertain', 'sent')
                 ORDER BY account_id, conversation_id, source_inbound_fingerprint, id
                 """
             ).fetchall()
-            seen_manual_sources: set[tuple[str, str, str]] = set()
-            for plan in duplicate_manual_plans:
+            manual_plan_groups: dict[tuple[str, str, str], list[sqlite3.Row]] = {}
+            for plan in structured_manual_plans:
                 identity = (
                     str(plan["account_id"]),
                     str(plan["conversation_id"]),
                     str(plan["source_inbound_fingerprint"]),
                 )
-                if identity in seen_manual_sources:
+                manual_plan_groups.setdefault(identity, []).append(plan)
+            for plans in manual_plan_groups.values():
+                sent_exists = any(str(plan["state"]) == "sent" for plan in plans)
+                unresolved = [
+                    plan
+                    for plan in plans
+                    if str(plan["state"]) in {"planning", "planned", "uncertain"}
+                ]
+                duplicates = unresolved if sent_exists else unresolved[1:]
+                for plan in duplicates:
                     connection.execute(
                         """
                         UPDATE browser_reply_plans
@@ -708,8 +718,6 @@ class Database:
                         """,
                         (int(plan["id"]),),
                     )
-                else:
-                    seen_manual_sources.add(identity)
             connection.execute(
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS browser_reply_plans_manual_source_uq

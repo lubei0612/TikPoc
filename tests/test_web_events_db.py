@@ -842,6 +842,97 @@ def test_migration_reconciles_legacy_and_structured_manual_plan_collision(
         )
 
 
+def test_migration_supersedes_unresolved_manual_sibling_of_sent_plan(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "tasks.db")
+    database.migrate()
+    database.append_web_message(
+        "account-01",
+        "conversation-01",
+        "source-01",
+        direction="inbound",
+        message_type="TEXT",
+        text="hello",
+        timestamp_ms=1_000,
+        participant_username="buyer",
+    )
+    with sqlite3.connect(database.path) as connection:
+        connection.execute(
+            """
+            UPDATE web_conversations SET stage='human_required', human_required=1
+            WHERE account_id='account-01' AND conversation_id='conversation-01'
+            """
+        )
+        sent = connection.execute(
+            """
+            INSERT INTO browser_reply_plans(
+                account_id, conversation_id, inbound_fingerprint,
+                inbound_timestamp_ms, reply_text, state
+            ) VALUES ('account-01', 'conversation-01',
+                      'operator-manual:sent:source-01',
+                      1000, 'sent reply', 'sent')
+            """
+        )
+        planned = connection.execute(
+            """
+            INSERT INTO browser_reply_plans(
+                account_id, conversation_id, inbound_fingerprint,
+                inbound_timestamp_ms, reply_text, state
+            ) VALUES ('account-01', 'conversation-01',
+                      'operator-manual:planned:source-01',
+                      1000, 'duplicate reply', 'planned')
+            """
+        )
+        connection.executemany(
+            """
+            INSERT INTO operator_lead_commands(
+                command_type, account_id, conversation_id, command_id, result_json
+            ) VALUES ('manual_reply', 'account-01', 'conversation-01', ?, ?)
+            """,
+            (
+                (
+                    "sent-command",
+                    json.dumps(
+                        {
+                            "plan_id": sent.lastrowid,
+                            "inbound_fingerprint": "source-01",
+                            "reply_text": "sent reply",
+                            "state": "sent",
+                        }
+                    ),
+                ),
+                (
+                    "planned-command",
+                    json.dumps(
+                        {
+                            "plan_id": planned.lastrowid,
+                            "inbound_fingerprint": "source-01",
+                            "reply_text": "duplicate reply",
+                            "state": "planned",
+                        }
+                    ),
+                ),
+            ),
+        )
+
+    database.migrate()
+
+    sent_plan = database.browser_reply_plan_by_id(int(sent.lastrowid))
+    planned_plan = database.browser_reply_plan_by_id(int(planned.lastrowid))
+    assert sent_plan is not None
+    assert sent_plan.state == "sent"
+    assert planned_plan is not None
+    assert planned_plan.state == "superseded"
+    assert not database.claim_browser_dm_action(
+        "account-01",
+        f"dm_send:{planned.lastrowid}",
+        "operator-tab",
+        2_000,
+        default_ai_enabled=True,
+    )
+
+
 def test_migration_reconstructs_legacy_operator_request_json(tmp_path: Path) -> None:
     database = Database(tmp_path / "tasks.db")
     database.migrate()
