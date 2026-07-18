@@ -15,6 +15,8 @@ import { ConversationDrawer } from "../components/ConversationDrawer";
 import { ConversationList } from "../components/ConversationList";
 
 const errorText = (reason: unknown) => reason instanceof Error ? reason.message : "Lead operation failed";
+type ScopedText = { key: string; text: string };
+type ScopedAction = { key: string; name: string };
 
 export function InboxView() {
   const [snapshot, setSnapshot] = useState<LeadInboxSnapshot | null>(null);
@@ -22,9 +24,9 @@ export function InboxView() {
   const [selected, setSelected] = useState<SelectedLead | null>(null);
   const [fingerprint, setFingerprint] = useState("");
   const [loading, setLoading] = useState(true);
-  const [action, setAction] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [action, setAction] = useState<ScopedAction | null>(null);
+  const [error, setError] = useState<ScopedText | null>(null);
+  const [notice, setNotice] = useState<ScopedText | null>(null);
   const selectionController = useRef<AbortController | null>(null);
   const selectionGeneration = useRef(0);
   const currentSelectionKey = useRef("");
@@ -36,7 +38,7 @@ export function InboxView() {
 
   useEffect(() => {
     const controller = new AbortController();
-    loadList(controller.signal).catch((reason) => setError(errorText(reason))).finally(() => setLoading(false));
+    loadList(controller.signal).catch((reason) => setError({ key: "", text: errorText(reason) })).finally(() => setLoading(false));
     return () => controller.abort();
   }, [loadList]);
 
@@ -70,7 +72,9 @@ export function InboxView() {
       setSelected(next.selected);
       setFingerprint(inboundFingerprint);
     } catch (reason) {
-      if (!controller.signal.aborted && generation === selectionGeneration.current) setError(errorText(reason));
+      if (!controller.signal.aborted && generation === selectionGeneration.current) {
+        setError({ key: `${conversation.account_id}:${conversation.conversation_id}`, text: errorText(reason) });
+      }
     }
   }, [fetchSelected]);
 
@@ -86,53 +90,58 @@ export function InboxView() {
   const runAction = async (name: string, command: () => Promise<unknown>, success: string) => {
     if (!selectedConversation) return;
     const commandSelectionKey = `${selectedConversation.account_id}:${selectedConversation.conversation_id}`;
-    setAction(name);
-    setError(null);
-    setNotice(null);
+    setAction({ key: commandSelectionKey, name });
+    setError((current) => current?.key === commandSelectionKey ? null : current);
+    setNotice((current) => current?.key === commandSelectionKey ? null : current);
     try {
       await command();
-      setNotice(success);
+      setNotice({ key: commandSelectionKey, text: success });
       if (currentSelectionKey.current === commandSelectionKey) await requestSelected(selectedConversation, fingerprint);
     } catch (reason) {
-      setError(errorText(reason));
+      setError({ key: commandSelectionKey, text: errorText(reason) });
     } finally {
-      setAction(null);
+      setAction((current) => current?.key === commandSelectionKey && current.name === name ? null : current);
     }
   };
 
   const toggleAccount = async (accountId: string, enabled: boolean) => {
-    setAction(`account:${accountId}`);
+    const accountKey = `account:${accountId}`;
+    setAction({ key: accountKey, name: "account" });
     setError(null);
     try {
       await setAccountEnabled(accountId, "ai", enabled, crypto.randomUUID());
       await loadList();
     } catch (reason) {
-      setError(errorText(reason));
+      setError({ key: "", text: errorText(reason) });
     } finally {
-      setAction(null);
+      setAction((current) => current?.key === accountKey ? null : current);
     }
   };
 
   if (loading) return <div className="workspace-state"><span className="loading-line" />Loading inbox</div>;
-  if (!snapshot) return <div className="workspace-state error-state" role="alert">{error || "Inbox unavailable"}</div>;
+  if (!snapshot) return <div className="workspace-state error-state" role="alert">{error?.text || "Inbox unavailable"}</div>;
 
   const account = selectedConversation ? snapshot.accounts.find((item) => item.account_id === selectedConversation.account_id) : undefined;
+  const selectedKey = selectedConversation ? `${selectedConversation.account_id}:${selectedConversation.conversation_id}` : "";
+  const selectedAction = action?.key === selectedKey ? action.name : null;
+  const selectedError = error?.key === selectedKey ? error.text : null;
+  const selectedNotice = notice?.key === selectedKey ? notice.text : null;
   return (
     <main className="inbox-workspace">
       <section className="inbox-main">
         <header className="workspace-title">
           <div><span className="section-index">INBOX</span><h1>Lead conversion</h1><p>Private-channel readiness, takeover and closing state.</p></div>
-          <button className="icon-only" aria-label="Refresh inbox" title="Refresh inbox" disabled={action !== null} onClick={() => loadList().catch((reason) => setError(errorText(reason)))}><RefreshCw size={15} /></button>
+          <button className="icon-only" aria-label="Refresh inbox" title="Refresh inbox" disabled={action !== null} onClick={() => loadList().catch((reason) => setError({ key: "", text: errorText(reason) }))}><RefreshCw size={15} /></button>
         </header>
         <div className="account-control-strip">
           <span><SlidersHorizontal size={14} />Account AI</span>
           {snapshot.accounts.map((item) => <label key={item.account_id}><span>{item.account_id}<small>{item.private_channel_configured ? "Private ready" : "Private missing"}</small></span><input type="checkbox" checked={item.ai_enabled} disabled={!item.enabled || action !== null} onChange={(event) => toggleAccount(item.account_id, event.target.checked)} /></label>)}
         </div>
-        {error && !selectedConversation && <div className="action-error" role="alert">{error}</div>}
+        {error?.key === "" && !selectedConversation && <div className="action-error" role="alert">{error.text}</div>}
         <ConversationList conversations={snapshot.conversations} selectedId={selectedConversation?.conversation_id ?? null} onSelect={choose} />
       </section>
       {selectedConversation && !selected && <aside className="conversation-drawer drawer-loading"><span className="loading-line" />Loading conversation</aside>}
-      {selectedConversation && selected && <ConversationDrawer account={account} conversation={selectedConversation} lead={selected} action={action} error={error} notice={notice} canCreatePlan={Boolean(fingerprint)} onClose={() => { currentSelectionKey.current = ""; selectionGeneration.current += 1; selectionController.current?.abort(); setSelectedConversation(null); setSelected(null); }} onTakeover={() => runAction("takeover", () => takeOverLead(selectedConversation.account_id, selectedConversation.conversation_id, crypto.randomUUID()), "Human takeover confirmed.")} onManualPlan={(text) => { if (!fingerprint) { setError("No inbound message is available in bounded history."); return; } void runAction("manual", () => createManualReplyPlan(selectedConversation.account_id, selectedConversation.conversation_id, crypto.randomUUID(), fingerprint, text), "Immutable send plan created; delivery is pending."); }} onSale={(amount, currency, status) => runAction("sale", () => recordSale(selectedConversation.account_id, selectedConversation.conversation_id, { commandId: crypto.randomUUID(), amountMinor: Math.round(Number(amount) * 100), currency, status, occurredAtMs: Date.now() }), "Sale recorded by the server.")} />}
+      {selectedConversation && selected && <ConversationDrawer account={account} conversation={selectedConversation} lead={selected} action={selectedAction} error={selectedError} notice={selectedNotice} canCreatePlan={Boolean(fingerprint)} onClose={() => { currentSelectionKey.current = ""; selectionGeneration.current += 1; selectionController.current?.abort(); setSelectedConversation(null); setSelected(null); }} onTakeover={() => runAction("takeover", () => takeOverLead(selectedConversation.account_id, selectedConversation.conversation_id, crypto.randomUUID()), "Human takeover confirmed.")} onManualPlan={(text) => { if (!fingerprint) { setError({ key: selectedKey, text: "No inbound message is available in bounded history." }); return; } void runAction("manual", () => createManualReplyPlan(selectedConversation.account_id, selectedConversation.conversation_id, crypto.randomUUID(), fingerprint, text), "Immutable send plan created; delivery is pending."); }} onSale={(amount, currency, status) => runAction("sale", () => recordSale(selectedConversation.account_id, selectedConversation.conversation_id, { commandId: crypto.randomUUID(), amountMinor: Math.round(Number(amount) * 100), currency, status, occurredAtMs: Date.now() }), "Sale recorded by the server.")} />}
     </main>
   );
 }

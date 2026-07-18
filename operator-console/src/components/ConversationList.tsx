@@ -26,7 +26,7 @@ export function ConversationList({ conversations, selectedId, onSelect }: Conver
             <span className="conversation-copy">
               <span><strong>{conversation.participant_username}</strong><small>{conversation.account_id}</small></span>
               <span className="conversation-preview">{conversation.last_message_preview || "No message preview"}</span>
-              <span className="conversation-signals"><small>{conversation.stage === "invited" ? "Invited" : "Invitation --"}</small><small>{["contact_captured", "closed"].includes(conversation.stage) ? "Contact captured" : "Contact --"}</small><small>Reply latency --</small></span>
+              <span className="conversation-signals"><small>{conversation.stage === "invited" ? "Invited" : "Invitation --"}</small><small>{["contact_captured", "closed"].includes(conversation.stage) ? "Contact captured" : "Contact --"}</small></span>
             </span>
             <span className={`stage-tag stage-${conversation.stage}`}>{conversation.stage.replaceAll("_", " ")}</span>
             <span className={`status-label ${conversation.human_required ? "status-degraded" : "status-healthy"}`}><span />{conversation.human_required ? "Human" : "AI"}</span>

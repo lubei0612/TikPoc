@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
-import { AnalyticsView } from "./views/AnalyticsView";
+import { AnalyticsView, evaluatePromotion } from "./views/AnalyticsView";
 import { InboxView } from "./views/InboxView";
+import type { OperationsSnapshot } from "./api";
 
 const leadPayload = (selected: object | null = null) => ({
   configured: true,
@@ -60,7 +61,7 @@ const selectedLead = (humanRequired = false) => ({
   },
 });
 
-const operationsPayload = {
+const operationsPayload: OperationsSnapshot = {
   round: { round_id: "round-1", pool_id: "pool-1", state: "running", starts_at_ms: 1_000, target_count: 1000 },
   devices: [
     { device_id: "phone-01", account_id: "account-01", health: "healthy", health_error_code: null, health_updated_at_ms: 4_000, control_state: "running", current_assignment: null, mean_ms: 5_200, p90_ms: 7_400, latest_diagnostic: null },
@@ -192,4 +193,40 @@ it("does not create a manual plan when bounded history has no inbound message", 
   const composer = await screen.findByRole("textbox", { name: "Manual reply" });
   fireEvent.change(composer, { target: { value: "Do not plan this" } });
   expect(screen.getByRole("button", { name: "Create send plan" })).toBeDisabled();
+});
+
+it("does not promote zero timing samples or incomplete coverage", () => {
+  const zeroSamples = { ...operationsPayload, devices: operationsPayload.devices.map((device) => ({ ...device, mean_ms: 0, p90_ms: 0 })) };
+  expect(evaluatePromotion(zeroSamples)).toEqual({ promoted: false, reason: "Insufficient timing evidence" });
+
+  const incomplete = { ...operationsPayload, coverage: { ...operationsPayload.coverage, fully_covered: 999, fully_completed: 999 } };
+  expect(evaluatePromotion(incomplete)).toEqual({ promoted: false, reason: "Coverage gate failed" });
+});
+
+it("keeps pending lead actions and late notices scoped to their conversation", async () => {
+  let resolveManual!: (response: Response) => void;
+  const pendingManual = new Promise<Response>((resolve) => { resolveManual = resolve; });
+  const list = leadPayload();
+  list.conversations.push({ ...list.conversations[0], conversation_id: "conversation-02", participant_username: "buyer_02" });
+  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+    const url = String(input);
+    if (url.endsWith("/manual-reply-plan") && init?.method === "POST") return pendingManual;
+    if (url.includes("conversation_id=conversation-02")) return jsonResponse({ ...list, selected: { ...selectedLead(true), conversation_id: "conversation-02" } });
+    if (url.includes("conversation_id=conversation-01")) return jsonResponse({ ...list, selected: selectedLead(true) });
+    return jsonResponse(list);
+  });
+
+  render(<InboxView />);
+  fireEvent.click(await screen.findByRole("button", { name: /buyer_01/ }));
+  const firstComposer = await screen.findByRole("textbox", { name: "Manual reply" });
+  fireEvent.change(firstComposer, { target: { value: "Pending on first" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create send plan" }));
+  fireEvent.click(screen.getByRole("button", { name: /buyer_02/ }));
+
+  expect(await screen.findByRole("textbox", { name: "Manual reply" })).toBeEnabled();
+  await act(async () => {
+    resolveManual(await jsonResponse({ plan_id: 91, inbound_fingerprint: "inbound-2", reply_text: "Pending on first", state: "planned" }));
+    await pendingManual;
+  });
+  expect(screen.queryByText("Immutable send plan created; delivery is pending.")).not.toBeInTheDocument();
 });

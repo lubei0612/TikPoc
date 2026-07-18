@@ -237,6 +237,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 
 .analytics-workspace { max-width: 1540px; margin: 0 auto; padding: 18px 26px 52px; }
 .promotion-label { min-height: 30px; display: flex; align-items: center; gap: 6px; padding: 0 9px; font-size: 10px; font-weight: 800; text-transform: uppercase; border-left: 3px solid; }
+.promotion-label > span { display: grid; gap: 1px; }
+.promotion-label small { font-size: 8px; font-weight: 650; text-transform: none; }
 .promotion-label.promoted { color: var(--green); background: #e8f5ed; border-color: var(--green); }
 .promotion-label.not-promoted { color: #8a4d08; background: #fff3dc; border-color: var(--amber); }
 .capacity-band { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); background: #202724; color: white; }
