@@ -241,6 +241,8 @@ Completed on `feat/web-lead-conversion`:
   reconciliation gates, and migration-safe invitation evidence.
 - Web Task 6: origin-validated browser DM, lease, and health HTTP endpoints with
   real Chrome extension transport coverage.
+- Web Task 7: stable browser message identity, semantic control matching, and
+  exact outbound reconciliation helpers.
 - Mobile Tasks 1-9: stable target identity, immutable pools, deterministic
   rounds, shared qualification snapshots, independent quota-controlled plans,
   durable workers, semantic Appium verification, MYT discovery, proxy relay,
@@ -254,8 +256,8 @@ Completed on `feat/web-lead-conversion`:
   Important, or Minor findings after the final lease-release fixes.
 - Web Task 4 implementation commit: `a9c01d1`
   (`feat: add conversion context to AI replies`).
-- Latest code commit: `28502d5`
-  (`fix: accept verified extension origins`).
+- Latest code commit: `eeb3e73`
+  (`fix: ignore hidden browser DM controls`).
 - Web Task 4 repeated specification and quality reviews passed with no Critical
   or Important findings after the fallback and provider-boundary fixes.
 - Web Task 5 repeated specification and quality reviews passed with no Critical
@@ -278,7 +280,7 @@ Completed on `feat/web-lead-conversion`:
 
 Outstanding at the current checkpoint:
 
-1. Continue Web Tasks 7-10 and the operator-console plan in roadmap order.
+1. Continue Web Tasks 8-10 and the operator-console plan in roadmap order.
 2. Execute Mobile Task 10 only at the roadmap's two-device live gate.
 3. Finish full regression, two-device calibration, four-/eight-hour
    endurance tests, seven-device benchmark, runbooks, branch integration, and
@@ -289,12 +291,12 @@ Outstanding at the current checkpoint:
 1. Enter the active feature worktree and read this file plus both current plans.
 2. Run `git status --short --branch` and `git log -5 --oneline`.
 3. Preserve any new user changes and inspect them before proceeding.
-4. Read Web Task 7 plus the current extension core and nearby Node tests before
+4. Read Web Task 8 plus the current extension transport, DM core, and manifest before
    editing.
-5. Add the pure DM core tests, observe the expected module failure, and
+5. Add the DM transport/DOM tests, observe the expected failures, and
    implement only enough behavior to pass each red-green slice.
 6. Repeat focused and full verification plus specification and quality review
-   before committing Web Task 7.
+   before committing Web Task 8.
 
 If runtime state differs from this checkpoint, report the concrete difference,
 update the checkpoint, and continue from the latest verified state.

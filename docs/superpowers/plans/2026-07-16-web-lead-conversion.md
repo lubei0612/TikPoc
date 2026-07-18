@@ -584,7 +584,7 @@ git commit -m "feat: expose browser DM conversion endpoints"
 - Create: `chrome-event-bridge/dm-core.js`
 - Create: `chrome-event-bridge/dm-core.test.js`
 
-- [ ] **Step 1: Write failing Node tests**
+- [x] **Step 1: Write failing Node tests**
 
 ```javascript
 const test = require("node:test");
@@ -617,23 +617,23 @@ test("reconciles an exact outbound bubble", () => {
 });
 ```
 
-- [ ] **Step 2: Run Node tests and verify module-not-found failure**
+- [x] **Step 2: Run Node tests and verify module-not-found failure**
 
 Run: `node --test chrome-event-bridge/dm-core.test.js`
 
 Expected: FAIL because `dm-core.js` does not exist.
 
-- [ ] **Step 3: Implement the UMD-style core module**
+- [x] **Step 3: Implement the UMD-style core module**
 
 Export `normalizeText`, `conversationKey`, `isActionableInbound`, `fingerprintMessage`, `sameInbound`, `findSemanticButton`, and `hasMatchingOutbound`. Use `globalThis.crypto.subtle.digest("SHA-256", ...)` in Chrome and `require("node:crypto").webcrypto` in Node. Accept only `tiktok.com` Messages URLs or a normalized username fallback.
 
-- [ ] **Step 4: Run all extension core tests**
+- [x] **Step 4: Run all extension core tests**
 
 Run: `node --test chrome-event-bridge/core.test.js chrome-event-bridge/dm-core.test.js`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the core**
+- [x] **Step 5: Commit the core**
 
 ```bash
 git add chrome-event-bridge/dm-core.js chrome-event-bridge/dm-core.test.js
