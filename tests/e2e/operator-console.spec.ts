@@ -76,10 +76,37 @@ async function expectPageControlsDoNotOverlap(page: Page) {
   await page.evaluate(() => window.scrollTo(0, 0));
 }
 
+async function expectOperationsBandsDoNotOverlap(page: Page) {
+  const overlapReport = await page.locator(".operations-workspace").evaluate((workspace) => {
+    const overlap = (top: DOMRect, bottom: DOMRect) => Math.min(top.bottom, bottom.bottom) - Math.max(top.top, bottom.top);
+    const tables = Array.from(workspace.querySelectorAll<HTMLTableElement>("table"));
+    const tableOverlaps = tables.flatMap((table) => {
+      const header = table.tHead?.getBoundingClientRect();
+      const firstRow = table.tBodies[0]?.rows[0]?.getBoundingClientRect();
+      return header && firstRow && overlap(header, firstRow) > 1
+        ? [`${table.className}:表头与首行重叠 ${Math.round(overlap(header, firstRow))}px`]
+        : [];
+    });
+    const sections = Array.from(workspace.querySelectorAll<HTMLElement>(":scope > .workspace-section"));
+    const sectionOverlaps = sections.slice(0, -1).flatMap((section, index) => {
+      const current = section.getBoundingClientRect();
+      const next = sections[index + 1].getBoundingClientRect();
+      return overlap(current, next) > 1
+        ? [`区块 ${index + 1}/${index + 2} 重叠 ${Math.round(overlap(current, next))}px`]
+        : [];
+    });
+    return [...tableOverlaps, ...sectionOverlaps];
+  });
+  expect(overlapReport).toEqual([]);
+}
+
 test("operations shows mobile traces and sticky horizontal coverage", async ({ page }, testInfo) => {
   const errors = rejectConsoleErrors(page);
   await page.goto("/operations");
   await expect(page.getByRole("heading", { name: "设备运行状态" })).toBeVisible();
+  await expect(page.getByLabel("轮次关键指标").getByText("20小时预计容量")).toBeVisible();
+  await expect(page.locator(".quota-table th", { hasText: "滚动用量" })).toBeVisible();
+  await expect(page.locator(".quota-table tbody tr").first()).toBeVisible();
   await expect(page.getByTestId("coverage-matrix").getByText("long_target_identity_for_mobile_layout_verification")).toBeVisible();
   await expect(page.getByRole("button", { name: /重试 phone-03/ })).toBeVisible();
   await page.getByRole("button", { name: "停止轮次" }).click();
@@ -111,6 +138,21 @@ test("operations shows mobile traces and sticky horizontal coverage", async ({ p
     expect(targetBox).not.toBeNull();
     expect(targetBox!.x).toBeGreaterThanOrEqual(containerBox!.x - 1);
     expect(targetBox!.x + targetBox!.width).toBeLessThanOrEqual(containerBox!.x + containerBox!.width + 1);
+    await scroller.evaluate((element) => { element.scrollLeft = 0; });
+  }
+  await expectOperationsBandsDoNotOverlap(page);
+  if (testInfo.project.name === "mobile") {
+    const quotaFrame = page.locator(".compact-table-frame");
+    expect(await quotaFrame.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+    const targetCell = page.locator(".coverage-table td.sticky-target").first();
+    expect(await targetCell.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    const deviceRow = await page.locator(".device-row").first().boundingBox();
+    expect(deviceRow).not.toBeNull();
+    expect(deviceRow!.height).toBeLessThanOrEqual(240);
+  } else {
+    const deviceRow = await page.locator(".device-row").first().boundingBox();
+    expect(deviceRow).not.toBeNull();
+    expect(deviceRow!.y + deviceRow!.height).toBeLessThanOrEqual(page.viewportSize()!.height);
   }
   await expectNoViewportOverflow(page);
   await expectPageControlsDoNotOverlap(page);

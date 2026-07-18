@@ -14,24 +14,23 @@
 
 **Files:** `operator-console/src/api.ts`, `operator-console/src/components/QuotaTable.tsx`, `operator-console/src/OperationsView.test.tsx`
 
-- [ ] Add failing tests for rolling usage, readiness, next due time, candidate weight, and Chinese labels.
-- [ ] Update the TypeScript contract and render a compact six-column pacing table.
-- [ ] Run Vitest and commit `feat: show rolling action pacing`.
+- [x] Add failing tests for rolling usage, readiness, next due time, candidate weight, and Chinese labels.
+- [x] Update the TypeScript contract and render a compact six-column pacing table.
+- [x] Run Vitest and commit `feat: show rolling action pacing`.
 
 ### Task 2: Dense Operations Composition
 
 **Files:** `operator-console/src/views/OperationsView.tsx`, `operator-console/src/styles.css`, `operator-console/src/components/DeviceTable.tsx`, `operator-console/src/OperationsView.test.tsx`
 
-- [ ] Add tests for capacity KPIs and stable section order.
-- [ ] Recompose KPI, command, device, pacing/account, coverage, and evidence bands.
-- [ ] Remove overlay positioning and constrain every table with stable responsive tracks.
-- [ ] Run Vitest/build and commit `refactor: clarify operations workspace`.
+- [x] Add tests for capacity KPIs and stable section order.
+- [x] Recompose KPI, command, device, pacing/account, coverage, and evidence bands.
+- [x] Remove overlay positioning and constrain every table with stable responsive tracks.
+- [x] Run Vitest/build and commit `refactor: clarify operations workspace`.
 
 ### Task 3: Desktop, Mobile, And Long-Screenshot QA
 
 **Files:** `tests/e2e/operator-console.spec.ts`, `operator-console/src/styles.css`, `src/tikpoc/static/console/*`
 
-- [ ] Extend fixtures with rolling quota fields and assert no viewport overflow or element overlap at 1440x1000, 1920x1080, and 390x844.
-- [ ] Capture a full-page desktop screenshot and inspect all section boundaries and table rows.
-- [ ] Fix every clipping/overlap issue, rebuild embedded assets, run Vitest/build/E2E, and commit `fix: polish console responsive layout`.
-
+- [x] Extend fixtures with rolling quota fields and assert no viewport overflow or element overlap at 1440x1000, 1920x1080, and 390x844.
+- [x] Capture a full-page desktop screenshot and inspect all section boundaries and table rows.
+- [x] Fix every clipping/overlap issue, rebuild embedded assets, run Vitest/build/E2E, and commit `fix: polish console responsive layout`.
