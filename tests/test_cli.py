@@ -4,8 +4,9 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+import uvicorn
 
-from tikpoc import cli, dashboard, runner, web_worker
+from tikpoc import cli, runner, web_worker
 from tikpoc.acquisition_db import AcquisitionRepository
 from tikpoc.cli import main
 from tikpoc.db import Database
@@ -575,24 +576,16 @@ def test_cli_dashboard_loads_web_account_and_webhook_configuration(
     _write_web_accounts(config_path)
     captured = {}
 
-    class FakeServer:
-        server_port = 8765
-
-        def serve_forever(self) -> None:
-            raise KeyboardInterrupt
-
-        def server_close(self) -> None:
-            captured["closed"] = True
-
-    def fake_create_server(*args, **kwargs):
-        captured.update(kwargs)
-        return FakeServer()
+    def fake_uvicorn_run(app, *, host: str, port: int) -> None:
+        captured["app"] = app
+        captured["host"] = host
+        captured["port"] = port
 
     def fake_start_web_worker_thread(*args, **kwargs):
         captured["web_worker_args"] = args
         captured["web_worker_kwargs"] = kwargs
 
-    monkeypatch.setattr(dashboard, "create_server", fake_create_server)
+    monkeypatch.setattr(uvicorn, "run", fake_uvicorn_run)
     monkeypatch.setattr(
         web_worker,
         "start_web_worker_thread",
@@ -617,18 +610,43 @@ def test_cli_dashboard_loads_web_account_and_webhook_configuration(
 
     assert result == 0
     assert (
-        captured["web_account_registry"].by_account_id("account-01").device_id
+        captured["app"].state.registry.by_account_id("account-01").device_id
         == "phone-01"
     )
-    assert captured["tiktok_app_secret"] == "app-secret"
-    assert captured["webhook_max_age_seconds"] == 90
+    assert captured["app"].state.tiktok_app_secret == "app-secret"
+    assert captured["app"].state.webhook_max_age_seconds == 90
+    assert captured["host"] == "127.0.0.1"
+    assert captured["port"] == 8765
     assert captured["web_worker_args"][0] == tmp_path / "tasks.db"
     assert (
         captured["web_worker_kwargs"]["registry"].by_account_id("account-01").device_id
         == "phone-01"
     )
     assert captured["web_worker_kwargs"]["idle_sleep_seconds"] == 0.5
-    assert captured["closed"] is True
+
+
+def test_cli_serve_starts_uvicorn_console(tmp_path: Path, monkeypatch) -> None:
+    captured = {}
+
+    def fake_uvicorn_run(app, *, host: str, port: int) -> None:
+        captured.update(app=app, host=host, port=port)
+
+    monkeypatch.setattr(uvicorn, "run", fake_uvicorn_run)
+
+    result = main(
+        [
+            "serve",
+            "--db",
+            str(tmp_path / "tasks.db"),
+            "--port",
+            "8877",
+        ]
+    )
+
+    assert result == 0
+    assert captured["host"] == "127.0.0.1"
+    assert captured["port"] == 8877
+    assert captured["app"].state.database.path == tmp_path / "tasks.db"
 
 
 def test_cli_web_worker_passes_registry_and_once_flag(

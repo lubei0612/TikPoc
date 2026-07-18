@@ -56,6 +56,9 @@ _BROWSER_PATHS = {
     "/api/browser-health",
 }
 _EXTENSION_ORIGIN = re.compile(r"chrome-extension://[a-p]{32}")
+_CONSOLE_ASSET = re.compile(
+    r"[A-Za-z0-9_.-]+-[A-Za-z0-9_-]+\.(?:css|gif|jpe?g|js|png|svg|webp|woff2?)"
+)
 
 
 def _json(payload: object, status_code: int = 200) -> JSONResponse:
@@ -777,10 +780,30 @@ def create_app(
         return update_account_setting(account_id, body, setting="followback")
 
     static = Path(__file__).parent / "static"
+    console = static / "console"
+
+    def console_index() -> FileResponse:
+        response = FileResponse(console / "index.html", media_type="text/html")
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
     @app.get("/")
-    def dashboard_html() -> FileResponse:
-        return FileResponse(static / "dashboard.html", media_type="text/html")
+    @app.get("/operations")
+    @app.get("/inbox")
+    @app.get("/analytics")
+    def operator_console() -> FileResponse:
+        return console_index()
+
+    @app.get("/console-assets/{asset_name:path}")
+    def console_asset(asset_name: str) -> Response:
+        if _CONSOLE_ASSET.fullmatch(asset_name) is None:
+            return _json({"detail": "Not Found"}, 404)
+        asset_path = console / asset_name
+        if not asset_path.is_file():
+            return _json({"detail": "Not Found"}, 404)
+        response = FileResponse(asset_path)
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
 
     @app.get("/dashboard.css")
     def dashboard_css() -> FileResponse:

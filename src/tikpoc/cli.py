@@ -49,14 +49,15 @@ def _parser() -> argparse.ArgumentParser:
     capacity.add_argument("--json", action="store_true", dest="json_output")
     status = commands.add_parser("status")
     status.add_argument("--db", type=Path, required=True)
-    dashboard = commands.add_parser("dashboard")
-    dashboard.add_argument("--db", type=Path, required=True)
-    dashboard.add_argument("--host", default="127.0.0.1")
-    dashboard.add_argument("--port", type=int, default=8765)
-    dashboard.add_argument("--web-accounts", type=Path)
-    dashboard.add_argument("--env-file", type=Path, default=Path(".env.local"))
-    dashboard.add_argument("--with-web-worker", action="store_true")
-    dashboard.add_argument("--web-worker-idle-sleep", type=float, default=1.0)
+    for command_name in ("serve", "dashboard"):
+        serve = commands.add_parser(command_name)
+        serve.add_argument("--db", type=Path, required=True)
+        serve.add_argument("--host", default="127.0.0.1")
+        serve.add_argument("--port", type=int, default=8765)
+        serve.add_argument("--web-accounts", type=Path)
+        serve.add_argument("--env-file", type=Path, default=Path(".env.local"))
+        serve.add_argument("--with-web-worker", action="store_true")
+        serve.add_argument("--web-worker-idle-sleep", type=float, default=1.0)
     web_worker = commands.add_parser("web-worker")
     web_worker.add_argument("--db", type=Path, required=True)
     web_worker.add_argument("--web-accounts", type=Path)
@@ -228,8 +229,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"invalid={result.skipped_invalid}"
         )
         return 0
-    if args.command == "dashboard":
-        from .dashboard import create_server
+    if args.command in {"serve", "dashboard"}:
+        import uvicorn
+
+        from .api import create_app
         from .web_accounts import WebAccountRegistry
 
         _load_env_file(args.env_file)
@@ -241,11 +244,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             if configured_accounts is not None
             else None
         )
-        server = create_server(
+        app = create_app(
             args.db,
-            args.host,
-            args.port,
-            web_account_registry=registry,
+            registry=registry,
             tiktok_app_secret=os.getenv("TIKPOC_TIKTOK_APP_SECRET", ""),
             webhook_max_age_seconds=int(
                 os.getenv("TIKPOC_WEBHOOK_MAX_AGE_SECONDS", "300")
@@ -263,13 +264,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 registry=registry,
                 idle_sleep_seconds=args.web_worker_idle_sleep,
             )
-        print(f"dashboard=http://{args.host}:{server.server_port}", flush=True)
+        print(f"console=http://{args.host}:{args.port}", flush=True)
         try:
-            server.serve_forever()
+            uvicorn.run(app, host=args.host, port=args.port)
         except KeyboardInterrupt:
             pass
-        finally:
-            server.server_close()
         return 0
     if args.command == "web-worker":
         from .web_accounts import WebAccountRegistry

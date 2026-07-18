@@ -261,6 +261,15 @@ Completed on `feat/web-lead-conversion`:
   exact outbound reconciliation helpers.
 - Web Task 8: serialized Messages observation, active-thread-bound visible send,
   outbound reconciliation, and browser health reporting.
+- Web Task 9: account-scoped follow-back action leases and visible-result
+  reconciliation. Further follow-back refinement remains secondary to the
+  acquisition and private-channel workflow.
+- Web Task 10: durable lead funnel, sales, and acquisition coverage projections
+  with monotonic management stages.
+- Operator Console Tasks 1-6: FastAPI operator APIs, idempotent acquisition
+  controls, lead takeover/manual-plan/sale controls, responsive React
+  Operations/Inbox/Analytics workspaces, embedded hashed assets, Uvicorn
+  runtime, and desktop/mobile browser acceptance.
 - Mobile Tasks 1-9: stable target identity, immutable pools, deterministic
   rounds, shared qualification snapshots, independent quota-controlled plans,
   durable workers, semantic Appium verification, MYT discovery, proxy relay,
@@ -274,8 +283,8 @@ Completed on `feat/web-lead-conversion`:
   Important, or Minor findings after the final lease-release fixes.
 - Web Task 4 implementation commit: `a9c01d1`
   (`feat: add conversion context to AI replies`).
-- Latest code commit: `97d8996`
-  (`fix: align browser conversation identities`).
+- Latest integrated console baseline before Task 6: `8517d8c`
+  (`feat: add console direct route navigation`).
 - Web Task 4 repeated specification and quality reviews passed with no Critical
   or Important findings after the fallback and provider-boundary fixes.
 - Web Task 5 repeated specification and quality reviews passed with no Critical
@@ -283,11 +292,17 @@ Completed on `feat/web-lead-conversion`:
   for the single localhost service architecture.
 - Web Task 6 repeated specification and quality reviews passed after browser
   Origin, JSON media-type, and real extension transport fixes.
-- Last fresh full Python verification: `488 passed`.
-- Last focused Web Task 6 verification: `27 passed`; focused Node transport and
-  follower-core verification: `9 passed`.
-- Ruff check, focused format check for the two Web Task 4 Python files, and
-  `git diff --check` passed.
+- Task 6 focused static and CLI verification passed. Desktop `1440x1000` and
+  mobile `390x844` Playwright acceptance passed for Operations, Inbox, and
+  Analytics using a synthetic local database and registry.
+- Last fresh full Python verification: `553 passed` with one nonblocking
+  Starlette/httpx deprecation warning.
+- Latest frontend verification: `26 passed`; production Vite build and wheel
+  package-data inspection passed. Latest Chrome extension Node verification:
+  `31 passed`.
+- Ruff check passed. The five Task 6 Python files pass format-check; the
+  full-repository format-check retains a pre-existing 10-file baseline outside
+  this task. `git diff --check` and production dependency audit passed.
 - Two nonblocking Task 4 review notes remain: explicitly migrate the dormant
   Business Messaging caller if that path is reactivated, and consolidate the
   duplicate prompt builders when Task 5 establishes the production call path.
@@ -298,9 +313,8 @@ Completed on `feat/web-lead-conversion`:
 
 Outstanding at the current checkpoint:
 
-1. Continue Web Tasks 9-10 and the operator-console plan in roadmap order.
-2. Execute Mobile Task 10 only at the roadmap's two-device live gate.
-3. Finish full regression, two-device calibration, four-/eight-hour
+1. Execute Mobile Task 10 only at the roadmap's two-device live gate.
+2. Finish full regression, two-device calibration, four-/eight-hour
    endurance tests, seven-device benchmark, runbooks, branch integration, and
    GitHub setup.
 
@@ -309,12 +323,34 @@ Outstanding at the current checkpoint:
 1. Enter the active feature worktree and read this file plus both current plans.
 2. Run `git status --short --branch` and `git log -5 --oneline`.
 3. Preserve any new user changes and inspect them before proceeding.
-4. Read Web Task 8 plus the current extension transport, DM core, and manifest before
-   editing.
-5. Add the DM transport/DOM tests, observe the expected failures, and
-   implement only enough behavior to pass each red-green slice.
-6. Repeat focused and full verification plus specification and quality review
-   before committing Web Task 8.
+4. Continue from the next approved live calibration or roadmap task without
+   repeating completed operator-console work.
+5. Repeat focused and full verification plus specification and quality review
+   before committing the next task.
 
 If runtime state differs from this checkpoint, report the concrete difference,
 update the checkpoint, and continue from the latest verified state.
+
+## Console Checkpoint (2026-07-18, Task 6)
+
+- Console Tasks 1-5 are implemented. Task 5 evidence fields and analytics were
+  reconciled in `3933d30`; focused frontend verification passed `26` tests.
+- Console Task 6 serves the embedded Vite build from FastAPI at `/`,
+  `/operations`, `/inbox`, and `/analytics`, with hashed immutable assets under
+  `/console-assets/` and no-cache HTML.
+- The production `tikpoc serve` command now runs the FastAPI application with
+  Uvicorn. `tikpoc dashboard` and `dashboard.create_server` remain compatibility
+  adapters for existing callers and tests.
+- Direct console routes select the matching React workspace and browser
+  back/forward navigation stays synchronized.
+- Playwright acceptance passed `6/6` at `1440x1000` and `390x844`, covering all
+  three workspaces, root overflow, control overlap, sticky coverage scrolling,
+  long identities, and browser console errors. Evidence is ignored under
+  `test-results/operator-console/`.
+- Final regression passed `553` Python tests, `26` Vitest tests, `31` Chrome
+  extension tests, and `6` Playwright tests. Ruff check, focused Python format,
+  production dependency audit, Vite build, and `git diff --check` also passed.
+- Remaining production gates are controlled Chrome account calibration,
+  two-device visible action verification, endurance runs, and the seven-device
+  `10,000`-target/`70,000`-visit capacity proof. Do not describe those gates as
+  passed from synthetic browser evidence.

@@ -8,10 +8,15 @@ import { InboxView } from "./views/InboxView";
 
 type Tab = "operations" | "inbox" | "analytics";
 
+const tabFromPath = (): Tab => {
+  const tab = window.location.pathname.slice(1);
+  return tab === "inbox" || tab === "analytics" ? tab : "operations";
+};
+
 export default function App() {
   const [rounds, setRounds] = useState<RoundListItem[]>([]);
   const [roundId, setRoundId] = useState("");
-  const [tab, setTab] = useState<Tab>("operations");
+  const [tab, setTab] = useState<Tab>(tabFromPath);
   const [error, setError] = useState<string | null>(null);
   const [fleetHealth, setFleetHealth] = useState<FleetHealthSummary | null>(null);
 
@@ -25,6 +30,17 @@ export default function App() {
       .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Rounds unavailable"));
     return () => controller.abort();
   }, []);
+
+  useEffect(() => {
+    const syncTab = () => setTab(tabFromPath());
+    window.addEventListener("popstate", syncTab);
+    return () => window.removeEventListener("popstate", syncTab);
+  }, []);
+
+  const selectTab = (nextTab: Tab) => {
+    window.history.pushState(null, "", `/${nextTab}`);
+    setTab(nextTab);
+  };
 
   const notConnected = fleetHealth !== null
     && fleetHealth.totalDevices === 0
@@ -50,9 +66,9 @@ export default function App() {
         </div>
       </header>
       <nav className="primary-nav" aria-label="Console views">
-        <button aria-current={tab === "operations" ? "page" : undefined} onClick={() => setTab("operations")}><Activity size={16} />Operations</button>
-        <button aria-current={tab === "inbox" ? "page" : undefined} onClick={() => setTab("inbox")}><Inbox size={16} />Inbox</button>
-        <button aria-current={tab === "analytics" ? "page" : undefined} onClick={() => setTab("analytics")}><BarChart3 size={16} />Analytics</button>
+        <button aria-current={tab === "operations" ? "page" : undefined} onClick={() => selectTab("operations")}><Activity size={16} />Operations</button>
+        <button aria-current={tab === "inbox" ? "page" : undefined} onClick={() => selectTab("inbox")}><Inbox size={16} />Inbox</button>
+        <button aria-current={tab === "analytics" ? "page" : undefined} onClick={() => selectTab("analytics")}><BarChart3 size={16} />Analytics</button>
       </nav>
       {error && <div className="shell-error" role="alert">{error}</div>}
       {tab === "operations" && roundId && <OperationsView onHealthChange={setFleetHealth} roundId={roundId} />}

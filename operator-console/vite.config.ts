@@ -3,9 +3,18 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   plugins: [react()],
+  base: "/console-assets/",
   build: {
-    outDir: "dist",
+    outDir: "../src/tikpoc/static/console",
     emptyOutDir: true,
+    assetsDir: ".",
+    rollupOptions: {
+      output: {
+        entryFileNames: "[name]-[hash].js",
+        chunkFileNames: "[name]-[hash].js",
+        assetFileNames: "[name]-[hash][extname]",
+      },
+    },
   },
   test: {
     environment: "jsdom",
