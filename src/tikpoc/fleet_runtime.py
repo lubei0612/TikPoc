@@ -15,6 +15,7 @@ from .fleet import (
     FleetWorkerState,
 )
 from .mobile_worker import MobileAssignmentWorker
+from .mobile_routes import AdbProfileRouter
 from .proxy_relay import ProxyRelay
 from .runner import create_driver
 
@@ -79,12 +80,15 @@ def run_device_worker(
     driver_factory: Callable[[str, str], object] = create_driver,
     device_factory: Callable[[object], object] = AppiumTikTokDevice,
     worker_factory: Callable[..., object] = MobileAssignmentWorker,
+    route_factory: Callable[[str], object] = AdbProfileRouter,
     clock_ms: Callable[[], int] = _clock_ms,
 ) -> None:
     repository = repository_factory(database_path)
     driver = fence.execute(driver_factory, device.appium_url, device.adb_endpoint)
     try:
-        verified_device = FencedVerifiedDevice(device_factory(driver), fence)
+        raw_device = device_factory(driver)
+        raw_device.route_opener = route_factory(device.adb_endpoint).open
+        verified_device = FencedVerifiedDevice(raw_device, fence)
         worker = worker_factory(
             repository,
             verified_device,

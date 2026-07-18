@@ -131,6 +131,10 @@ def test_device_worker_processes_assignments_until_stopped(tmp_path: Path) -> No
     driver = FakeDriver()
     captured = {}
 
+    class FakeRouter:
+        def open(self, uri: str) -> None:
+            captured["route"] = uri
+
     class FakeWorker:
         def __init__(self, repository, device, **kwargs) -> None:
             captured["repository"] = repository
@@ -152,6 +156,7 @@ def test_device_worker_processes_assignments_until_stopped(tmp_path: Path) -> No
         repository_factory=repository_factory,
         driver_factory=lambda appium_url, adb_endpoint: driver,
         device_factory=lambda driver: ProtocolDevice(),
+        route_factory=lambda adb_endpoint: FakeRouter(),
         worker_factory=FakeWorker,
         clock_ms=lambda: 1_000,
     )
@@ -161,6 +166,7 @@ def test_device_worker_processes_assignments_until_stopped(tmp_path: Path) -> No
     assert captured["assignment"] is assignment
     assert captured["owner_id"] == fence.owner_id
     assert isinstance(captured["device"], FencedVerifiedDevice)
+    assert callable(captured["device"].device.route_opener)
     assert driver.closed is True
 
 

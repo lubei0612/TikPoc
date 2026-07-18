@@ -221,6 +221,12 @@ class SameStableProfileDriver(FakeDriver):
         return super().find_elements(by, value)
 
 
+class IncompleteStableRouteDriver(RenamedStableRouteDriver):
+    def __init__(self) -> None:
+        super().__init__()
+        self.page_source = "<hierarchy />"
+
+
 class MissingProfileMarkerDriver(FakeDriver):
     def find_elements(self, by: str, value: str) -> list[FakeElement]:
         if value == "com.zhiliaoapp.musically:id/s7e":
@@ -264,6 +270,50 @@ def test_appium_device_uses_stable_id_route_and_accepts_renamed_profile() -> Non
     device.confirm_profile_identity(target)
 
     assert driver.scripts[-1][1]["url"] == "snssdk1233://user/profile/123"
+
+
+def test_appium_device_uses_injected_native_route() -> None:
+    driver = RenamedStableRouteDriver()
+    routes = []
+    device = AppiumTikTokDevice(driver, route_opener=routes.append)
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="uid:123",
+        target_id="123",
+        sec_uid="sec-1",
+        username="old_name",
+        profile_url="",
+        source_video_id="",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    device.open_target(target)
+
+    assert routes == ["snssdk1233://user/profile/123"]
+
+
+def test_appium_device_requires_loaded_profile_surface() -> None:
+    driver = IncompleteStableRouteDriver()
+    device = AppiumTikTokDevice(
+        driver, metric_read_attempts=1, poll_interval=0, action_timeout=0
+    )
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="uid:123",
+        target_id="123",
+        sec_uid="sec-1",
+        username="old_name",
+        profile_url="",
+        source_video_id="",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    device.open_target(target)
+
+    with pytest.raises(ValueError, match="profile surface did not become ready"):
+        device.confirm_profile_identity(target)
 
 
 def test_appium_device_rejects_stale_profile_after_stable_route() -> None:

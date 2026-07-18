@@ -24,6 +24,10 @@ POST_CONTAINER_ID = f"{TIKTOK_PACKAGE}:id/eqx"
 POST_CONTAINER_IDS = (POST_CONTAINER_ID, f"{TIKTOK_PACKAGE}:id/efq")
 PROFILE_USERNAME_ID = f"{TIKTOK_PACKAGE}:id/s7e"
 PROFILE_USERNAME_IDS = (PROFILE_USERNAME_ID, f"{TIKTOK_PACKAGE}:id/rgn")
+PROFILE_STAT_LABEL_IDS = (
+    f"{TIKTOK_PACKAGE}:id/s5x",
+    f"{TIKTOK_PACKAGE}:id/rfc",
+)
 
 
 class ProfileIdentityMismatch(ValueError):
@@ -100,6 +104,7 @@ class AppiumTikTokDevice:
         action_timeout: float = 5.0,
         clock: Callable[[], float] = time.monotonic,
         sleeper: Callable[[float], None] = time.sleep,
+        route_opener: Callable[[str], None] | None = None,
     ) -> None:
         self.driver = driver
         self.metric_read_attempts = metric_read_attempts
@@ -108,6 +113,15 @@ class AppiumTikTokDevice:
         self.action_timeout = max(0.0, action_timeout)
         self.clock = clock
         self.sleeper = sleeper
+        self.route_opener = route_opener
+
+    def _open_route(self, uri: str) -> None:
+        if self.route_opener is not None:
+            self.route_opener(uri)
+            return
+        self.driver.execute_script(
+            "mobile: deepLink", {"url": uri, "package": TIKTOK_PACKAGE}
+        )
 
     def ensure_ready(self) -> None:
         self.driver.activate_app(TIKTOK_PACKAGE)
@@ -241,10 +255,7 @@ class AppiumTikTokDevice:
         if target.target_id:
             self._profile_before_stable_route = self._visible_profile_username()
             self._stable_profile_uri = f"snssdk1233://user/profile/{target.target_id}"
-            self.driver.execute_script(
-                "mobile: deepLink",
-                {"url": self._stable_profile_uri, "package": TIKTOK_PACKAGE},
-            )
+            self._open_route(self._stable_profile_uri)
             return
         self._stable_profile_uri = ""
         self.open_profile(target.username)
@@ -257,18 +268,13 @@ class AppiumTikTokDevice:
             for attempt in range(self.metric_read_attempts):
                 actual = self._visible_profile_username()
                 if actual and (actual == expected or actual != previous):
+                    self._wait_profile_surface()
                     return
                 if attempt and attempt % 3 == 0:
-                    self.driver.execute_script(
-                        "mobile: deepLink",
-                        {"url": stable_uri, "package": TIKTOK_PACKAGE},
-                    )
+                    self._open_route(stable_uri)
                 if attempt + 1 < self.metric_read_attempts:
                     self.sleeper(self.poll_interval)
-            self.driver.execute_script(
-                "mobile: deepLink",
-                {"url": "tiktok://inbox", "package": TIKTOK_PACKAGE},
-            )
+            self._open_route("tiktok://inbox")
             baseline_cleared = False
             for attempt in range(self.metric_read_attempts):
                 if not self._visible_profile_username():
@@ -278,18 +284,17 @@ class AppiumTikTokDevice:
                     self.sleeper(self.poll_interval)
             if not baseline_cleared:
                 raise ValueError("stable profile route did not change")
-            self.driver.execute_script(
-                "mobile: deepLink",
-                {"url": stable_uri, "package": TIKTOK_PACKAGE},
-            )
+            self._open_route(stable_uri)
             for attempt in range(self.metric_read_attempts):
                 actual = self._visible_profile_username()
                 if actual:
+                    self._wait_profile_surface()
                     return
                 if attempt + 1 < self.metric_read_attempts:
                     self.sleeper(self.poll_interval)
             raise ValueError("stable profile route did not change")
         self.wait_profile_ready(target.username)
+        self._wait_profile_surface()
 
     def read_profile_observation(self) -> ProfileObservation:
         page_source = str(self.driver.page_source)
@@ -337,6 +342,30 @@ class AppiumTikTokDevice:
             if elements:
                 return elements
         return []
+
+    def _wait_profile_surface(self) -> None:
+        for attempt in range(self.metric_read_attempts):
+            for resource_id in PROFILE_STAT_LABEL_IDS:
+                try:
+                    if self.driver.find_elements(By.ID, resource_id):
+                        return
+                except Exception:
+                    break
+            page_source = str(self.driver.page_source)
+            lowered = page_source.lower()
+            if (
+                "this account is private" in lowered
+                or "此帐户为私密帐户" in page_source
+            ):
+                return
+            try:
+                parse_profile_page(page_source)
+                return
+            except ValueError:
+                pass
+            if attempt + 1 < self.metric_read_attempts:
+                self.sleeper(self.poll_interval)
+        raise ValueError("profile surface did not become ready")
 
     def _outcome_state(self, outcome: OutcomeKind) -> bool | None:
         if outcome is OutcomeKind.TRACE:
