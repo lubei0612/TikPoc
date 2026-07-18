@@ -527,39 +527,53 @@ def create_app(
                 account.enabled and account.browser_followback_enabled
             ),
         )
+        runtime_model = AiReplyClient.from_environment()
         return {
             "account_id": account.account_id,
             "device_id": account.device_id,
             "mode": account.mode,
             "enabled": account.enabled,
-            "ai_enabled": settings["ai_enabled"],
-            "followback_enabled": settings["followback_enabled"],
+            "ai_enabled": bool(account.enabled and settings["ai_enabled"]),
+            "followback_enabled": bool(
+                account.enabled and settings["followback_enabled"]
+            ),
             "private_channel_configured": bool(account.private_channel_hint.strip()),
             "offer_configured": bool(account.offer_context.strip()),
             "faq_configured": bool(account.faq_text.strip()),
-            "model_configured": bool(
-                os.getenv("OPENAI_API_KEY")
-                or os.getenv("ANTHROPIC_API_KEY")
-                or os.getenv("TIKPOC_AI_API_KEY")
+            "model_configured": all(
+                bool(value and value.strip())
+                for value in (
+                    runtime_model.base_url,
+                    runtime_model.api_key,
+                    runtime_model.model,
+                )
             ),
         }
 
     def redact_destination(value: object, account_id: str) -> object:
         try:
-            destination = operator_account(account_id).private_channel_hint.strip()
+            destination = " ".join(
+                operator_account(account_id).private_channel_hint.split()
+            )
         except KeyError:
             destination = ""
         if not destination:
             return value
-        if isinstance(value, str):
-            return value.replace(destination, "[private channel configured]")
-        if isinstance(value, list):
-            return [redact_destination(item, account_id) for item in value]
-        if isinstance(value, dict):
-            return {
-                key: redact_destination(item, account_id) for key, item in value.items()
-            }
-        return value
+        destination_pattern = re.compile(
+            r"\s+".join(re.escape(token) for token in destination.split()),
+            re.IGNORECASE,
+        )
+
+        def redact(item: object) -> object:
+            if isinstance(item, str):
+                return destination_pattern.sub("[private channel configured]", item)
+            if isinstance(item, list):
+                return [redact(child) for child in item]
+            if isinstance(item, dict):
+                return {key: redact(child) for key, child in item.items()}
+            return item
+
+        return redact(value)
 
     @app.get("/api/leads")
     def lead_inbox(

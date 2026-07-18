@@ -1920,21 +1920,41 @@ class Database:
                 return stored
             row = connection.execute(
                 """
-                SELECT participant_username FROM web_conversations
+                SELECT participant_username, stage, human_required
+                FROM web_conversations
                 WHERE account_id=? AND conversation_id=?
                 """,
                 (account_id, conversation_id),
             ).fetchone()
             if row is None:
                 raise KeyError((account_id, conversation_id))
+            current_stage = _canonical_conversation_stage(str(row["stage"]))
+            if current_stage == "closed":
+                result: dict[str, object] = {
+                    "account_id": account_id,
+                    "conversation_id": conversation_id,
+                    "stage": current_stage,
+                    "human_required": bool(row["human_required"]),
+                    "reason": reason,
+                }
+                self._store_operator_result(
+                    connection,
+                    "takeover",
+                    account_id,
+                    conversation_id,
+                    command_id,
+                    result,
+                )
+                return result
+            next_stage = _later_conversation_stage(current_stage, "human_required")
             connection.execute(
                 """
                 UPDATE web_conversations
-                SET stage='human_required', human_required=1,
+                SET stage=?, human_required=1,
                     updated_at=CURRENT_TIMESTAMP
                 WHERE account_id=? AND conversation_id=?
                 """,
-                (account_id, conversation_id),
+                (next_stage, account_id, conversation_id),
             )
             connection.execute(
                 """
@@ -1965,7 +1985,7 @@ class Database:
             result: dict[str, object] = {
                 "account_id": account_id,
                 "conversation_id": conversation_id,
-                "stage": "human_required",
+                "stage": next_stage,
                 "human_required": True,
                 "reason": reason,
             }
@@ -2046,7 +2066,6 @@ class Database:
             conversation_id,
             command_id,
             inbound_fingerprint,
-            reply_text,
         )
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -2055,6 +2074,39 @@ class Database:
             )
             if stored is not None:
                 return stored
+            # A manual draft is keyed by the selected inbound, not by the
+            # operator command. This keeps retries from creating a second
+            # outbound plan while retaining the manual-send lease marker.
+            plan_fingerprint = (
+                f"operator-manual:{conversation_id}:{inbound_fingerprint}"
+            )
+            existing = connection.execute(
+                """
+                SELECT * FROM browser_reply_plans
+                WHERE account_id=? AND conversation_id=? AND inbound_fingerprint=?
+                """,
+                (account_id, conversation_id, plan_fingerprint),
+            ).fetchone()
+            if existing is not None:
+                result: dict[str, object] = {
+                    "account_id": account_id,
+                    "conversation_id": conversation_id,
+                    "plan_id": int(existing["id"]),
+                    "inbound_fingerprint": inbound_fingerprint,
+                    "reply_text": str(existing["reply_text"]),
+                    "state": str(existing["state"]),
+                }
+                self._store_operator_result(
+                    connection,
+                    "manual_reply",
+                    account_id,
+                    conversation_id,
+                    command_id,
+                    result,
+                )
+                return result
+            if not str(reply_text).strip():
+                raise ValueError("manual reply text must be nonempty")
             uncertain = connection.execute(
                 """
                 SELECT 1 FROM browser_reply_plans
@@ -2085,10 +2137,9 @@ class Database:
                 raise KeyError((account_id, conversation_id, inbound_fingerprint))
             if str(conversation["stage"]) != "human_required":
                 raise ValueError("manual reply requires human takeover")
-            plan_fingerprint = f"operator-manual:{conversation_id}:{command_id}"
             cursor = connection.execute(
                 """
-                INSERT INTO browser_reply_plans(
+                INSERT OR IGNORE INTO browser_reply_plans(
                     account_id, conversation_id, inbound_fingerprint,
                     participant_username, inbound_text, inbound_timestamp_ms,
                     reply_text, stage, state, invitation_evidence_known,
@@ -2107,6 +2158,32 @@ class Database:
                     int(now_ms),
                 ),
             )
+            if cursor.rowcount != 1:
+                existing = connection.execute(
+                    """
+                    SELECT * FROM browser_reply_plans
+                    WHERE account_id=? AND conversation_id=? AND inbound_fingerprint=?
+                    """,
+                    (account_id, conversation_id, plan_fingerprint),
+                ).fetchone()
+                assert existing is not None
+                result = {
+                    "account_id": account_id,
+                    "conversation_id": conversation_id,
+                    "plan_id": int(existing["id"]),
+                    "inbound_fingerprint": inbound_fingerprint,
+                    "reply_text": str(existing["reply_text"]),
+                    "state": str(existing["state"]),
+                }
+                self._store_operator_result(
+                    connection,
+                    "manual_reply",
+                    account_id,
+                    conversation_id,
+                    command_id,
+                    result,
+                )
+                return result
             result: dict[str, object] = {
                 "account_id": account_id,
                 "conversation_id": conversation_id,

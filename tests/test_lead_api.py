@@ -217,6 +217,60 @@ def test_manual_reply_plan_is_immutable_and_uses_normal_send_lease_path(
     )
 
 
+def test_manual_reply_plans_reuse_one_plan_for_same_inbound_across_commands(
+    tmp_path: Path,
+) -> None:
+    app, database = _seeded_app(tmp_path)
+    client = TestClient(app)
+    takeover = client.post(
+        "/api/leads/account-01/conversation-01/takeover",
+        json={"command_id": "takeover-canonical", "reason": "operator"},
+    )
+    assert takeover.status_code == 200
+
+    first = client.post(
+        "/api/leads/account-01/conversation-01/manual-reply-plan",
+        json={
+            "command_id": "manual-canonical-1",
+            "inbound_fingerprint": "message-1",
+            "reply_text": "First immutable manual reply.",
+        },
+    )
+    second = client.post(
+        "/api/leads/account-01/conversation-01/manual-reply-plan",
+        json={
+            "command_id": "manual-canonical-2",
+            "inbound_fingerprint": "message-1",
+            "reply_text": "A conflicting replacement.",
+        },
+    )
+
+    assert first.status_code == second.status_code == 200
+    assert second.json() == first.json()
+    assert first.json()["inbound_fingerprint"] == "message-1"
+    with sqlite3.connect(database.path) as connection:
+        assert (
+            connection.execute(
+                """
+            SELECT COUNT(*) FROM browser_reply_plans
+            WHERE account_id=? AND conversation_id=? AND inbound_fingerprint=?
+            """,
+                (
+                    "account-01",
+                    "conversation-01",
+                    "operator-manual:conversation-01:message-1",
+                ),
+            ).fetchone()[0]
+            == 1
+        )
+    plan = database.browser_reply_plan_by_id(first.json()["plan_id"])
+    assert plan is not None
+    assert plan.reply_text == "First immutable manual reply."
+    assert database.claim_browser_action(
+        "account-01", "dm_send", str(plan.id), "operator-tab", 5_000, 30
+    )
+
+
 def test_ai_off_still_allows_taken_over_manual_plan_to_claim_send_lease(
     tmp_path: Path,
 ) -> None:
@@ -313,6 +367,74 @@ def test_sale_uses_minor_units_and_account_switches_persist(tmp_path: Path) -> N
         "confirmed_revenue_minor": {"USD": 12_345},
         "sales": 1,
     }
+
+
+def test_disabled_account_readiness_masks_persisted_operator_switches_and_blocks_claims(
+    tmp_path: Path,
+) -> None:
+    app, database = _seeded_app(tmp_path)
+    enabled_client = TestClient(app)
+    assert (
+        enabled_client.post(
+            "/api/accounts/account-01/ai-enable",
+            json={"command_id": "persist-ai-on", "enabled": True},
+        ).status_code
+        == 200
+    )
+    assert (
+        enabled_client.post(
+            "/api/accounts/account-01/followback-enable",
+            json={"command_id": "persist-follow-on", "enabled": True},
+        ).status_code
+        == 200
+    )
+
+    account = app.state.registry.by_account_id("account-01")
+    disabled_registry = WebAccountRegistry(
+        (
+            WebAccount(
+                account_id=account.account_id,
+                device_id=account.device_id,
+                mode=account.mode,
+                enabled=False,
+                browser_dm_enabled=account.browser_dm_enabled,
+                browser_followback_enabled=account.browser_followback_enabled,
+                private_channel_hint=account.private_channel_hint,
+                offer_context=account.offer_context,
+                faq_text=account.faq_text,
+            ),
+            WebAccount(account_id="account-02", device_id="phone-02"),
+        )
+    )
+    disabled_app = create_app(
+        database.path, registry=disabled_registry, clock=lambda: 5
+    )
+    client = TestClient(disabled_app)
+
+    readiness = client.get("/api/leads").json()["accounts"][0]
+    assert readiness["enabled"] is False
+    assert readiness["ai_enabled"] is False
+    assert readiness["followback_enabled"] is False
+    claim = client.post(
+        "/api/browser-actions/claim",
+        headers={"Origin": "https://www.tiktok.com"},
+        json={
+            "account_id": "account-01",
+            "device_id": "phone-01",
+            "action_type": "followback",
+            "action_key": "buyer-01",
+            "owner_id": "disabled-tab",
+            "timestamp_ms": 5_000,
+        },
+    )
+    assert claim.status_code == 400
+    with sqlite3.connect(database.path) as connection:
+        assert (
+            connection.execute("SELECT COUNT(*) FROM browser_action_leases").fetchone()[
+                0
+            ]
+            == 0
+        )
 
 
 def test_disabled_account_controls_reject_browser_action_claims_without_leases(
@@ -427,3 +549,131 @@ def test_lead_inbox_only_returns_registry_accounts_and_unconfigured_is_empty(
     assert unconfigured["conversations"] == []
     assert unconfigured["selected"] is None
     assert "UNKNOWN_DESTINATION" not in json.dumps(unconfigured)
+
+
+def test_lead_redaction_handles_case_and_whitespace_variants_without_leaking_destination(
+    tmp_path: Path,
+) -> None:
+    app, database = _seeded_app(tmp_path)
+    database.append_web_message(
+        "account-01",
+        "conversation-01",
+        "variant-message",
+        direction="inbound",
+        message_type="TEXT",
+        text="Please use whatsapp:\t+1   555 0100",
+        timestamp_ms=10_000,
+        participant_username="buyer_01",
+    )
+    variant_plan, _ = database.reserve_browser_reply_plan(
+        "account-01",
+        "conversation-01",
+        "variant-message",
+        "buyer_01",
+        "Please use whatsapp:\t+1   555 0100",
+        10_000,
+    )
+    database.complete_browser_reply_plan(
+        variant_plan.id,
+        reply_text="WHATSAPP: +1 555 0100 is fine",
+        stage="qualified",
+    )
+
+    payload = (
+        TestClient(app)
+        .get(
+            "/api/leads",
+            params={
+                "account_id": "account-01",
+                "conversation_id": "conversation-01",
+                "history_limit": 10,
+                "inbound_fingerprint": "variant-message",
+            },
+        )
+        .json()
+    )
+    preview = payload["conversations"][0]["last_message_preview"]
+    history = payload["selected"]["messages"][-1]["text"]
+    draft = payload["selected"]["draft"]["reply_text"]
+    for exposed_text in (preview, history, draft):
+        normalized = " ".join(exposed_text.split()).casefold()
+        assert "whatsapp: +1 555 0100" not in normalized
+        assert "[private channel configured]" in normalized
+
+
+def test_readiness_requires_runtime_provider_base_url_key_and_model(
+    tmp_path: Path, monkeypatch
+) -> None:
+    app, _ = _seeded_app(tmp_path)
+    client = TestClient(app)
+    for name in (
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "TIKPOC_AI_API_KEY",
+        "TKAUTO_LLM_BASE_URL",
+        "TKAUTO_LLM_API_KEY",
+        "TKAUTO_LLM_MODEL",
+        "MODEL_MONITOR_LLM_BASE_URL",
+        "MODEL_MONITOR_LLM_API_KEY",
+        "MODEL_MONITOR_LLM_MODEL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    monkeypatch.setenv("OPENAI_API_KEY", "legacy-only")
+    assert client.get("/api/leads").json()["accounts"][0]["model_configured"] is False
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("TKAUTO_LLM_BASE_URL", "https://llm.example/v1")
+    monkeypatch.setenv("TKAUTO_LLM_API_KEY", "runtime-key")
+    monkeypatch.setenv("TKAUTO_LLM_MODEL", "runtime-model")
+    assert client.get("/api/leads").json()["accounts"][0]["model_configured"] is True
+
+    monkeypatch.delenv("TKAUTO_LLM_MODEL", raising=False)
+    assert client.get("/api/leads").json()["accounts"][0]["model_configured"] is False
+
+    monkeypatch.delenv("TKAUTO_LLM_BASE_URL", raising=False)
+    monkeypatch.delenv("TKAUTO_LLM_API_KEY", raising=False)
+    monkeypatch.setenv("MODEL_MONITOR_LLM_BASE_URL", "https://monitor.example/v1")
+    monkeypatch.setenv("MODEL_MONITOR_LLM_API_KEY", "monitor-key")
+    monkeypatch.setenv("MODEL_MONITOR_LLM_MODEL", "monitor-model")
+    assert client.get("/api/leads").json()["accounts"][0]["model_configured"] is True
+
+
+def test_takeover_preserves_terminal_lead_stages_and_does_not_emit_closed_handoff(
+    tmp_path: Path,
+) -> None:
+    app, database = _seeded_app(tmp_path)
+    client = TestClient(app)
+    with sqlite3.connect(database.path) as connection:
+        connection.execute(
+            """
+            UPDATE web_conversations
+            SET stage='closed', human_required=0
+            WHERE account_id=? AND conversation_id=?
+            """,
+            ("account-01", "conversation-01"),
+        )
+
+    response = client.post(
+        "/api/leads/account-01/conversation-01/takeover",
+        json={"command_id": "takeover-closed", "reason": "operator"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["stage"] == "closed"
+    assert response.json()["human_required"] is False
+    assert (
+        database.browser_conversation_state("account-01", "conversation-01").stage
+        == "closed"
+    )
+    with sqlite3.connect(database.path) as connection:
+        assert (
+            connection.execute(
+                """
+            SELECT COUNT(*) FROM lead_funnel_events
+            WHERE account_id=? AND conversation_id=? AND stage='human_required'
+            """,
+                ("account-01", "conversation-01"),
+            ).fetchone()[0]
+            == 0
+        )
