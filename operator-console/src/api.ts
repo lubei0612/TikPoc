@@ -38,7 +38,10 @@ export interface Quota {
   confirmed: number;
   uncertain: number;
   remaining: number;
-  resets_at_ms: number;
+  rolling_window_started_at_ms: number;
+  token_ready: boolean;
+  next_due_at_ms: number;
+  candidate_weight: number;
 }
 
 export interface CoverageSummary {

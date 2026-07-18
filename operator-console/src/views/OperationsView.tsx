@@ -193,7 +193,7 @@ export function OperationsView({
 
       <section className="workspace-section split-section">
         <div>
-          <header className="section-heading"><div><span className="section-index">02</span><div><h2>自然小时配额</h2><p>当前固定小时预留窗口</p></div></div></header>
+          <header className="section-heading"><div><span className="section-index">02</span><div><h2>滚动一小时配额</h2><p>按动作节奏均匀补充，待协调结果持续占用额度</p></div></div></header>
           <QuotaTable quotas={snapshot.quotas} />
         </div>
         <aside className="coverage-ledger">

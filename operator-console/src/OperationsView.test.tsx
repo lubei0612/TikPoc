@@ -60,7 +60,10 @@ const operationSnapshot = (state = "running") => ({
       confirmed: 18,
       uncertain: 2,
       remaining: 80,
-      resets_at_ms: 8_000,
+      rolling_window_started_at_ms: 1_000,
+      token_ready: true,
+      next_due_at_ms: 8_000,
+      candidate_weight: 100,
     },
   ],
   coverage: {
@@ -192,6 +195,9 @@ it("loads the operations snapshot and coverage for the selected round", async ()
   expect((await screen.findAllByText("phone-01"))[0]).toBeVisible();
   expect(screen.getAllByText("buyer_1")[0]).toBeVisible();
   expect(screen.getByText("50%")).toBeVisible();
+  expect(screen.getByText("滚动一小时配额")).toBeVisible();
+  expect(screen.getByText("可执行")).toBeVisible();
+  expect(screen.getByText("权重 100")).toBeVisible();
   expect(within(screen.getByTestId("mobile-traces")).getAllByText("2/2")[0]).toBeVisible();
   expect(within(screen.getByTestId("browser-health")).getByText("account-01")).toBeVisible();
   expect(fetchMock).toHaveBeenCalledWith(

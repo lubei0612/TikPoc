@@ -125,6 +125,11 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .quota-usage { min-width: 140px; display: grid; grid-template-columns: 48px minmax(60px, 1fr); align-items: center; gap: 8px; font-variant-numeric: tabular-nums; }
 .quota-usage > i { height: 5px; overflow: hidden; background: #dfe4df; border-radius: 3px; }
 .quota-usage b { display: block; height: 100%; background: var(--cyan); border-radius: inherit; }
+.pacing-state { display: inline-flex; align-items: center; gap: 5px; font-weight: 700; white-space: nowrap; }
+.pacing-state::before { width: 7px; height: 7px; border-radius: 50%; background: #8a938d; content: ""; }
+.pacing-state.is-ready { color: var(--green); }
+.pacing-state.is-ready::before { background: var(--green); box-shadow: 0 0 0 3px rgb(31 122 77 / 10%); }
+.quota-table td > small { display: block; margin-top: 3px; color: var(--muted); white-space: nowrap; }
 .uncertain-count { display: block; color: var(--amber); font-size: 9px; }
 .coverage-ledger { align-self: start; margin-top: 43px; padding: 14px 15px; background: #202724; color: #f5f7f4; border-radius: 6px; }
 .coverage-ledger .eyebrow { color: #94a19a; }
