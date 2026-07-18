@@ -18,7 +18,6 @@ export function evaluatePromotion(operations: OperationsSnapshot) {
   if (operations.devices.some((device) => device.mean_ms >= 6_500 || device.p90_ms >= 8_640)) {
     return { promoted: false, reason: "Timing gate failed" };
   }
-  // Identity, route, and action-verification gates are not yet fields in this read model.
   return { promoted: false, reason: "Insufficient identity, route and action evidence" };
 }
 
@@ -41,17 +40,18 @@ export function AnalyticsView({ roundId }: { roundId: string }) {
     if (!operations) return null;
     const slowestMean = Math.max(0, ...operations.devices.map((device) => device.mean_ms));
     const projected = slowestMean > 0 ? Math.floor(86_400_000 / slowestMean) : null;
-    return { slowestMean, projected, ...evaluatePromotion(operations) };
+    return { projected, ...evaluatePromotion(operations) };
   }, [operations]);
 
   if (error) return <div className="workspace-state error-state" role="alert">{error}</div>;
   if (!operations || !leads || !metrics) return <div className="workspace-state"><span className="loading-line" />Loading analytics</div>;
+
   const required = operations.coverage.required_devices;
   const covered = operations.coverage.fully_covered;
   const revenue = Object.entries(leads.sales.confirmed_revenue_minor);
   const revenueText = revenue.length ? revenue.map(([currency, minor]) => formatMoney(currency, minor)).join(" · ") : "Not recorded";
   const revenuePerThousandText = covered > 0 && revenue.length
-    ? revenue.map(([currency, minor]) => formatMoney(currency, minor * 1000 / covered)).join(" · ")
+    ? revenue.map(([currency, minor]) => formatMoney(currency, minor * 1_000 / covered)).join(" · ")
     : "Not recorded";
   const saleOutcomes = Object.entries(leads.sales.by_status).map(([status, count]) => `${status} ${count}`).join(" · ") || "No sale outcomes";
 
@@ -75,7 +75,7 @@ export function AnalyticsView({ roundId }: { roundId: string }) {
 
       <section className="analytics-grid">
         <div className="analytics-pane"><header><TrendingUp size={15} /><div><h2>Lead funnel</h2><p>Durable events from configured accounts.</p></div></header><FunnelTable funnel={leads.funnel} /></div>
-        <div className="analytics-pane"><header><Gauge size={15} /><div><h2>Device capacity</h2><p>Timing gate: measured mean &lt; 6.5s and p90 &lt; 8.64s.</p></div></header><div className="table-frame"><table className="operations-table capacity-table" aria-label="Device capacity"><thead><tr><th>Device</th><th className="align-right">Mean</th><th className="align-right">P90</th><th>Status</th></tr></thead><tbody>{operations.devices.map((device) => { const sampled = device.mean_ms > 0 && device.p90_ms > 0; const passed = sampled && device.mean_ms < 6_500 && device.p90_ms < 8_640; return <tr key={device.device_id}><td><strong>{device.device_id}</strong><small>{device.account_id || "No account"}</small></td><td className="align-right">{sampled ? `${(device.mean_ms / 1000).toFixed(2)}s` : "--"}</td><td className="align-right">{sampled ? `${(device.p90_ms / 1000).toFixed(2)}s` : "--"}</td><td><span className={`status-label ${passed ? "status-healthy" : "status-degraded"}`}><span />{!sampled ? "No sample" : passed ? "Timing pass" : "Timing fail"}</span></td></tr>; })}</tbody></table></div></div>
+        <div className="analytics-pane"><header><Gauge size={15} /><div><h2>Device capacity</h2><p>Timing gate: measured mean &lt; 6.5s and p90 &lt; 8.64s.</p></div></header><div className="table-frame"><table className="operations-table capacity-table" aria-label="Device capacity"><thead><tr><th>Device</th><th className="align-right">Mean</th><th className="align-right">P90</th><th>Status</th></tr></thead><tbody>{operations.devices.map((device) => { const sampled = device.mean_ms > 0 && device.p90_ms > 0; const passed = sampled && device.mean_ms < 6_500 && device.p90_ms < 8_640; return <tr key={device.device_id}><td><strong>{device.device_id}</strong><small>{device.account_id || "No account"}</small></td><td className="align-right">{sampled ? `${(device.mean_ms / 1_000).toFixed(2)}s` : "--"}</td><td className="align-right">{sampled ? `${(device.p90_ms / 1_000).toFixed(2)}s` : "--"}</td><td><span className={`status-label ${passed ? "status-healthy" : "status-degraded"}`}><span />{!sampled ? "No sample" : passed ? "Timing pass" : "Timing fail"}</span></td></tr>; })}</tbody></table></div></div>
       </section>
     </main>
   );
