@@ -1,7 +1,14 @@
 from tests.test_profile_parser import PROFILE_XML
 import pytest
 from tikpoc.acquisition_models import ActionResult, OutcomeKind, PoolTarget
-from tikpoc.device import AppiumTikTokDevice, ProfileIdentityMismatch
+from io import BytesIO
+
+from PIL import Image
+from tikpoc.device import (
+    AppiumTikTokDevice,
+    ProfileIdentityMismatch,
+    _favorite_pixel_state,
+)
 from tikpoc.models import ProfileMetrics
 
 
@@ -44,7 +51,7 @@ class FakeDriver:
             '//*[starts-with(@content-desc, "Like video.")]': FakeElement(
                 on_click=lambda: setattr(self, "liked", True)
             ),
-            '//*[@content-desc="Add or remove this video from Favorites."]/..': FakeElement(
+            '//*[@content-desc="Add or remove this video from Favorites."]': FakeElement(
                 on_click=lambda: setattr(self, "favorite", True),
                 attributes={"selected": lambda: "true" if self.favorite else "false"},
             ),
@@ -62,6 +69,11 @@ class FakeDriver:
 
     def find_elements(self, by: str, value: str) -> list[FakeElement]:
         if by == "id":
+            if value in {
+                "com.zhiliaoapp.musically:id/s7e",
+                "com.zhiliaoapp.musically:id/rgn",
+            }:
+                return []
             assert value == "com.zhiliaoapp.musically:id/eqx"
             return self.posts
         if "Video liked" in value or "Unlike video" in value:
@@ -73,7 +85,7 @@ class FakeDriver:
         if "Favorites" in value:
             return [
                 self.action_elements[
-                    '//*[@content-desc="Add or remove this video from Favorites."]/..'
+                    '//*[@content-desc="Add or remove this video from Favorites."]'
                 ]
             ]
         if "You reposted" in value or "Remove repost" in value:
@@ -158,6 +170,57 @@ class WrongProfileMarkerDriver(FakeDriver):
         return super().find_elements(by, value)
 
 
+class CurrentProfileMarkerDriver(FakeDriver):
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if value == "com.zhiliaoapp.musically:id/rgn":
+            return [FakeElement("@sample")]
+        if value == "com.zhiliaoapp.musically:id/s7e":
+            return []
+        return super().find_elements(by, value)
+
+
+class CurrentPostContainerDriver(FakeDriver):
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if by == "id" and value == "com.zhiliaoapp.musically:id/eqx":
+            return []
+        if by == "id" and value == "com.zhiliaoapp.musically:id/efq":
+            return self.posts
+        return super().find_elements(by, value)
+
+
+class RenamedStableRouteDriver(FakeDriver):
+    def __init__(self, *, changes_route: bool = True) -> None:
+        super().__init__()
+        self.routed = False
+        self.changes_route = changes_route
+
+    def execute_script(self, name: str, arguments: dict[str, str]) -> None:
+        super().execute_script(name, arguments)
+        self.routed = True
+
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if value == "com.zhiliaoapp.musically:id/s7e":
+            text = "@renamed" if self.routed and self.changes_route else "@previous"
+            return [FakeElement(text)]
+        return super().find_elements(by, value)
+
+
+class SameStableProfileDriver(FakeDriver):
+    def __init__(self) -> None:
+        super().__init__()
+        self.at_baseline = False
+
+    def execute_script(self, name: str, arguments: dict[str, str]) -> None:
+        super().execute_script(name, arguments)
+        self.at_baseline = arguments["url"] == "tiktok://inbox"
+        self.page_source = "<hierarchy />" if self.at_baseline else PROFILE_XML
+
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if value == "com.zhiliaoapp.musically:id/s7e":
+            return [] if self.at_baseline else [FakeElement("@renamed")]
+        return super().find_elements(by, value)
+
+
 class MissingProfileMarkerDriver(FakeDriver):
     def find_elements(self, by: str, value: str) -> list[FakeElement]:
         if value == "com.zhiliaoapp.musically:id/s7e":
@@ -182,6 +245,73 @@ def test_appium_device_opens_profile_with_deep_link() -> None:
     ]
 
 
+def test_appium_device_uses_stable_id_route_and_accepts_renamed_profile() -> None:
+    driver = RenamedStableRouteDriver()
+    device = AppiumTikTokDevice(driver, metric_read_attempts=1, poll_interval=0)
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="uid:123",
+        target_id="123",
+        sec_uid="sec-1",
+        username="old_name",
+        profile_url="",
+        source_video_id="",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    device.open_target(target)
+    device.confirm_profile_identity(target)
+
+    assert driver.scripts[-1][1]["url"] == "snssdk1233://user/profile/123"
+
+
+def test_appium_device_rejects_stale_profile_after_stable_route() -> None:
+    driver = RenamedStableRouteDriver(changes_route=False)
+    device = AppiumTikTokDevice(driver, metric_read_attempts=1, poll_interval=0)
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="uid:123",
+        target_id="123",
+        sec_uid="sec-1",
+        username="old_name",
+        profile_url="",
+        source_video_id="",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    device.open_target(target)
+
+    with pytest.raises(ValueError, match="stable profile route did not change"):
+        device.confirm_profile_identity(target)
+
+
+def test_appium_device_reloads_same_stable_profile_through_baseline() -> None:
+    driver = SameStableProfileDriver()
+    device = AppiumTikTokDevice(driver, metric_read_attempts=1, poll_interval=0)
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="uid:123",
+        target_id="123",
+        sec_uid="sec-1",
+        username="old_name",
+        profile_url="",
+        source_video_id="",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    device.open_target(target)
+    device.confirm_profile_identity(target)
+
+    assert [script[1]["url"] for script in driver.scripts] == [
+        "snssdk1233://user/profile/123",
+        "tiktok://inbox",
+        "snssdk1233://user/profile/123",
+    ]
+
+
 def test_appium_device_reads_metrics_and_clicks_selected_post() -> None:
     driver = FakeDriver()
     device = AppiumTikTokDevice(driver)
@@ -192,6 +322,27 @@ def test_appium_device_reads_metrics_and_clicks_selected_post() -> None:
     device.open_post("2")
 
     assert driver.posts[2].clicked is True
+
+
+def test_appium_device_accepts_current_post_container_id() -> None:
+    driver = CurrentPostContainerDriver()
+    device = AppiumTikTokDevice(driver)
+
+    assert device.list_visible_posts() == ("0", "1", "2", "3")
+    device.open_post("1")
+
+    assert driver.posts[1].clicked is True
+
+
+def test_favorite_pixel_state_reads_current_yellow_active_icon() -> None:
+    active = BytesIO()
+    Image.new("RGB", (2, 2), (255, 205, 0)).save(active, format="PNG")
+    inactive = BytesIO()
+    Image.new("RGB", (2, 2), (255, 255, 255)).save(inactive, format="PNG")
+
+    assert _favorite_pixel_state(active.getvalue()) is True
+    assert _favorite_pixel_state(inactive.getvalue()) is False
+    assert _favorite_pixel_state(b"not-png") is None
 
 
 def test_appium_device_waits_for_profile_metrics() -> None:
@@ -238,6 +389,14 @@ def test_appium_device_classifies_profile_identity_mismatch() -> None:
 
     with pytest.raises(ProfileIdentityMismatch, match="profile mismatch"):
         device.confirm_profile_identity(target)
+
+
+def test_appium_device_accepts_current_profile_username_marker() -> None:
+    device = AppiumTikTokDevice(
+        CurrentProfileMarkerDriver(), metric_read_attempts=1, poll_interval=0
+    )
+
+    device.wait_profile_ready("sample")
 
 
 def test_appium_device_does_not_classify_a_missing_marker_as_identity_mismatch() -> (

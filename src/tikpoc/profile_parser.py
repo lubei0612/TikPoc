@@ -18,7 +18,7 @@ def parse_visible_post_keys(page_source: str) -> tuple[str, ...]:
     return tuple(
         node.attrib.get("text", "").strip()
         for node in root.iter()
-        if node.attrib.get("resource-id", "").endswith(":id/tv_play_count")
+        if node.attrib.get("resource-id", "").endswith((":id/tv_play_count", ":id/z9h"))
         and node.attrib.get("text", "").strip()
     )
 
@@ -34,11 +34,11 @@ def parse_profile_page(page_source: str) -> ProfilePage:
     for node in root.iter():
         resource_id = node.attrib.get("resource-id", "")
         text = node.attrib.get("text", "").strip()
-        if resource_id.endswith(":id/s7e"):
+        if resource_id.endswith((":id/s7e", ":id/rgn")):
             username = text.removeprefix("@").lower()
-        elif resource_id.endswith(":id/s5y"):
+        elif resource_id.endswith((":id/s5y", ":id/rfd")):
             pending_value = text
-        elif resource_id.endswith(":id/s5x") and pending_value is not None:
+        elif resource_id.endswith((":id/s5x", ":id/rfc")) and pending_value is not None:
             label = text.lower()
             if label == "follower":
                 label = "followers"

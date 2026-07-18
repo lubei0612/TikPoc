@@ -1934,7 +1934,10 @@ class AcquisitionRepository:
             expected_username = cls._normalize_username(
                 str(snapshot["expected_username"])
             )
-            if not observed_username or observed_username != expected_username:
+            if not observed_username or (
+                observed_username != expected_username
+                and not cls._stable_identity_key(str(snapshot["identity_key"]))
+            ):
                 return False
 
         reason = str(snapshot["reason"])
@@ -2144,7 +2147,10 @@ class AcquisitionRepository:
             expected_username = self._normalize_username(str(target["username"]))
             if state in {ProfileAccessState.PUBLIC, ProfileAccessState.PRIVATE} and (
                 not normalized_observed_username
-                or normalized_observed_username != expected_username
+                or (
+                    normalized_observed_username != expected_username
+                    and not self._stable_identity_key(identity_key)
+                )
             ):
                 raise ValueError("profile snapshot identity mismatch")
             lease = connection.execute(
@@ -2630,6 +2636,10 @@ class AcquisitionRepository:
     @staticmethod
     def _normalize_username(value: str) -> str:
         return str(value).strip().removeprefix("@").lower()
+
+    @staticmethod
+    def _stable_identity_key(identity_key: str) -> bool:
+        return str(identity_key).startswith(("sec:", "uid:"))
 
     @staticmethod
     def _action_plan(

@@ -591,7 +591,7 @@ def test_round_capacity_recomputes_eligibility_from_raw_snapshot_metrics(
         (1, "private", "private_account"),
     ),
 )
-def test_round_capacity_requires_public_and_private_snapshot_username_match(
+def test_round_capacity_accepts_username_drift_for_stable_identity(
     tmp_path: Path,
     private_account: int,
     access_state: str,
@@ -612,8 +612,8 @@ def test_round_capacity_requires_public_and_private_snapshot_username_match(
 
     audit = repository.capacity_audit(round_id, expected_devices=2)
 
-    assert audit.timings == ()
-    assert audit.false_success_count == 2
+    assert len(audit.timings) == 2
+    assert audit.false_success_count == 0
 
 
 @pytest.mark.parametrize(

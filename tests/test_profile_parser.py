@@ -41,6 +41,28 @@ def test_parse_profile_page_accepts_appium_element_tags() -> None:
     assert page.metrics == ProfileMetrics(following=12, followers=10, posts=4)
 
 
+def test_parse_profile_page_accepts_current_tiktok_resource_ids() -> None:
+    current = """
+    <hierarchy>
+      <node text="@sample" resource-id="com.zhiliaoapp.musically:id/rgn" />
+      <node text="326" resource-id="com.zhiliaoapp.musically:id/rfd" />
+      <node text="Following" resource-id="com.zhiliaoapp.musically:id/rfc" />
+      <node text="198" resource-id="com.zhiliaoapp.musically:id/rfd" />
+      <node text="Followers" resource-id="com.zhiliaoapp.musically:id/rfc" />
+      <node resource-id="com.zhiliaoapp.musically:id/cover" />
+      <node text="57" resource-id="com.zhiliaoapp.musically:id/z9h" />
+      <node resource-id="com.zhiliaoapp.musically:id/cover" />
+      <node text="30" resource-id="com.zhiliaoapp.musically:id/z9h" />
+    </hierarchy>
+    """
+
+    page = parse_profile_page(current)
+
+    assert page.username == "sample"
+    assert page.metrics == ProfileMetrics(following=326, followers=198, posts=2)
+    assert page.visible_post_keys == ("57", "30")
+
+
 def test_parse_profile_page_accepts_singular_follower_label() -> None:
     singular = PROFILE_XML.replace('text="Followers"', 'text="Follower"')
 

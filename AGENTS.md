@@ -243,7 +243,7 @@ for the affected path has been performed and recorded.
 - Committed examples must use placeholders and synthetic fixtures.
 - Redact secrets from test output, review notes, commits, and issue/PR text.
 
-## Checkpoint (2026-07-18)
+## Checkpoint (2026-07-19)
 
 Completed on `feat/web-lead-conversion`:
 
@@ -308,12 +308,24 @@ Completed on `feat/web-lead-conversion`:
   duplicate prompt builders when Task 5 establishes the production call path.
 - Read-only MYT discovery found running slot 1 at ADB/web ports `30000/30001`
   and slot 2 at `30100/30101`. No account action was performed.
+- MYT slot 1 completed the current CSV functional gate with 326/326 completed
+  assignments, confirmed visits, and snapshots. Final confirmed outcomes were
+  21 favorite, 37 like, 37 repost, and 231 trace; no duplicate visits,
+  nonterminal plans, uncertain quotas, or active leases remained.
+- TikTok 44.8.42 compatibility now covers current profile/stat/post resource
+  IDs, zero-idle Appium sessions, pixel-verified favorites, and stable user-ID
+  routes for renamed handles. See `docs/mobile-fleet-runbook.md`.
+- The retained debug round failed capacity promotion: mean 170.718 seconds,
+  P90 15.572 seconds, projected 421 targets per 20-hour day, with historical
+  identity mismatch evidence. A fresh calibration-free round is still required.
+- Last fresh full Python verification: `562 passed`; Chrome Node verification:
+  `31 passed`; Android bridge build passed with the portable build-root fix.
 - Full-repository Ruff format check has a pre-existing 14-file formatting
   baseline; do not reformat those unrelated files as part of a narrow task.
 
 Outstanding at the current checkpoint:
 
-1. Execute Mobile Task 10 only at the roadmap's two-device live gate.
+1. Execute the remaining Mobile Task 10 two-device live gate on slots 1 and 2.
 2. Finish full regression, two-device calibration, four-/eight-hour
    endurance tests, seven-device benchmark, runbooks, branch integration, and
    GitHub setup.

@@ -28,11 +28,13 @@ def create_driver(appium_url: str, udid: str, *, command_timeout: int = 30):
             "appium:newCommandTimeout": 3600,
         }
     )
-    return webdriver.Remote(
+    driver = webdriver.Remote(
         appium_url,
         options=options,
         client_config=AppiumClientConfig(appium_url, timeout=command_timeout),
     )
+    driver.update_settings({"waitForIdleTimeout": 0})
+    return driver
 
 
 def run_queue(

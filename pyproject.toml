@@ -10,6 +10,7 @@ dependencies = [
   "Appium-Python-Client>=5,<6",
   "fastapi>=0.116,<1",
   "openpyxl>=3.1,<4",
+  "Pillow>=11,<13",
   "PyYAML>=6,<7",
   "uvicorn>=0.35,<1",
 ]

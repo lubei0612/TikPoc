@@ -106,6 +106,25 @@ def test_completed_snapshot_is_shared_by_every_device(tmp_path: Path) -> None:
     )
 
 
+def test_stable_identity_snapshot_accepts_a_renamed_username(tmp_path: Path) -> None:
+    repository, round_id, identity_key = _repository_with_round(tmp_path)
+    repository.claim_snapshot_lease(
+        round_id, identity_key, "phone-01", now_ms=1_000, ttl_ms=30_000
+    )
+
+    snapshot = repository.publish_profile_snapshot(
+        round_id,
+        identity_key,
+        device_id="phone-01",
+        observed_username="renamed_buyer",
+        metrics=ProfileMetrics(20, 10, 5),
+        private_account=False,
+        observed_at_ms=2_000,
+    )
+
+    assert snapshot.observed_username == "renamed_buyer"
+
+
 def test_expired_snapshot_lease_can_be_taken_over(tmp_path: Path) -> None:
     repository, round_id, identity_key = _repository_with_round(tmp_path)
     assert repository.claim_snapshot_lease(

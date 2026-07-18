@@ -1,7 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
 
-ROOT=${0:A:h}
+ROOT=$(cd "$(dirname "$0")" && pwd)
 SDK=${ANDROID_HOME:-$HOME/Library/Android/sdk}
 BUILD_TOOLS=${BUILD_TOOLS:-$SDK/build-tools/37.0.0}
 PLATFORM=${PLATFORM:-$SDK/platforms/android-34/android.jar}

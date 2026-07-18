@@ -1,7 +1,9 @@
 import time
 from collections.abc import Callable
+from io import BytesIO
 from typing import Protocol
 
+from PIL import Image, UnidentifiedImageError
 from selenium.webdriver.common.by import By
 
 from .acquisition_models import (
@@ -19,7 +21,9 @@ from .profile_parser import parse_profile_page, parse_visible_post_keys
 
 TIKTOK_PACKAGE = "com.zhiliaoapp.musically"
 POST_CONTAINER_ID = f"{TIKTOK_PACKAGE}:id/eqx"
+POST_CONTAINER_IDS = (POST_CONTAINER_ID, f"{TIKTOK_PACKAGE}:id/efq")
 PROFILE_USERNAME_ID = f"{TIKTOK_PACKAGE}:id/s7e"
+PROFILE_USERNAME_IDS = (PROFILE_USERNAME_ID, f"{TIKTOK_PACKAGE}:id/rgn")
 
 
 class ProfileIdentityMismatch(ValueError):
@@ -30,9 +34,7 @@ LIKE_CONTROL_XPATH = '//*[starts-with(@content-desc, "Like video.")]'
 LIKE_ACTIVE_XPATH = (
     '//*[@content-desc="Video liked" or starts-with(@content-desc,"Unlike video")]'
 )
-FAVORITE_CONTROL_XPATH = (
-    '//*[@content-desc="Add or remove this video from Favorites."]/..'
-)
+FAVORITE_CONTROL_XPATH = '//*[@content-desc="Add or remove this video from Favorites."]'
 FAVORITE_ACTIVE_XPATH = (
     '//*[contains(@content-desc,"Remove from Favorites") or '
     'contains(@text,"Added to Favorites") or contains(@content-desc,"Added to Favorites")]'
@@ -43,6 +45,20 @@ REPOST_ACTIVE_XPATH = (
     '//*[contains(@text,"You reposted") or contains(@content-desc,"You reposted") or '
     'contains(@text,"Remove repost") or contains(@content-desc,"Remove repost")]'
 )
+
+
+def _favorite_pixel_state(png_bytes: bytes) -> bool | None:
+    try:
+        with Image.open(BytesIO(png_bytes)) as image:
+            colors = image.convert("RGB").getcolors(
+                maxcolors=image.width * image.height
+            )
+            return any(
+                red > 200 and green > 140 and blue < 100
+                for _, (red, green, blue) in (colors or ())
+            )
+    except (OSError, UnidentifiedImageError):
+        return None
 
 
 class Device(Protocol):
@@ -112,7 +128,7 @@ class AppiumTikTokDevice:
         for attempt in range(self.metric_read_attempts):
             if attempt and attempt % 3 == 0:
                 self.open_profile(normalized)
-            elements = self.driver.find_elements(By.ID, PROFILE_USERNAME_ID)
+            elements = self._profile_username_elements()
             if elements:
                 actual = str(elements[0].text or "").strip().removeprefix("@").lower()
                 if actual == normalized:
@@ -150,15 +166,22 @@ class AppiumTikTokDevice:
         raise last_error or ValueError("profile metrics are incomplete")
 
     def list_visible_posts(self) -> tuple[str, ...]:
-        elements = self.driver.find_elements(By.ID, POST_CONTAINER_ID)
+        elements = self._post_elements()
         return tuple(str(index) for index in range(len(elements)))
 
     def open_post(self, post_id: str) -> None:
-        elements = self.driver.find_elements(By.ID, POST_CONTAINER_ID)
+        elements = self._post_elements()
         index = int(post_id)
         if index < 0 or index >= len(elements):
             raise ValueError(f"post is no longer visible: {post_id}")
         elements[index].click()
+
+    def _post_elements(self):
+        for resource_id in POST_CONTAINER_IDS:
+            elements = self.driver.find_elements(By.ID, resource_id)
+            if elements:
+                return elements
+        return []
 
     def perform_action(self, action: str) -> bool:
         try:
@@ -215,9 +238,57 @@ class AppiumTikTokDevice:
         return ActionResult.UNCERTAIN
 
     def open_target(self, target: PoolTarget) -> None:
+        if target.target_id:
+            self._profile_before_stable_route = self._visible_profile_username()
+            self._stable_profile_uri = f"snssdk1233://user/profile/{target.target_id}"
+            self.driver.execute_script(
+                "mobile: deepLink",
+                {"url": self._stable_profile_uri, "package": TIKTOK_PACKAGE},
+            )
+            return
+        self._stable_profile_uri = ""
         self.open_profile(target.username)
 
     def confirm_profile_identity(self, target: PoolTarget) -> None:
+        stable_uri = getattr(self, "_stable_profile_uri", "")
+        if stable_uri:
+            expected = target.username.strip().removeprefix("@").lower()
+            previous = getattr(self, "_profile_before_stable_route", "")
+            for attempt in range(self.metric_read_attempts):
+                actual = self._visible_profile_username()
+                if actual and (actual == expected or actual != previous):
+                    return
+                if attempt and attempt % 3 == 0:
+                    self.driver.execute_script(
+                        "mobile: deepLink",
+                        {"url": stable_uri, "package": TIKTOK_PACKAGE},
+                    )
+                if attempt + 1 < self.metric_read_attempts:
+                    self.sleeper(self.poll_interval)
+            self.driver.execute_script(
+                "mobile: deepLink",
+                {"url": "tiktok://inbox", "package": TIKTOK_PACKAGE},
+            )
+            baseline_cleared = False
+            for attempt in range(self.metric_read_attempts):
+                if not self._visible_profile_username():
+                    baseline_cleared = True
+                    break
+                if attempt + 1 < self.metric_read_attempts:
+                    self.sleeper(self.poll_interval)
+            if not baseline_cleared:
+                raise ValueError("stable profile route did not change")
+            self.driver.execute_script(
+                "mobile: deepLink",
+                {"url": stable_uri, "package": TIKTOK_PACKAGE},
+            )
+            for attempt in range(self.metric_read_attempts):
+                actual = self._visible_profile_username()
+                if actual:
+                    return
+                if attempt + 1 < self.metric_read_attempts:
+                    self.sleeper(self.poll_interval)
+            raise ValueError("stable profile route did not change")
         self.wait_profile_ready(target.username)
 
     def read_profile_observation(self) -> ProfileObservation:
@@ -252,13 +323,20 @@ class AppiumTikTokDevice:
         self.sleeper(self.poll_interval)
 
     def _visible_profile_username(self) -> str:
-        elements = self.driver.find_elements(By.ID, PROFILE_USERNAME_ID)
+        elements = self._profile_username_elements()
         if elements:
             return str(elements[0].text or "").strip().removeprefix("@").lower()
         try:
             return parse_profile_page(self.driver.page_source).username
         except ValueError:
             return ""
+
+    def _profile_username_elements(self):
+        for resource_id in PROFILE_USERNAME_IDS:
+            elements = self.driver.find_elements(By.ID, resource_id)
+            if elements:
+                return elements
+        return []
 
     def _outcome_state(self, outcome: OutcomeKind) -> bool | None:
         if outcome is OutcomeKind.TRACE:
@@ -275,6 +353,9 @@ class AppiumTikTokDevice:
             control = self._first_visible(FAVORITE_CONTROL_XPATH)
             if control is None:
                 return None
+            pixel_state = _favorite_pixel_state(control.screenshot_as_png)
+            if pixel_state is True:
+                return True
             for attribute in ("selected", "checked"):
                 value = str(control.get_attribute(attribute) or "").strip().lower()
                 if value in {"true", "1"}:
@@ -286,7 +367,7 @@ class AppiumTikTokDevice:
                 return True
             if "add to favorites" in description:
                 return False
-            return None
+            return pixel_state
         if self._first_visible(REPOST_ACTIVE_XPATH) is not None:
             return True
         if self._first_visible(REPOST_CONTROL_XPATH) is not None:
