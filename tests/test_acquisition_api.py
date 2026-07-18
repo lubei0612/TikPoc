@@ -414,6 +414,80 @@ def test_assignment_diagnostics_are_bounded_and_paths_are_opaque(
     )
 
 
+def test_diagnostic_screenshot_serves_only_bounded_image_evidence(
+    tmp_path: Path,
+) -> None:
+    app, _, assignment_id = _seeded_operations_app(tmp_path)
+    client = TestClient(app)
+    outside_id = client.get(f"/api/diagnostics/{assignment_id}").json()["attempts"][0][
+        "screenshot_id"
+    ]
+    screenshots = tmp_path / "screenshots"
+    screenshots.mkdir()
+    evidence = screenshots / "assignment.png"
+    evidence.write_bytes(b"\x89PNG\r\n\x1a\nsynthetic-evidence")
+    with sqlite3.connect(tmp_path / "tikpoc.db") as connection:
+        connection.execute(
+            "UPDATE action_attempts SET diagnostics_json=?",
+            (
+                json.dumps(
+                    {
+                        "screenshot_path": str(evidence),
+                        "ui_summary": "visible selector missing",
+                    }
+                ),
+            ),
+        )
+
+    screenshot_id = client.get(f"/api/diagnostics/{assignment_id}").json()["attempts"][
+        0
+    ]["screenshot_id"]
+    response = client.get(f"/api/diagnostic-screenshots/{screenshot_id}")
+
+    assert response.status_code == 200
+    assert response.content == evidence.read_bytes()
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert "assignment.png" not in str(response.headers)
+    assert (
+        client.get("/api/diagnostic-screenshots/000000000000000000000000").status_code
+        == 404
+    )
+    assert client.get(f"/api/diagnostic-screenshots/{outside_id}").status_code == 404
+
+
+def test_diagnostic_screenshot_rejects_non_image_and_oversize_files(
+    tmp_path: Path,
+) -> None:
+    app, _, assignment_id = _seeded_operations_app(tmp_path)
+    client = TestClient(app)
+    screenshots = tmp_path / "screenshots"
+    screenshots.mkdir()
+    invalid = screenshots / "diagnostic.txt"
+    invalid.write_text("not an image")
+
+    def set_screenshot(path: Path) -> str:
+        with sqlite3.connect(tmp_path / "tikpoc.db") as connection:
+            connection.execute(
+                "UPDATE action_attempts SET diagnostics_json=?",
+                (json.dumps({"screenshot_path": str(path)}),),
+            )
+        return client.get(f"/api/diagnostics/{assignment_id}").json()["attempts"][0][
+            "screenshot_id"
+        ]
+
+    invalid_id = set_screenshot(invalid)
+    assert client.get(f"/api/diagnostic-screenshots/{invalid_id}").status_code == 404
+
+    oversize = screenshots / "oversize.png"
+    with oversize.open("wb") as output:
+        output.write(b"\x89PNG\r\n\x1a\n")
+        output.truncate(10 * 1024 * 1024 + 1)
+    oversize_id = set_screenshot(oversize)
+    assert client.get(f"/api/diagnostic-screenshots/{oversize_id}").status_code == 404
+
+
 def test_operator_command_models_reject_unknown_scope_and_extra_fields(
     tmp_path: Path,
 ) -> None:

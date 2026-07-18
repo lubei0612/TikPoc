@@ -1,6 +1,7 @@
 import hashlib
 import json
 import math
+import re
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -13,6 +14,13 @@ from .rounds import create_exposure_round
 _QUOTA_LIMITS = {"like": 100, "favorite": 14, "repost": 25}
 _COMMAND_FAILURE_KEY = "failure"
 _MAX_LEGACY_COMMAND_JSON_LENGTH = 4_096
+_MAX_DIAGNOSTIC_SCREENSHOT_BYTES = 10 * 1024 * 1024
+_SCREENSHOT_MEDIA_TYPES = {
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
 _KNOWN_COMMAND_CONFLICTS = {
     "assignment has an active lease",
     "assignment is not retryable",
@@ -448,6 +456,41 @@ class AcquisitionService:
         payload = dict(assignment)
         payload["attempts"] = attempts
         return payload
+
+    def diagnostic_screenshot(self, screenshot_id: str) -> tuple[Path, str]:
+        if not re.fullmatch(r"[0-9a-f]{24}", screenshot_id):
+            raise AcquisitionNotFound(screenshot_id)
+        evidence_root = (self.path.parent / "screenshots").resolve()
+        with self._read_connection() as connection:
+            rows = connection.execute(
+                "SELECT diagnostics_json FROM action_attempts"
+            ).fetchall()
+        for row in rows:
+            try:
+                diagnostic = json.loads(str(row["diagnostics_json"]))
+            except (TypeError, json.JSONDecodeError):
+                continue
+            raw_path = str(diagnostic.get("screenshot_path") or "")
+            if not raw_path:
+                continue
+            candidate_id = hashlib.sha256(raw_path.encode()).hexdigest()[:24]
+            if candidate_id != screenshot_id:
+                continue
+            candidate = Path(raw_path).expanduser().resolve()
+            media_type = _SCREENSHOT_MEDIA_TYPES.get(candidate.suffix.lower())
+            try:
+                stat = candidate.stat()
+            except OSError as error:
+                raise AcquisitionNotFound(screenshot_id) from error
+            if (
+                not candidate.is_relative_to(evidence_root)
+                or not candidate.is_file()
+                or media_type is None
+                or stat.st_size > _MAX_DIAGNOSTIC_SCREENSHOT_BYTES
+            ):
+                raise AcquisitionNotFound(screenshot_id)
+            return candidate, media_type
+        raise AcquisitionNotFound(screenshot_id)
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=30)

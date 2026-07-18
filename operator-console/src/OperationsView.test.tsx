@@ -510,6 +510,39 @@ it("keeps global health degraded without browser heartbeat evidence", async () =
   expect(health).toHaveClass("state-degraded");
 });
 
+it("labels empty device and browser health as not connected", async () => {
+  vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+    const url = String(input);
+    if (url.startsWith("/api/rounds")) {
+      return jsonResponse({
+        items: [{
+          round_id: "round-1",
+          pool_id: "pool-1",
+          state: "pending",
+          starts_at_ms: 1_000,
+          created_at_ms: 500,
+          target_count: 0,
+          device_count: 0,
+        }],
+      });
+    }
+    if (url.startsWith("/api/coverage")) {
+      return jsonResponse({ ...coverageSnapshot, items: [], total: 0 });
+    }
+    const snapshot = operationSnapshot("pending");
+    snapshot.devices = [];
+    snapshot.quotas = [];
+    snapshot.browser_health = [];
+    return jsonResponse(snapshot);
+  });
+
+  render(<App />);
+
+  const health = await screen.findByLabelText("Fleet health: not connected");
+  expect(health).toHaveTextContent("Not connected");
+  expect(health).toHaveClass("state-degraded");
+});
+
 it("retains the last confirmed snapshot when a command fails", async () => {
   vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
     const url = String(input);

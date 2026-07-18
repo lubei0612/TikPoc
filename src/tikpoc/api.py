@@ -517,6 +517,21 @@ def create_app(
         except AcquisitionNotFound:
             return _json({"error": "assignment not found"}, 404)
 
+    @app.get("/api/diagnostic-screenshots/{screenshot_id}")
+    def acquisition_diagnostic_screenshot(screenshot_id: str) -> Response:
+        try:
+            path, media_type = acquisition_service.diagnostic_screenshot(screenshot_id)
+        except AcquisitionNotFound:
+            return _json({"error": "diagnostic screenshot not found"}, 404)
+        return FileResponse(
+            path,
+            media_type=media_type,
+            headers={
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
     def operator_account(account_id: str) -> WebAccount:
         if registry is None:
             raise KeyError(account_id)

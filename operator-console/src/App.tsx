@@ -24,9 +24,14 @@ export default function App() {
     return () => controller.abort();
   }, []);
 
-  const healthLabel = fleetHealth
-    ? `Fleet health: ${fleetHealth.healthyDevices} of ${fleetHealth.totalDevices} devices healthy; ${fleetHealth.healthyBrowserObservers} of ${fleetHealth.totalBrowserObservers} browser observers healthy`
-    : "Fleet health unavailable";
+  const notConnected = fleetHealth !== null
+    && fleetHealth.totalDevices === 0
+    && fleetHealth.totalBrowserObservers === 0;
+  const healthLabel = notConnected
+    ? "Fleet health: not connected"
+    : fleetHealth
+      ? `Fleet health: ${fleetHealth.healthyDevices} of ${fleetHealth.totalDevices} devices healthy; ${fleetHealth.healthyBrowserObservers} of ${fleetHealth.totalBrowserObservers} browser observers healthy`
+      : "Fleet health unavailable";
   const healthState = fleetHealth && fleetHealth.totalDevices > 0 && fleetHealth.totalBrowserObservers > 0
     && fleetHealth.healthyDevices === fleetHealth.totalDevices
     && fleetHealth.healthyBrowserObservers === fleetHealth.totalBrowserObservers ? "healthy" : "degraded";
@@ -39,7 +44,7 @@ export default function App() {
           <select id="round-select" onChange={(event) => { setFleetHealth(null); setRoundId(event.target.value); }} value={roundId}>
             {rounds.map((round) => <option key={round.round_id} value={round.round_id}>{round.round_id} · {round.device_count} accounts</option>)}
           </select>
-          <span aria-label={healthLabel} className={`global-health state-${healthState}`}><RadioTower size={14} />{fleetHealth ? `${fleetHealth.healthyDevices}/${fleetHealth.totalDevices} devices · ${fleetHealth.healthyBrowserObservers}/${fleetHealth.totalBrowserObservers} browser` : "Health pending"}</span>
+          <span aria-label={healthLabel} className={`global-health state-${healthState}`}><RadioTower size={14} />{notConnected ? "Not connected" : fleetHealth ? `${fleetHealth.healthyDevices}/${fleetHealth.totalDevices} devices · ${fleetHealth.healthyBrowserObservers}/${fleetHealth.totalBrowserObservers} browser` : "Health pending"}</span>
         </div>
       </header>
       <nav className="primary-nav" aria-label="Console views">
