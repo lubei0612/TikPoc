@@ -226,10 +226,12 @@ def test_browser_post_routes_validate_origin_and_json_before_side_effects(
 ) -> None:
     database_path = tmp_path / "db.sqlite"
     service = FakeBrowserDmService()
+    extension_origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
     server, base_url = _start_server(
         database_path,
         web_account_registry=_registry(tmp_path),
         browser_dm_service=service,
+        browser_extension_origins=(extension_origin,),
     )
     try:
         for path, body in _browser_post_bodies().items():
@@ -275,10 +277,78 @@ def test_browser_post_routes_validate_origin_and_json_before_side_effects(
                 base_url,
                 "/api/browser-actions/claim",
                 _browser_post_bodies()["/api/browser-actions/claim"],
-                origin="https://www.tiktok.com",
+                origin=extension_origin,
                 content_type="application/json; charset=utf-8",
             )
         ) == {"claimed": True}
+    finally:
+        server.shutdown()
+
+
+def test_browser_post_routes_accept_verified_chrome_extension_origin(
+    tmp_path: Path,
+) -> None:
+    extension_origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+    service = FakeBrowserDmService()
+    server, base_url = _start_server(
+        tmp_path / "db.sqlite",
+        web_account_registry=_registry(tmp_path),
+        browser_dm_service=service,
+    )
+    try:
+        event_response = _post_browser_request(
+            base_url,
+            "/api/browser-events",
+            _browser_post_bodies()["/api/browser-events"],
+            origin=extension_origin,
+        )
+        plan_response = _post_browser_request(
+            base_url,
+            "/api/browser-dm/reply-plan",
+            _browser_inbound_body(),
+            origin=extension_origin,
+        )
+
+        assert json.load(event_response) == {"accepted": True}
+        assert json.load(plan_response)["plan_id"] == 17
+        assert event_response.headers["Access-Control-Allow-Origin"] == (
+            extension_origin
+        )
+        assert service.inbounds[0].fingerprint == "fp-01"
+    finally:
+        server.shutdown()
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "chrome-extension://abcdefghijklmnoabcdefghijklmnoa",
+        "chrome-extension://abcdefghijklmnopabcdefghijklmnoq",
+        "chrome-extension://abcdefghijklmnopabcdefghijklmnop/path",
+    ],
+)
+def test_browser_post_routes_reject_malformed_chrome_extension_origins(
+    tmp_path: Path, origin: str
+) -> None:
+    service = FakeBrowserDmService()
+    database_path = tmp_path / "db.sqlite"
+    server, base_url = _start_server(
+        database_path,
+        web_account_registry=_registry(tmp_path),
+        browser_dm_service=service,
+    )
+    try:
+        with pytest.raises(HTTPError) as raised:
+            _post_browser_request(
+                base_url,
+                "/api/browser-dm/reply-plan",
+                _browser_inbound_body(),
+                origin=origin,
+            )
+        assert raised.value.code == 403
+        assert json.load(raised.value) == {"error": "browser origin is not allowed"}
+        assert service.inbounds == []
+        assert Database(database_path).latest_runtime_event() is None
     finally:
         server.shutdown()
 

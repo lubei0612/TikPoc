@@ -1,6 +1,8 @@
 import json
+import os
+import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -30,6 +32,7 @@ class DashboardServer(ThreadingHTTPServer):
         *,
         web_account_registry: WebAccountRegistry | None = None,
         browser_dm_service: BrowserDmService | None = None,
+        browser_extension_origins: Iterable[str] | None = None,
         tiktok_app_secret: str = "",
         webhook_max_age_seconds: int = 300,
         clock: Callable[[], float] = time.time,
@@ -45,6 +48,19 @@ class DashboardServer(ThreadingHTTPServer):
                 AiReplyClient.from_environment(),
             )
         self.browser_dm_service = browser_dm_service
+        if browser_extension_origins is None:
+            browser_extension_origins = os.getenv(
+                "TIKPOC_BROWSER_EXTENSION_ORIGINS", ""
+            ).split(",")
+        self.browser_origins = {
+            "https://tiktok.com",
+            "https://www.tiktok.com",
+            *(
+                origin.strip()
+                for origin in browser_extension_origins
+                if re.fullmatch(r"chrome-extension://[a-p]{32}", origin.strip())
+            ),
+        }
         self.tiktok_app_secret = tiktok_app_secret
         self.webhook_max_age_seconds = webhook_max_age_seconds
         self.clock = clock
@@ -59,7 +75,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
         "followback_unresolved",
         "browser_dm_received",
     }
-    _cors_origins = {"https://tiktok.com", "https://www.tiktok.com"}
     _browser_post_paths = {
         "/api/browser-events",
         "/api/browser-dm/reply-plan",
@@ -461,7 +476,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def _allowed_origin(self) -> str | None:
         origin = self.headers.get("Origin")
-        return origin if origin in self._cors_origins else None
+        if origin in self.server.browser_origins:
+            return origin
+        if origin and re.fullmatch(r"chrome-extension://[a-p]{32}", origin):
+            return origin
+        return None
 
     def _send_cors_headers(self) -> None:
         origin = self._allowed_origin()
@@ -488,6 +507,7 @@ def create_server(
     *,
     web_account_registry: WebAccountRegistry | None = None,
     browser_dm_service: BrowserDmService | None = None,
+    browser_extension_origins: Iterable[str] | None = None,
     tiktok_app_secret: str = "",
     webhook_max_age_seconds: int = 300,
     clock: Callable[[], float] = time.time,
@@ -497,6 +517,7 @@ def create_server(
         database_path,
         web_account_registry=web_account_registry,
         browser_dm_service=browser_dm_service,
+        browser_extension_origins=browser_extension_origins,
         tiktok_app_secret=tiktok_app_secret,
         webhook_max_age_seconds=webhook_max_age_seconds,
         clock=clock,
