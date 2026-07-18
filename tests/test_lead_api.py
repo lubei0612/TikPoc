@@ -217,6 +217,50 @@ def test_manual_reply_plan_is_immutable_and_uses_normal_send_lease_path(
     )
 
 
+def test_ai_off_still_allows_taken_over_manual_plan_to_claim_send_lease(
+    tmp_path: Path,
+) -> None:
+    app, _ = _seeded_app(tmp_path)
+    client = TestClient(app)
+    assert (
+        client.post(
+            "/api/accounts/account-01/ai-enable",
+            json={"command_id": "ai-off-manual", "enabled": False},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            "/api/leads/account-01/conversation-01/takeover",
+            json={"command_id": "takeover-ai-off", "reason": "operator"},
+        ).status_code
+        == 200
+    )
+    manual = client.post(
+        "/api/leads/account-01/conversation-01/manual-reply-plan",
+        json={
+            "command_id": "manual-ai-off",
+            "inbound_fingerprint": "message-3",
+            "reply_text": "I will handle this personally.",
+        },
+    )
+    assert manual.status_code == 200
+    claim = client.post(
+        "/api/browser-actions/claim",
+        headers={"Origin": "https://www.tiktok.com"},
+        json={
+            "account_id": "account-01",
+            "device_id": "phone-01",
+            "action_type": "dm_send",
+            "action_key": f"dm_send:{manual.json()['plan_id']}",
+            "owner_id": "operator-tab",
+            "timestamp_ms": 8_000,
+        },
+    )
+    assert claim.status_code == 200
+    assert claim.json() == {"claimed": True}
+
+
 def test_sale_uses_minor_units_and_account_switches_persist(tmp_path: Path) -> None:
     app, _ = _seeded_app(tmp_path)
     client = TestClient(app)

@@ -295,9 +295,18 @@ def create_app(
                     account.enabled and account.browser_followback_enabled
                 ),
             )
+            manual_send_allowed = body.action_type == "dm_send" and (
+                database.manual_reply_action_allowed(
+                    account.account_id, body.action_key
+                )
+            )
             if (
                 body.action_type == "followback" and not settings["followback_enabled"]
-            ) or (body.action_type == "dm_send" and not settings["ai_enabled"]):
+            ) or (
+                body.action_type == "dm_send"
+                and not settings["ai_enabled"]
+                and not manual_send_allowed
+            ):
                 return _json({"claimed": False})
             claimed = database.claim_browser_action(
                 body.account_id,

@@ -2125,6 +2125,29 @@ class Database:
             )
             return result
 
+    def manual_reply_action_allowed(self, account_id: str, action_key: str) -> bool:
+        _require_identity(account_id, action_key)
+        raw_plan_id = action_key.removeprefix("dm_send:")
+        try:
+            plan_id = int(raw_plan_id)
+        except ValueError:
+            return False
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1
+                FROM browser_reply_plans AS plan
+                JOIN web_conversations AS conversation
+                  ON conversation.account_id = plan.account_id
+                 AND conversation.conversation_id = plan.conversation_id
+                WHERE plan.id=? AND plan.account_id=? AND plan.state='planned'
+                  AND plan.inbound_fingerprint LIKE 'operator-manual:%'
+                  AND conversation.stage='human_required'
+                """,
+                (plan_id, account_id),
+            ).fetchone()
+        return row is not None
+
     def record_lead_sale_command(
         self,
         account_id: str,
