@@ -347,9 +347,13 @@ update the checkpoint, and continue from the latest verified state.
   three workspaces, root overflow, control overlap, sticky coverage scrolling,
   long identities, and browser console errors. Evidence is ignored under
   `test-results/operator-console/`.
-- Final regression passed `553` Python tests, `26` Vitest tests, `31` Chrome
-  extension tests, and `6` Playwright tests. Ruff check, focused Python format,
+- Final regression passed `554` Python tests, `27` Vitest tests, `31` Chrome
+  extension tests, and `8` Playwright tests. Ruff check, focused Python format,
   production dependency audit, Vite build, and `git diff --check` also passed.
+- Independent Task 6 review findings were closed: console hosts are constrained
+  to loopback, destructive stop commands require a responsive confirmation
+  dialog, browser acceptance covers route history and runtime errors, and quota
+  labels use fixed natural-hour semantics.
 - Remaining production gates are controlled Chrome account calibration,
   two-device visible action verification, endurance runs, and the seven-device
   `10,000`-target/`70,000`-visit capacity proof. Do not describe those gates as
