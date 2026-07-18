@@ -135,6 +135,118 @@ def _seeded_operations_app(tmp_path: Path) -> tuple[object, str, int]:
     return create_app(path, clock=lambda: 12), round_id, deferred_id
 
 
+def _legacy_control_database(tmp_path: Path) -> tuple[Path, str, dict[str, int]]:
+    path = tmp_path / "legacy-controls.db"
+    repository = AcquisitionRepository(path, clock_ms=lambda: 1_000)
+    repository.migrate()
+    pool = repository.import_pool("legacy.csv", "d" * 64, (_target(1),))
+    round_id = create_exposure_round(
+        repository,
+        pool_id=pool.pool_id,
+        device_seeds={
+            "phone-01": "seed-01",
+            "phone-02": "seed-02",
+            "phone-03": "seed-03",
+        },
+        starts_at_ms=1_000,
+        min_inter_device_gap_ms=0,
+        min_repeat_gap_ms=0,
+    )
+    with sqlite3.connect(path) as connection:
+        assignment_ids = {
+            str(device_id): int(assignment_id)
+            for assignment_id, device_id in connection.execute(
+                "SELECT assignment_id, device_id FROM round_assignments"
+            )
+        }
+        connection.execute("DROP TABLE operator_control_states")
+        connection.execute(
+            """
+            CREATE TABLE operator_commands (
+                command_id TEXT PRIMARY KEY,
+                command_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                result_json TEXT NOT NULL,
+                created_at_ms INTEGER NOT NULL
+            )
+            """
+        )
+
+        def command_row(
+            command_id: str,
+            command: str,
+            scope: str,
+            scope_id: str,
+            created_at_ms: int,
+            *,
+            result_json: str | None = None,
+        ) -> tuple[str, str, str, str, int]:
+            state = {"start": "running", "pause": "paused", "stop": "stopped"}[command]
+            payload = {"scope": scope, "scope_id": scope_id}
+            result = {
+                "command_id": command_id,
+                "command": command,
+                **payload,
+                "state": state,
+            }
+            return (
+                command_id,
+                command,
+                json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                result_json
+                or json.dumps(result, sort_keys=True, separators=(",", ":")),
+                created_at_ms,
+            )
+
+        connection.executemany(
+            "INSERT INTO operator_commands VALUES (?, ?, ?, ?, ?)",
+            (
+                command_row("device-start", "start", "device", "phone-01", 100),
+                command_row("device-pause", "pause", "device", "phone-01", 200),
+                command_row(
+                    "assignment-pause",
+                    "pause",
+                    "assignment",
+                    str(assignment_ids["phone-02"]),
+                    150,
+                ),
+                command_row(
+                    "assignment-stop",
+                    "stop",
+                    "assignment",
+                    str(assignment_ids["phone-02"]),
+                    250,
+                ),
+                command_row(
+                    "failed-device",
+                    "pause",
+                    "device",
+                    "phone-03",
+                    300,
+                    result_json=json.dumps(
+                        {
+                            "failure": {
+                                "kind": "conflict",
+                                "message": "device state does not allow command",
+                            }
+                        }
+                    ),
+                ),
+                command_row("fleet-pause", "pause", "fleet", "all", 350),
+                command_row("round-pause", "pause", "round", round_id, 400),
+                command_row("oversized-device", "pause", "device", "x" * 201, 450),
+                (
+                    "malformed-device",
+                    "pause",
+                    "{",
+                    "{",
+                    500,
+                ),
+            ),
+        )
+    return path, round_id, assignment_ids
+
+
 def test_operations_snapshot_contains_dynamic_round_devices_and_traces(
     tmp_path: Path,
 ) -> None:
@@ -321,6 +433,106 @@ def test_operator_command_models_reject_unknown_scope_and_extra_fields(
     assert oversized.status_code == 422
 
 
+def test_migration_backfills_latest_successful_legacy_scoped_controls(
+    tmp_path: Path,
+) -> None:
+    path, round_id, assignment_ids = _legacy_control_database(tmp_path)
+
+    app = create_app(path, clock=lambda: 2)
+    repository = app.state.acquisition
+
+    with sqlite3.connect(path) as connection:
+        controls = connection.execute(
+            """
+            SELECT scope, scope_id, state, command_id
+            FROM operator_control_states ORDER BY scope, scope_id
+            """
+        ).fetchall()
+    assert controls == [
+        (
+            "assignment",
+            str(assignment_ids["phone-02"]),
+            "stopped",
+            "assignment-stop",
+        ),
+        ("device", "phone-01", "paused", "device-pause"),
+    ]
+    assert (
+        repository.claim_next_assignment(
+            round_id, "phone-01", "worker-device", now_ms=2_000
+        )
+        is None
+    )
+    assert (
+        repository.claim_next_assignment(
+            round_id, "phone-02", "worker-assignment", now_ms=2_000
+        )
+        is None
+    )
+    assert (
+        repository.claim_next_assignment(
+            round_id, "phone-03", "worker-unblocked", now_ms=2_000
+        )
+        is not None
+    )
+
+
+def test_fleet_start_and_pause_skip_terminal_rounds(tmp_path: Path) -> None:
+    app, stopped_round_id, _ = _seeded_operations_app(tmp_path)
+    repository = app.state.acquisition
+    live_pool = repository.import_pool("live.csv", "e" * 64, (_target(3),))
+    live_round_id = create_exposure_round(
+        repository,
+        pool_id=live_pool.pool_id,
+        device_seeds={"phone-01": "live-seed"},
+        starts_at_ms=1_000,
+        min_inter_device_gap_ms=0,
+        min_repeat_gap_ms=0,
+    )
+    completed_pool = repository.import_pool("completed.csv", "f" * 64, (_target(4),))
+    completed_round_id = create_exposure_round(
+        repository,
+        pool_id=completed_pool.pool_id,
+        device_seeds={"phone-01": "completed-seed"},
+        starts_at_ms=1_000,
+        min_inter_device_gap_ms=0,
+        min_repeat_gap_ms=0,
+    )
+    with sqlite3.connect(repository.path) as connection:
+        connection.execute(
+            "UPDATE exposure_rounds SET state='stopped' WHERE round_id=?",
+            (stopped_round_id,),
+        )
+        connection.execute(
+            "UPDATE exposure_rounds SET state='completed' WHERE round_id=?",
+            (completed_round_id,),
+        )
+    client = TestClient(app)
+    start_body = {"command_id": "start-eligible", "scope": "fleet", "scope_id": "all"}
+
+    started = client.post("/api/commands/start", json=start_body)
+    replayed = client.post("/api/commands/start", json=start_body)
+    paused = client.post(
+        "/api/commands/pause",
+        json={"command_id": "pause-eligible", "scope": "fleet", "scope_id": "all"},
+    )
+
+    assert started.status_code == 200
+    assert replayed.status_code == 200
+    assert replayed.json() == started.json()
+    assert paused.status_code == 200
+    with sqlite3.connect(repository.path) as connection:
+        states = {
+            row[0]: row[1]
+            for row in connection.execute("SELECT round_id, state FROM exposure_rounds")
+        }
+    assert states == {
+        stopped_round_id: "stopped",
+        live_round_id: "paused",
+        completed_round_id: "completed",
+    }
+
+
 def test_controls_reject_missing_device_and_do_not_revive_stopped_rounds(
     tmp_path: Path,
 ) -> None:
@@ -345,7 +557,8 @@ def test_controls_reject_missing_device_and_do_not_revive_stopped_rounds(
 
     assert missing_device.status_code == 404
     assert stopped.status_code == 200
-    assert restarted.status_code == 409
+    assert restarted.status_code == 200
+    assert restarted.json()["state"] == "running"
     rounds = client.get("/api/rounds").json()["items"]
     assert next(item for item in rounds if item["round_id"] == round_id)["state"] == (
         "stopped"

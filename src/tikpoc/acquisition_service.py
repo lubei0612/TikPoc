@@ -12,6 +12,7 @@ from .rounds import create_exposure_round
 
 _QUOTA_LIMITS = {"like": 100, "favorite": 14, "repost": 25}
 _COMMAND_FAILURE_KEY = "failure"
+_MAX_LEGACY_COMMAND_JSON_LENGTH = 4_096
 _KNOWN_COMMAND_CONFLICTS = {
     "assignment has an active lease",
     "assignment is not retryable",
@@ -47,6 +48,7 @@ class AcquisitionService:
 
     def migrate(self) -> None:
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS operator_commands (
@@ -58,6 +60,93 @@ class AcquisitionService:
                 )
                 """
             )
+            self._backfill_legacy_control_states(connection)
+
+    @staticmethod
+    def _backfill_legacy_control_states(connection: sqlite3.Connection) -> None:
+        latest: dict[tuple[str, str], tuple[str, str, int]] = {}
+        rows = connection.execute(
+            """
+            SELECT command_id, command_type, payload_json, result_json,
+                   created_at_ms
+            FROM operator_commands
+            WHERE command_type IN ('start', 'pause', 'stop')
+            ORDER BY created_at_ms, rowid
+            """
+        )
+        expected_states = {
+            "start": "running",
+            "pause": "paused",
+            "stop": "stopped",
+        }
+        for row in rows:
+            command_id = row["command_id"]
+            command_type = row["command_type"]
+            payload_json = row["payload_json"]
+            result_json = row["result_json"]
+            if (
+                not isinstance(command_id, str)
+                or not 1 <= len(command_id) <= 100
+                or not isinstance(command_type, str)
+                or not isinstance(payload_json, str)
+                or not isinstance(result_json, str)
+                or len(payload_json) > _MAX_LEGACY_COMMAND_JSON_LENGTH
+                or len(result_json) > _MAX_LEGACY_COMMAND_JSON_LENGTH
+            ):
+                continue
+            try:
+                payload = json.loads(payload_json)
+                result = json.loads(result_json)
+                created_at_ms = int(row["created_at_ms"])
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if (
+                not isinstance(payload, dict)
+                or not isinstance(result, dict)
+                or _COMMAND_FAILURE_KEY in result
+                or created_at_ms < 0
+            ):
+                continue
+            scope = payload.get("scope")
+            raw_scope_id = payload.get("scope_id")
+            expected_state = expected_states[command_type]
+            if (
+                scope not in {"device", "assignment"}
+                or not isinstance(raw_scope_id, str)
+                or result.get("state") != expected_state
+            ):
+                continue
+            scope_id = raw_scope_id.strip()
+            if not 1 <= len(scope_id) <= 200:
+                continue
+            if scope == "assignment":
+                try:
+                    assignment_id = int(scope_id)
+                except ValueError:
+                    continue
+                if assignment_id <= 0:
+                    continue
+                scope_id = str(assignment_id)
+            latest[(scope, scope_id)] = (
+                expected_state,
+                command_id,
+                created_at_ms,
+            )
+        connection.executemany(
+            """
+            INSERT OR IGNORE INTO operator_control_states(
+                scope, scope_id, state, command_id, updated_at_ms
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                (scope, scope_id, state, command_id, created_at_ms)
+                for (scope, scope_id), (
+                    state,
+                    command_id,
+                    created_at_ms,
+                ) in latest.items()
+            ),
+        )
 
     def pools(self, *, offset: int, limit: int) -> dict[str, object]:
         with self._read_connection() as connection:
@@ -486,20 +575,12 @@ class AcquisitionService:
         elif scope == "fleet":
             if scope_id != "all":
                 raise AcquisitionNotFound(scope_id)
-            rows = connection.execute(
-                "SELECT round_id, state FROM exposure_rounds"
-            ).fetchall()
-            if state != "stopped" and any(
-                str(row["state"]) == "stopped" for row in rows
-            ):
-                raise AcquisitionConflict("fleet contains a stopped round")
             connection.execute(
                 """
                 UPDATE exposure_rounds SET state = ?
                 WHERE state NOT IN ('completed', 'stopped')
-                   OR (state = 'stopped' AND ? = 'stopped')
                 """,
-                (state, state),
+                (state,),
             )
         elif scope in {"device", "assignment"}:
             control_scope_id = scope_id.strip()
