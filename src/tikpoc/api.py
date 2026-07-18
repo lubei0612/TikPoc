@@ -36,7 +36,7 @@ from .api_models import (
     RoundCreateRequest,
 )
 from .browser_dm import BrowserConversationBusy, BrowserDmService, BrowserInbound
-from .db import Database
+from .db import Database, OperatorCommandConflict
 from .messaging import AiReplyClient
 from .web_accounts import WebAccount, WebAccountRegistry
 from .webhooks import (
@@ -287,34 +287,37 @@ def create_app(
         try:
             body = BrowserActionClaimRequest.model_validate(await _json_object(request))
             account = _browser_account(registry, body)
-            settings = database.account_operator_settings(
-                account.account_id,
-                default_ai_enabled=(account.enabled and account.browser_dm_enabled),
-                default_followback_enabled=(
-                    account.enabled and account.browser_followback_enabled
-                ),
-            )
-            manual_send_allowed = body.action_type == "dm_send" and (
-                database.manual_reply_action_allowed(
-                    account.account_id, body.action_key
+            if body.action_type == "dm_send":
+                claimed = database.claim_browser_dm_action(
+                    body.account_id,
+                    body.action_key,
+                    body.owner_id,
+                    body.timestamp_ms,
+                    body.lease_seconds,
+                    default_ai_enabled=(account.enabled and account.browser_dm_enabled),
+                    account_ai_allowed=(account.enabled and account.browser_dm_enabled),
                 )
-            )
-            if (
-                body.action_type == "followback" and not settings["followback_enabled"]
-            ) or (
-                body.action_type == "dm_send"
-                and not settings["ai_enabled"]
-                and not manual_send_allowed
-            ):
-                return _json({"claimed": False})
-            claimed = database.claim_browser_action(
-                body.account_id,
-                body.action_type,
-                body.action_key,
-                body.owner_id,
-                body.timestamp_ms,
-                body.lease_seconds,
-            )
+            else:
+                settings = database.account_operator_settings(
+                    account.account_id,
+                    default_ai_enabled=(account.enabled and account.browser_dm_enabled),
+                    default_followback_enabled=(
+                        account.enabled and account.browser_followback_enabled
+                    ),
+                )
+                if (
+                    body.action_type == "followback"
+                    and not settings["followback_enabled"]
+                ):
+                    return _json({"claimed": False})
+                claimed = database.claim_browser_action(
+                    body.account_id,
+                    body.action_type,
+                    body.action_key,
+                    body.owner_id,
+                    body.timestamp_ms,
+                    body.lease_seconds,
+                )
         except (KeyError, TypeError, ValueError, ValidationError):
             return _json({"error": "invalid browser request"}, 400)
         return _json({"claimed": claimed})
@@ -624,8 +627,8 @@ def create_app(
                 "accounts": accounts,
                 "conversations": conversations,
                 "selected": selected,
-                "funnel": database.lead_funnel_snapshot(),
-                "sales": database.lead_sales_snapshot(),
+                "funnel": database.lead_funnel_snapshot(account_ids=account_ids),
+                "sales": database.lead_sales_snapshot(account_ids=account_ids),
             }
         )
 
@@ -646,6 +649,8 @@ def create_app(
             )
         except KeyError:
             return _json({"error": "lead conversation not found"}, 404)
+        except OperatorCommandConflict as error:
+            return _json({"error": str(error)}, 409)
 
     @app.post("/api/leads/{account_id}/{conversation_id}/return-to-ai")
     def lead_return_to_ai(
@@ -713,6 +718,8 @@ def create_app(
             )
         except KeyError:
             return _json({"error": "lead conversation not found"}, 404)
+        except OperatorCommandConflict as error:
+            return _json({"error": str(error)}, 409)
         except ValueError as error:
             return _json({"error": str(error)}, 400)
 
@@ -726,18 +733,21 @@ def create_app(
             account = operator_account(account_id)
         except KeyError:
             return _json({"error": "web account not found"}, 404)
-        return _json(
-            database.set_account_operator_setting(
-                account_id,
-                body.command_id,
-                setting=setting,
-                enabled=body.enabled,
-                default_ai_enabled=(account.enabled and account.browser_dm_enabled),
-                default_followback_enabled=(
-                    account.enabled and account.browser_followback_enabled
-                ),
+        try:
+            return _json(
+                database.set_account_operator_setting(
+                    account_id,
+                    body.command_id,
+                    setting=setting,
+                    enabled=body.enabled,
+                    default_ai_enabled=(account.enabled and account.browser_dm_enabled),
+                    default_followback_enabled=(
+                        account.enabled and account.browser_followback_enabled
+                    ),
+                )
             )
-        )
+        except OperatorCommandConflict as error:
+            return _json({"error": str(error)}, 409)
 
     @app.post("/api/accounts/{account_id}/ai-enable")
     def account_ai_enable(account_id: str, body: AccountEnableCommand) -> JSONResponse:

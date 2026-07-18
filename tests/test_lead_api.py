@@ -144,6 +144,32 @@ def test_takeover_is_idempotent_and_disables_future_ai_plans(tmp_path: Path) -> 
     assert database.get_browser_reply_plan("account-01", "future-message") is None
 
 
+def test_takeover_command_rejects_changed_reason_without_new_side_effects(
+    tmp_path: Path,
+) -> None:
+    app, database = _seeded_app(tmp_path)
+    client = TestClient(app)
+    route = "/api/leads/account-01/conversation-01/takeover"
+
+    first = client.post(
+        route, json={"command_id": "takeover-bound", "reason": "operator"}
+    )
+    conflict = client.post(
+        route, json={"command_id": "takeover-bound", "reason": "manager"}
+    )
+
+    assert first.status_code == 200
+    assert conflict.status_code == 409
+    with sqlite3.connect(database.path) as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM lead_funnel_events WHERE source_key=?",
+                ("operator:takeover-bound",),
+            ).fetchone()[0]
+            == 1
+        )
+
+
 def test_return_to_ai_requires_nonterminal_state_and_no_uncertain_send(
     tmp_path: Path,
 ) -> None:
@@ -235,15 +261,44 @@ def test_manual_reply_plan_is_immutable_and_uses_normal_send_lease_path(
         json={**body, "reply_text": "replacement must not win"},
     )
 
-    assert first.status_code == retry.status_code == 200
-    assert first.json() == retry.json()
+    assert first.status_code == 200
+    assert retry.status_code == 409
     plan = database.browser_reply_plan_by_id(first.json()["plan_id"])
     assert plan is not None
     assert plan.reply_text == "I will follow up personally."
     assert plan.state == "planned"
-    assert database.claim_browser_action(
-        "account-01", "dm_send", str(plan.id), "operator-tab", 5_000, 30
+
+
+def test_manual_reply_command_rejects_changed_inbound_or_text(tmp_path: Path) -> None:
+    app, database = _seeded_app(tmp_path)
+    client = TestClient(app)
+    assert (
+        client.post(
+            "/api/leads/account-01/conversation-01/takeover",
+            json={"command_id": "takeover-manual-bound", "reason": "operator"},
+        ).status_code
+        == 200
     )
+    route = "/api/leads/account-01/conversation-01/manual-reply-plan"
+    body = {
+        "command_id": "manual-bound",
+        "inbound_fingerprint": "message-3",
+        "reply_text": "Original manual reply.",
+    }
+
+    first = client.post(route, json=body)
+    changed_text = client.post(route, json={**body, "reply_text": "Changed reply."})
+    changed_inbound = client.post(
+        route, json={**body, "inbound_fingerprint": "message-2"}
+    )
+
+    assert first.status_code == 200
+    assert changed_text.status_code == changed_inbound.status_code == 409
+    with sqlite3.connect(database.path) as connection:
+        rows = connection.execute(
+            "SELECT reply_text FROM browser_reply_plans WHERE plan_origin='manual'"
+        ).fetchall()
+    assert rows == [("Original manual reply.",)]
 
 
 def test_manual_reply_plans_reuse_one_plan_for_same_inbound_across_commands(
@@ -282,12 +337,13 @@ def test_manual_reply_plans_reuse_one_plan_for_same_inbound_across_commands(
             connection.execute(
                 """
             SELECT COUNT(*) FROM browser_reply_plans
-            WHERE account_id=? AND conversation_id=? AND inbound_fingerprint=?
+            WHERE account_id=? AND conversation_id=? AND plan_origin='manual'
+              AND source_inbound_fingerprint=?
             """,
                 (
                     "account-01",
                     "conversation-01",
-                    "operator-manual:conversation-01:message-1",
+                    "message-1",
                 ),
             ).fetchone()[0]
             == 1
@@ -295,9 +351,8 @@ def test_manual_reply_plans_reuse_one_plan_for_same_inbound_across_commands(
     plan = database.browser_reply_plan_by_id(first.json()["plan_id"])
     assert plan is not None
     assert plan.reply_text == "First immutable manual reply."
-    assert database.claim_browser_action(
-        "account-01", "dm_send", str(plan.id), "operator-tab", 5_000, 30
-    )
+    assert plan.plan_origin == "manual"
+    assert plan.source_inbound_fingerprint == "message-1"
 
 
 def test_ai_off_still_allows_taken_over_manual_plan_to_claim_send_lease(
@@ -344,6 +399,81 @@ def test_ai_off_still_allows_taken_over_manual_plan_to_claim_send_lease(
     assert claim.json() == {"claimed": True}
 
 
+def test_takeover_supersedes_ai_draft_before_atomic_dm_claim(tmp_path: Path) -> None:
+    app, database = _seeded_app(tmp_path)
+    client = TestClient(app)
+    draft = database.get_browser_reply_plan("account-01", "message-3")
+    assert draft is not None
+
+    assert (
+        client.post(
+            "/api/leads/account-01/conversation-01/takeover",
+            json={"command_id": "takeover-before-claim", "reason": "operator"},
+        ).status_code
+        == 200
+    )
+    claim = client.post(
+        "/api/browser-actions/claim",
+        headers={"Origin": "https://www.tiktok.com"},
+        json={
+            "account_id": "account-01",
+            "device_id": "phone-01",
+            "action_type": "dm_send",
+            "action_key": f"dm_send:{draft.id}",
+            "owner_id": "tab-01",
+            "timestamp_ms": 8_000,
+        },
+    )
+
+    assert claim.status_code == 200
+    assert claim.json() == {"claimed": False}
+    with sqlite3.connect(database.path) as connection:
+        assert (
+            connection.execute("SELECT COUNT(*) FROM browser_action_leases").fetchone()[
+                0
+            ]
+            == 0
+        )
+
+
+def test_dm_claim_rejects_plan_id_aliases_and_creates_only_canonical_lease(
+    tmp_path: Path,
+) -> None:
+    app, database = _seeded_app(tmp_path)
+    client = TestClient(app)
+    draft = database.get_browser_reply_plan("account-01", "message-3")
+    assert draft is not None
+    route = "/api/browser-actions/claim"
+    base = {
+        "account_id": "account-01",
+        "device_id": "phone-01",
+        "action_type": "dm_send",
+        "owner_id": "tab-01",
+        "timestamp_ms": 8_000,
+    }
+
+    for alias in (str(draft.id), f"dm_send:+{draft.id}", f"dm_send:0{draft.id}"):
+        response = client.post(
+            route,
+            headers={"Origin": "https://www.tiktok.com"},
+            json={**base, "action_key": alias},
+        )
+        assert response.status_code == 200
+        assert response.json() == {"claimed": False}
+
+    canonical = client.post(
+        route,
+        headers={"Origin": "https://www.tiktok.com"},
+        json={**base, "action_key": f"dm_send:{draft.id}"},
+    )
+    assert canonical.status_code == 200
+    assert canonical.json() == {"claimed": True}
+    with sqlite3.connect(database.path) as connection:
+        assert connection.execute(
+            "SELECT action_key FROM browser_action_leases"
+        ).fetchall() == [(f"dm_send:{draft.id}",)]
+
+
 def test_sale_uses_minor_units_and_account_switches_persist(tmp_path: Path) -> None:
     app, _ = _seeded_app(tmp_path)
     client = TestClient(app)
@@ -360,19 +490,17 @@ def test_sale_uses_minor_units_and_account_switches_persist(tmp_path: Path) -> N
     )
     assert sale.status_code == 200
     assert sale.json()["amount_minor"] == 12_345
-    assert (
-        client.post(
-            "/api/leads/account-01/conversation-01/sale",
-            json={
-                "command_id": "sale-1",
-                "amount_minor": 99_999,
-                "currency": "USD",
-                "status": "confirmed",
-                "occurred_at_ms": 8_000,
-            },
-        ).json()
-        == sale.json()
+    changed_sale = client.post(
+        "/api/leads/account-01/conversation-01/sale",
+        json={
+            "command_id": "sale-1",
+            "amount_minor": 99_999,
+            "currency": "USD",
+            "status": "refunded",
+            "occurred_at_ms": 8_000,
+        },
     )
+    assert changed_sale.status_code == 409
 
     assert (
         client.post(
@@ -396,6 +524,24 @@ def test_sale_uses_minor_units_and_account_switches_persist(tmp_path: Path) -> N
         "confirmed_revenue_minor": {"USD": 12_345},
         "sales": 1,
     }
+
+
+def test_account_setting_command_rejects_changed_enabled_flag(tmp_path: Path) -> None:
+    app, database = _seeded_app(tmp_path)
+    client = TestClient(app)
+    route = "/api/accounts/account-01/ai-enable"
+
+    first = client.post(route, json={"command_id": "ai-bound", "enabled": False})
+    conflict = client.post(route, json={"command_id": "ai-bound", "enabled": True})
+
+    assert first.status_code == 200
+    assert conflict.status_code == 409
+    assert (
+        database.account_operator_settings(
+            "account-01", default_ai_enabled=True, default_followback_enabled=True
+        )["ai_enabled"]
+        is False
+    )
 
 
 def test_disabled_account_readiness_masks_persisted_operator_switches_and_blocks_claims(
@@ -577,7 +723,49 @@ def test_lead_inbox_only_returns_registry_accounts_and_unconfigured_is_empty(
     assert unconfigured["accounts"] == []
     assert unconfigured["conversations"] == []
     assert unconfigured["selected"] is None
+    assert unconfigured["funnel"] == {
+        "dm_inbound": 0,
+        "engaged": 0,
+        "qualified": 0,
+        "invited": 0,
+        "contact_captured": 0,
+        "human_required": 0,
+    }
+    assert unconfigured["sales"] == {
+        "by_status": {},
+        "confirmed_revenue_minor": {},
+        "sales": 0,
+    }
     assert "UNKNOWN_DESTINATION" not in json.dumps(unconfigured)
+
+
+def test_lead_analytics_only_include_registry_accounts(tmp_path: Path) -> None:
+    app, database = _seeded_app(tmp_path)
+    database.record_lead_funnel_event(
+        "removed-account",
+        "removed-buyer",
+        "qualified",
+        "removed-message",
+        conversation_id="removed-conversation",
+        occurred_at_ms=10_000,
+    )
+    database.record_lead_sale(
+        "removed-account",
+        "removed-buyer",
+        amount_minor=99_999,
+        currency="USD",
+        status="confirmed",
+        occurred_at_ms=10_000,
+    )
+
+    payload = TestClient(app).get("/api/leads").json()
+
+    assert payload["funnel"]["qualified"] == 1
+    assert payload["sales"] == {
+        "by_status": {},
+        "confirmed_revenue_minor": {},
+        "sales": 0,
+    }
 
 
 def test_lead_redaction_handles_case_and_whitespace_variants_without_leaking_destination(

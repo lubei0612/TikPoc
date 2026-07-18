@@ -1,3 +1,4 @@
+import hashlib
 import json
 import sqlite3
 from collections.abc import Iterator
@@ -56,6 +57,8 @@ class BrowserReplyPlan:
     reply_text: str
     stage: str
     state: str
+    plan_origin: str = "ai"
+    source_inbound_fingerprint: str = ""
     invitation_included: bool = False
     invitation_evidence_known: bool = False
 
@@ -66,6 +69,10 @@ class BrowserConversationBusy(RuntimeError):
         super().__init__(
             f"conversation has an unresolved uncertain browser reply plan: {plan.id}"
         )
+
+
+class OperatorCommandConflict(ValueError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -92,6 +99,8 @@ def _row_browser_reply_plan(row: sqlite3.Row) -> BrowserReplyPlan:
         reply_text=str(row["reply_text"]),
         stage=str(row["stage"]),
         state=str(row["state"]),
+        plan_origin=str(row["plan_origin"]),
+        source_inbound_fingerprint=str(row["source_inbound_fingerprint"]),
         invitation_included=bool(row["invitation_included"]),
         invitation_evidence_known=bool(row["invitation_evidence_known"]),
     )
@@ -134,6 +143,58 @@ _FUNNEL_STAGES = (
     "human_required",
 )
 _SALE_STATUSES = {"pending", "confirmed", "refunded", "cancelled"}
+
+
+def _canonical_request_json(request: dict[str, object]) -> str:
+    return json.dumps(
+        request, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+
+
+def _legacy_operator_request(
+    command_type: str, result: dict[str, object]
+) -> dict[str, object] | None:
+    if command_type == "return_to_ai":
+        return {}
+    field_sets = {
+        "takeover": ("reason",),
+        "manual_reply": ("inbound_fingerprint", "reply_text"),
+        "sale": ("amount_minor", "currency", "status", "occurred_at_ms"),
+        "ai_enable": ("ai_enabled",),
+        "followback_enable": ("followback_enabled",),
+    }
+    fields = field_sets.get(command_type)
+    if fields is None or any(field not in result for field in fields):
+        return None
+    if command_type == "takeover" and not isinstance(result["reason"], str):
+        return None
+    if command_type == "manual_reply" and not all(
+        isinstance(result[field], str)
+        for field in ("inbound_fingerprint", "reply_text")
+    ):
+        return None
+    if command_type == "sale" and (
+        not isinstance(result["amount_minor"], int)
+        or isinstance(result["amount_minor"], bool)
+        or not isinstance(result["currency"], str)
+        or not isinstance(result["status"], str)
+        or not isinstance(result["occurred_at_ms"], int)
+        or isinstance(result["occurred_at_ms"], bool)
+    ):
+        return None
+    if command_type == "ai_enable":
+        return (
+            {"enabled": result["ai_enabled"]}
+            if isinstance(result["ai_enabled"], bool)
+            else None
+        )
+    if command_type == "followback_enable":
+        return (
+            {"enabled": result["followback_enabled"]}
+            if isinstance(result["followback_enabled"], bool)
+            else None
+        )
+    return {field: result[field] for field in fields}
 
 
 def _canonical_conversation_stage(stage: str) -> str:
@@ -416,6 +477,8 @@ class Database:
                     reply_text TEXT NOT NULL DEFAULT '',
                     stage TEXT NOT NULL DEFAULT 'new',
                     state TEXT NOT NULL DEFAULT 'planning',
+                    plan_origin TEXT NOT NULL DEFAULT 'ai',
+                    source_inbound_fingerprint TEXT NOT NULL DEFAULT '',
                     invitation_included INTEGER NOT NULL DEFAULT 0,
                     invitation_evidence_known INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -454,6 +517,20 @@ class Database:
                     """
                     ALTER TABLE browser_reply_plans
                     ADD COLUMN sent_at_ms INTEGER NOT NULL DEFAULT 0
+                    """
+                )
+            if "plan_origin" not in browser_reply_plan_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE browser_reply_plans
+                    ADD COLUMN plan_origin TEXT NOT NULL DEFAULT 'ai'
+                    """
+                )
+            if "source_inbound_fingerprint" not in browser_reply_plan_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE browser_reply_plans
+                    ADD COLUMN source_inbound_fingerprint TEXT NOT NULL DEFAULT ''
                     """
                 )
             connection.execute(
@@ -503,10 +580,145 @@ class Database:
                     account_id TEXT NOT NULL,
                     conversation_id TEXT NOT NULL DEFAULT '',
                     command_id TEXT NOT NULL,
+                    request_json TEXT,
                     result_json TEXT NOT NULL,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY(command_type, account_id, conversation_id, command_id)
                 )
+                """
+            )
+            operator_command_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(operator_lead_commands)"
+                )
+            }
+            if "request_json" not in operator_command_columns:
+                connection.execute(
+                    "ALTER TABLE operator_lead_commands ADD COLUMN request_json TEXT"
+                )
+            legacy_commands = connection.execute(
+                """
+                SELECT command_type, account_id, conversation_id, command_id,
+                       result_json
+                FROM operator_lead_commands WHERE request_json IS NULL
+                """
+            ).fetchall()
+            for command in legacy_commands:
+                try:
+                    result = json.loads(str(command["result_json"]))
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                if not isinstance(result, dict):
+                    continue
+                request = _legacy_operator_request(str(command["command_type"]), result)
+                if request is None:
+                    continue
+                connection.execute(
+                    """
+                    UPDATE operator_lead_commands SET request_json=?
+                    WHERE command_type=? AND account_id=? AND conversation_id=?
+                      AND command_id=? AND request_json IS NULL
+                    """,
+                    (
+                        _canonical_request_json(request),
+                        command["command_type"],
+                        command["account_id"],
+                        command["conversation_id"],
+                        command["command_id"],
+                    ),
+                )
+
+            connection.execute(
+                "DROP INDEX IF EXISTS browser_reply_plans_manual_source_uq"
+            )
+            manual_sources: dict[int, set[tuple[str, str, str]]] = {}
+            for command in connection.execute(
+                """
+                SELECT account_id, conversation_id, result_json
+                FROM operator_lead_commands WHERE command_type='manual_reply'
+                """
+            ):
+                try:
+                    result = json.loads(str(command["result_json"]))
+                    plan_id = int(result["plan_id"])
+                    source = str(result["inbound_fingerprint"])
+                except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                if plan_id <= 0 or not source.strip():
+                    continue
+                manual_sources.setdefault(plan_id, set()).add(
+                    (
+                        str(command["account_id"]),
+                        str(command["conversation_id"]),
+                        source,
+                    )
+                )
+            for plan_id, identities in manual_sources.items():
+                if len(identities) != 1:
+                    continue
+                account_id, conversation_id, source = next(iter(identities))
+                connection.execute(
+                    """
+                    UPDATE browser_reply_plans
+                    SET plan_origin='manual', source_inbound_fingerprint=?
+                    WHERE id=? AND account_id=? AND conversation_id=?
+                      AND inbound_fingerprint LIKE 'operator-manual:%'
+                    """,
+                    (source, plan_id, account_id, conversation_id),
+                )
+            connection.execute(
+                """
+                UPDATE browser_reply_plans
+                SET source_inbound_fingerprint=inbound_fingerprint
+                WHERE plan_origin='ai' AND source_inbound_fingerprint=''
+                  AND inbound_fingerprint NOT LIKE 'operator-manual:%'
+                """
+            )
+            connection.execute(
+                """
+                UPDATE browser_reply_plans
+                SET state='superseded', updated_at=CURRENT_TIMESTAMP
+                WHERE plan_origin='ai' AND inbound_fingerprint LIKE 'operator-manual:%'
+                  AND state IN ('planning', 'planned')
+                """
+            )
+            duplicate_manual_plans = connection.execute(
+                """
+                SELECT id, account_id, conversation_id, source_inbound_fingerprint
+                FROM browser_reply_plans
+                WHERE plan_origin='manual' AND source_inbound_fingerprint != ''
+                  AND state IN ('planning', 'planned', 'uncertain')
+                ORDER BY account_id, conversation_id, source_inbound_fingerprint, id
+                """
+            ).fetchall()
+            seen_manual_sources: set[tuple[str, str, str]] = set()
+            for plan in duplicate_manual_plans:
+                identity = (
+                    str(plan["account_id"]),
+                    str(plan["conversation_id"]),
+                    str(plan["source_inbound_fingerprint"]),
+                )
+                if identity in seen_manual_sources:
+                    connection.execute(
+                        """
+                        UPDATE browser_reply_plans
+                        SET state='superseded', updated_at=CURRENT_TIMESTAMP
+                        WHERE id=?
+                        """,
+                        (int(plan["id"]),),
+                    )
+                else:
+                    seen_manual_sources.add(identity)
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS browser_reply_plans_manual_source_uq
+                ON browser_reply_plans(
+                    account_id, conversation_id, plan_origin,
+                    source_inbound_fingerprint
+                )
+                WHERE plan_origin='manual' AND source_inbound_fingerprint != ''
+                  AND state IN ('planning', 'planned', 'uncertain')
                 """
             )
             connection.execute(
@@ -1058,8 +1270,9 @@ class Database:
                 INSERT OR IGNORE INTO browser_reply_plans(
                     account_id, conversation_id, inbound_fingerprint,
                     participant_username, inbound_text, inbound_timestamp_ms,
-                    created_at_ms
-                ) VALUES (?, ?, ?, ?, ?, ?, CAST(strftime('%s', 'now') AS INTEGER) * 1000)
+                    plan_origin, source_inbound_fingerprint, created_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, 'ai', ?,
+                          CAST(strftime('%s', 'now') AS INTEGER) * 1000)
                 """,
                 (
                     account_id,
@@ -1068,6 +1281,7 @@ class Database:
                     participant_username,
                     inbound_text,
                     int(inbound_timestamp_ms),
+                    inbound_fingerprint,
                 ),
             )
             row = connection.execute(
@@ -1121,8 +1335,9 @@ class Database:
                 """
                 INSERT OR IGNORE INTO browser_reply_plans(
                     account_id, conversation_id, inbound_fingerprint,
-                    participant_username, inbound_text, inbound_timestamp_ms
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    participant_username, inbound_text, inbound_timestamp_ms,
+                    plan_origin, source_inbound_fingerprint
+                ) VALUES (?, ?, ?, ?, ?, ?, 'ai', ?)
                 """,
                 (
                     account_id,
@@ -1131,6 +1346,7 @@ class Database:
                     participant_username,
                     inbound_text,
                     int(inbound_timestamp_ms),
+                    inbound_fingerprint,
                 ),
             )
             created = cursor.rowcount == 1
@@ -1595,14 +1811,31 @@ class Database:
             )
             return cursor.rowcount == 1
 
-    def lead_funnel_snapshot(self) -> dict[str, int]:
+    def lead_funnel_snapshot(
+        self, *, account_ids: tuple[str, ...] | None = None
+    ) -> dict[str, int]:
+        if account_ids == ():
+            return {stage: 0 for stage in _FUNNEL_STAGES}
         with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT stage, COUNT(*) AS count
-                FROM lead_funnel_events GROUP BY stage
-                """
-            ).fetchall()
+            if account_ids is None:
+                rows = connection.execute(
+                    """
+                    SELECT stage, COUNT(*) AS count
+                    FROM lead_funnel_events GROUP BY stage
+                    """
+                ).fetchall()
+            else:
+                bounded_ids = tuple(dict.fromkeys(account_ids))[:100]
+                placeholders = ", ".join("?" for _ in bounded_ids)
+                rows = connection.execute(
+                    f"""
+                    SELECT stage, COUNT(*) AS count
+                    FROM lead_funnel_events
+                    WHERE account_id IN ({placeholders})
+                    GROUP BY stage
+                    """,
+                    bounded_ids,
+                ).fetchall()
         counts = {str(row["stage"]): int(row["count"]) for row in rows}
         return {stage: counts.get(stage, 0) for stage in _FUNNEL_STAGES}
 
@@ -1678,15 +1911,33 @@ class Database:
             )
             return int(cursor.lastrowid)
 
-    def lead_sales_snapshot(self) -> dict[str, object]:
+    def lead_sales_snapshot(
+        self, *, account_ids: tuple[str, ...] | None = None
+    ) -> dict[str, object]:
+        if account_ids == ():
+            return {"by_status": {}, "confirmed_revenue_minor": {}, "sales": 0}
         with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT status, currency, COUNT(*) AS count,
-                       SUM(amount_minor) AS amount_minor
-                FROM lead_sales GROUP BY status, currency
-                """
-            ).fetchall()
+            if account_ids is None:
+                rows = connection.execute(
+                    """
+                    SELECT status, currency, COUNT(*) AS count,
+                           SUM(amount_minor) AS amount_minor
+                    FROM lead_sales GROUP BY status, currency
+                    """
+                ).fetchall()
+            else:
+                bounded_ids = tuple(dict.fromkeys(account_ids))[:100]
+                placeholders = ", ".join("?" for _ in bounded_ids)
+                rows = connection.execute(
+                    f"""
+                    SELECT status, currency, COUNT(*) AS count,
+                           SUM(amount_minor) AS amount_minor
+                    FROM lead_sales
+                    WHERE account_id IN ({placeholders})
+                    GROUP BY status, currency
+                    """,
+                    bounded_ids,
+                ).fetchall()
         by_status: dict[str, int] = {}
         revenue: dict[str, int] = {}
         sales = 0
@@ -1711,16 +1962,25 @@ class Database:
         account_id: str,
         conversation_id: str,
         command_id: str,
+        request: dict[str, object],
     ) -> dict[str, object] | None:
         row = connection.execute(
             """
-            SELECT result_json FROM operator_lead_commands
+            SELECT request_json, result_json FROM operator_lead_commands
             WHERE command_type=? AND account_id=? AND conversation_id=?
               AND command_id=?
             """,
             (command_type, account_id, conversation_id, command_id),
         ).fetchone()
-        return None if row is None else json.loads(str(row["result_json"]))
+        if row is None:
+            return None
+        if row["request_json"] is None or str(
+            row["request_json"]
+        ) != _canonical_request_json(request):
+            raise OperatorCommandConflict(
+                "command_id was already used with different request content"
+            )
+        return json.loads(str(row["result_json"]))
 
     @staticmethod
     def _store_operator_result(
@@ -1729,19 +1989,22 @@ class Database:
         account_id: str,
         conversation_id: str,
         command_id: str,
+        request: dict[str, object],
         result: dict[str, object],
     ) -> None:
         connection.execute(
             """
             INSERT INTO operator_lead_commands(
-                command_type, account_id, conversation_id, command_id, result_json
-            ) VALUES (?, ?, ?, ?, ?)
+                command_type, account_id, conversation_id, command_id,
+                request_json, result_json
+            ) VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
                 command_type,
                 account_id,
                 conversation_id,
                 command_id,
+                _canonical_request_json(request),
                 json.dumps(result, ensure_ascii=False, sort_keys=True),
             ),
         )
@@ -1795,10 +2058,11 @@ class Database:
         if setting not in fields:
             raise ValueError("invalid account setting")
         command_type = f"{setting}_enable"
+        request: dict[str, object] = {"enabled": bool(enabled)}
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             stored = self._stored_operator_result(
-                connection, command_type, account_id, "", command_id
+                connection, command_type, account_id, "", command_id, request
             )
             if stored is not None:
                 return stored
@@ -1827,7 +2091,13 @@ class Database:
                 field: bool(enabled),
             }
             self._store_operator_result(
-                connection, command_type, account_id, "", command_id, result
+                connection,
+                command_type,
+                account_id,
+                "",
+                command_id,
+                request,
+                result,
             )
             return result
 
@@ -1911,10 +2181,16 @@ class Database:
         occurred_at_ms: int,
     ) -> dict[str, object]:
         _require_identity(account_id, conversation_id, command_id, reason)
+        request: dict[str, object] = {"reason": reason}
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             stored = self._stored_operator_result(
-                connection, "takeover", account_id, conversation_id, command_id
+                connection,
+                "takeover",
+                account_id,
+                conversation_id,
+                command_id,
+                request,
             )
             if stored is not None:
                 return stored
@@ -1943,6 +2219,7 @@ class Database:
                     account_id,
                     conversation_id,
                     command_id,
+                    request,
                     result,
                 )
                 return result
@@ -1995,6 +2272,7 @@ class Database:
                 account_id,
                 conversation_id,
                 command_id,
+                request,
                 result,
             )
             return result
@@ -2008,10 +2286,16 @@ class Database:
         account_ai_enabled: bool,
     ) -> dict[str, object]:
         _require_identity(account_id, conversation_id, command_id)
+        request: dict[str, object] = {}
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             stored = self._stored_operator_result(
-                connection, "return_to_ai", account_id, conversation_id, command_id
+                connection,
+                "return_to_ai",
+                account_id,
+                conversation_id,
+                command_id,
+                request,
             )
             if stored is not None:
                 return stored
@@ -2054,6 +2338,7 @@ class Database:
                 account_id,
                 conversation_id,
                 command_id,
+                request,
                 result,
             )
             return result
@@ -2074,25 +2359,40 @@ class Database:
             command_id,
             inbound_fingerprint,
         )
+        request: dict[str, object] = {
+            "inbound_fingerprint": inbound_fingerprint,
+            "reply_text": reply_text,
+        }
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             stored = self._stored_operator_result(
-                connection, "manual_reply", account_id, conversation_id, command_id
+                connection,
+                "manual_reply",
+                account_id,
+                conversation_id,
+                command_id,
+                request,
             )
             if stored is not None:
                 return stored
-            # A manual draft is keyed by the selected inbound, not by the
-            # operator command. This keeps retries from creating a second
-            # outbound plan while retaining the manual-send lease marker.
+            plan_identity = _canonical_request_json(
+                {
+                    "account_id": account_id,
+                    "conversation_id": conversation_id,
+                    "source_inbound_fingerprint": inbound_fingerprint,
+                }
+            )
             plan_fingerprint = (
-                f"operator-manual:{conversation_id}:{inbound_fingerprint}"
+                "manual:" + hashlib.sha256(plan_identity.encode("utf-8")).hexdigest()
             )
             existing = connection.execute(
                 """
                 SELECT * FROM browser_reply_plans
-                WHERE account_id=? AND conversation_id=? AND inbound_fingerprint=?
+                WHERE account_id=? AND conversation_id=? AND plan_origin='manual'
+                  AND source_inbound_fingerprint=?
+                ORDER BY id LIMIT 1
                 """,
-                (account_id, conversation_id, plan_fingerprint),
+                (account_id, conversation_id, inbound_fingerprint),
             ).fetchone()
             if existing is not None:
                 result: dict[str, object] = {
@@ -2109,6 +2409,7 @@ class Database:
                     account_id,
                     conversation_id,
                     command_id,
+                    request,
                     result,
                 )
                 return result
@@ -2150,8 +2451,8 @@ class Database:
                     account_id, conversation_id, inbound_fingerprint,
                     participant_username, inbound_text, inbound_timestamp_ms,
                     reply_text, stage, state, invitation_evidence_known,
-                    created_at_ms
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'planned', 1, ?)
+                    created_at_ms, plan_origin, source_inbound_fingerprint
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'planned', 1, ?, 'manual', ?)
                 """,
                 (
                     account_id,
@@ -2163,15 +2464,18 @@ class Database:
                     reply_text,
                     str(conversation["stage"]),
                     int(now_ms),
+                    inbound_fingerprint,
                 ),
             )
             if cursor.rowcount != 1:
                 existing = connection.execute(
                     """
                     SELECT * FROM browser_reply_plans
-                    WHERE account_id=? AND conversation_id=? AND inbound_fingerprint=?
+                    WHERE account_id=? AND conversation_id=? AND plan_origin='manual'
+                      AND source_inbound_fingerprint=?
+                    ORDER BY id LIMIT 1
                     """,
-                    (account_id, conversation_id, plan_fingerprint),
+                    (account_id, conversation_id, inbound_fingerprint),
                 ).fetchone()
                 assert existing is not None
                 result = {
@@ -2188,6 +2492,7 @@ class Database:
                     account_id,
                     conversation_id,
                     command_id,
+                    request,
                     result,
                 )
                 return result
@@ -2205,32 +2510,86 @@ class Database:
                 account_id,
                 conversation_id,
                 command_id,
+                request,
                 result,
             )
             return result
 
-    def manual_reply_action_allowed(self, account_id: str, action_key: str) -> bool:
-        _require_identity(account_id, action_key)
-        raw_plan_id = action_key.removeprefix("dm_send:")
-        try:
-            plan_id = int(raw_plan_id)
-        except ValueError:
+    def claim_browser_dm_action(
+        self,
+        account_id: str,
+        action_key: str,
+        owner_id: str,
+        now_ms: int,
+        lease_seconds: int = 30,
+        *,
+        default_ai_enabled: bool,
+        account_ai_allowed: bool = True,
+    ) -> bool:
+        _require_identity(account_id, action_key, owner_id)
+        prefix = "dm_send:"
+        raw_plan_id = action_key[len(prefix) :] if action_key.startswith(prefix) else ""
+        if (
+            not raw_plan_id
+            or raw_plan_id[0] == "0"
+            or any(character < "0" or character > "9" for character in raw_plan_id)
+        ):
             return False
+        plan_id = int(raw_plan_id)
+        if plan_id <= 0:
+            return False
+        expires_at_ms = int(now_ms) + max(1, int(lease_seconds)) * 1_000
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 """
-                SELECT 1
+                SELECT plan.plan_origin, plan.state,
+                       conversation.stage, conversation.human_required,
+                       COALESCE(settings.ai_enabled, ?) AS ai_enabled
                 FROM browser_reply_plans AS plan
                 JOIN web_conversations AS conversation
-                  ON conversation.account_id = plan.account_id
-                 AND conversation.conversation_id = plan.conversation_id
-                WHERE plan.id=? AND plan.account_id=? AND plan.state='planned'
-                  AND plan.inbound_fingerprint LIKE 'operator-manual:%'
-                  AND conversation.stage='human_required'
+                  ON conversation.account_id=plan.account_id
+                 AND conversation.conversation_id=plan.conversation_id
+                LEFT JOIN web_account_settings AS settings
+                  ON settings.account_id=plan.account_id
+                WHERE plan.id=? AND plan.account_id=?
                 """,
-                (plan_id, account_id),
+                (int(default_ai_enabled), plan_id, account_id),
             ).fetchone()
-        return row is not None
+            if row is None or str(row["state"]) != "planned":
+                return False
+            origin = str(row["plan_origin"])
+            stage = _canonical_conversation_stage(str(row["stage"]))
+            if origin == "manual":
+                permitted = stage == "human_required" and bool(row["human_required"])
+            elif origin == "ai":
+                permitted = (
+                    account_ai_allowed
+                    and bool(row["ai_enabled"])
+                    and not bool(row["human_required"])
+                    and stage not in {"contact_captured", "human_required", "closed"}
+                )
+            else:
+                permitted = False
+            if not permitted:
+                return False
+            cursor = connection.execute(
+                """
+                INSERT INTO browser_action_leases(
+                    account_id, action_type, action_key, owner_id,
+                    lease_expires_at_ms, state
+                ) VALUES (?, 'dm_send', ?, ?, ?, 'claimed')
+                ON CONFLICT(account_id, action_type, action_key) DO UPDATE SET
+                    owner_id=excluded.owner_id,
+                    lease_expires_at_ms=excluded.lease_expires_at_ms,
+                    state='claimed',
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE browser_action_leases.state != 'completed'
+                  AND browser_action_leases.lease_expires_at_ms <= ?
+                """,
+                (account_id, action_key, owner_id, expires_at_ms, int(now_ms)),
+            )
+            return cursor.rowcount == 1
 
     def record_lead_sale_command(
         self,
@@ -2250,10 +2609,21 @@ class Database:
             raise ValueError("sale currency must be three uppercase ASCII letters")
         if status not in _SALE_STATUSES:
             raise ValueError(f"invalid sale status: {status}")
+        request: dict[str, object] = {
+            "amount_minor": int(amount_minor),
+            "currency": currency,
+            "status": status,
+            "occurred_at_ms": int(occurred_at_ms),
+        }
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             stored = self._stored_operator_result(
-                connection, "sale", account_id, conversation_id, command_id
+                connection,
+                "sale",
+                account_id,
+                conversation_id,
+                command_id,
+                request,
             )
             if stored is not None:
                 return stored
@@ -2297,6 +2667,7 @@ class Database:
                 account_id,
                 conversation_id,
                 command_id,
+                request,
                 result,
             )
             return result

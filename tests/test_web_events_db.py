@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
@@ -507,6 +508,8 @@ def test_browser_storage_migration_backfills_existing_invitation_column(
             for row in connection.execute("PRAGMA table_info(browser_reply_plans)")
         }
     assert plan_columns["invitation_evidence_known"]["dflt_value"] == "0"
+    assert plan_columns["plan_origin"]["dflt_value"] == "'ai'"
+    assert plan_columns["source_inbound_fingerprint"]["dflt_value"] == "''"
     database.append_web_message(
         "account-01",
         "conversation-01",
@@ -681,6 +684,253 @@ def test_reply_plan_duplicates_preserve_original_and_are_account_scoped(
     assert database.get_browser_reply_plan("account-03", "fp-01") is None
     assert database.browser_reply_plan_by_id(first.id) == first
     assert database.browser_reply_plan_by_id(99_999) is None
+
+
+def test_reply_plans_store_structured_ai_origin_and_source(tmp_path: Path) -> None:
+    database = Database(tmp_path / "tasks.db")
+    database.migrate()
+
+    plan, created = database.reserve_browser_reply_plan(
+        "account-01", "conversation-01", "fp-01", "buyer", "hello", 1_000
+    )
+
+    assert created is True
+    assert plan.plan_origin == "ai"
+    assert plan.source_inbound_fingerprint == "fp-01"
+
+
+def test_migration_recovers_legacy_manual_source_and_supersedes_unresolved_plan(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "tasks.db")
+    database.migrate()
+    database.append_web_message(
+        "account-01",
+        "conversation-01",
+        "source:with:delimiters",
+        direction="inbound",
+        message_type="TEXT",
+        text="hello",
+        timestamp_ms=1_000,
+        participant_username="buyer",
+    )
+    with sqlite3.connect(database.path) as connection:
+        recovered = connection.execute(
+            """
+            INSERT INTO browser_reply_plans(
+                account_id, conversation_id, inbound_fingerprint,
+                inbound_timestamp_ms, reply_text, state
+            ) VALUES ('account-01', 'conversation-01',
+                      'operator-manual:conversation-01:source:with:delimiters',
+                      1000, 'legacy reply', 'planned')
+            """
+        )
+        unresolved = connection.execute(
+            """
+            INSERT INTO browser_reply_plans(
+                account_id, conversation_id, inbound_fingerprint,
+                inbound_timestamp_ms, reply_text, state
+            ) VALUES ('account-01', 'conversation-01',
+                      'operator-manual:unresolved', 1000,
+                      'unresolved reply', 'planned')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO operator_lead_commands(
+                command_type, account_id, conversation_id, command_id, result_json
+            ) VALUES ('manual_reply', 'account-01', 'conversation-01', 'legacy', ?)
+            """,
+            (
+                json.dumps(
+                    {
+                        "account_id": "account-01",
+                        "conversation_id": "conversation-01",
+                        "plan_id": recovered.lastrowid,
+                        "inbound_fingerprint": "source:with:delimiters",
+                        "reply_text": "legacy reply",
+                        "state": "planned",
+                    }
+                ),
+            ),
+        )
+
+    database.migrate()
+
+    recovered_plan = database.browser_reply_plan_by_id(int(recovered.lastrowid))
+    unresolved_plan = database.browser_reply_plan_by_id(int(unresolved.lastrowid))
+    assert recovered_plan is not None
+    assert recovered_plan.plan_origin == "manual"
+    assert recovered_plan.source_inbound_fingerprint == "source:with:delimiters"
+    assert recovered_plan.state == "planned"
+    assert unresolved_plan is not None
+    assert unresolved_plan.state == "superseded"
+
+
+def test_migration_reconciles_legacy_and_structured_manual_plan_collision(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "tasks.db")
+    database.migrate()
+    database.append_web_message(
+        "account-01",
+        "conversation-01",
+        "source-01",
+        direction="inbound",
+        message_type="TEXT",
+        text="hello",
+        timestamp_ms=1_000,
+        participant_username="buyer",
+    )
+    with sqlite3.connect(database.path) as connection:
+        connection.execute(
+            """
+            UPDATE web_conversations SET stage='human_required', human_required=1
+            WHERE account_id='account-01' AND conversation_id='conversation-01'
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO browser_reply_plans(
+                account_id, conversation_id, inbound_fingerprint,
+                inbound_timestamp_ms, reply_text, state, plan_origin,
+                source_inbound_fingerprint
+            ) VALUES ('account-01', 'conversation-01', 'manual:structured',
+                      1000, 'structured reply', 'planned', 'manual', 'source-01')
+            """
+        )
+        legacy = connection.execute(
+            """
+            INSERT INTO browser_reply_plans(
+                account_id, conversation_id, inbound_fingerprint,
+                inbound_timestamp_ms, reply_text, state
+            ) VALUES ('account-01', 'conversation-01',
+                      'operator-manual:conversation-01:source-01',
+                      1000, 'legacy reply', 'planned')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO operator_lead_commands(
+                command_type, account_id, conversation_id, command_id, result_json
+            ) VALUES ('manual_reply', 'account-01', 'conversation-01', 'legacy', ?)
+            """,
+            (
+                json.dumps(
+                    {
+                        "plan_id": legacy.lastrowid,
+                        "inbound_fingerprint": "source-01",
+                        "reply_text": "legacy reply",
+                    }
+                ),
+            ),
+        )
+
+    database.migrate()
+
+    with sqlite3.connect(database.path) as connection:
+        assert (
+            connection.execute(
+                """
+            SELECT COUNT(*) FROM browser_reply_plans
+            WHERE account_id='account-01' AND conversation_id='conversation-01'
+              AND plan_origin='manual' AND source_inbound_fingerprint='source-01'
+              AND state IN ('planning', 'planned', 'uncertain')
+            """
+            ).fetchone()[0]
+            == 1
+        )
+
+
+def test_migration_reconstructs_legacy_operator_request_json(tmp_path: Path) -> None:
+    database = Database(tmp_path / "tasks.db")
+    database.migrate()
+    with sqlite3.connect(database.path) as connection:
+        connection.execute(
+            """
+            INSERT INTO operator_lead_commands(
+                command_type, account_id, conversation_id, command_id, result_json
+            ) VALUES ('takeover', 'account-01', 'conversation-01', 'legacy', ?)
+            """,
+            (
+                json.dumps(
+                    {
+                        "account_id": "account-01",
+                        "conversation_id": "conversation-01",
+                        "stage": "human_required",
+                        "human_required": True,
+                        "reason": "operator",
+                    }
+                ),
+            ),
+        )
+
+    database.migrate()
+
+    with sqlite3.connect(database.path) as connection:
+        request_json = connection.execute(
+            "SELECT request_json FROM operator_lead_commands WHERE command_id='legacy'"
+        ).fetchone()[0]
+    assert json.loads(request_json) == {"reason": "operator"}
+
+
+def test_atomic_dm_claim_has_one_winner_and_rejects_aliases(tmp_path: Path) -> None:
+    path = tmp_path / "tasks.db"
+    database = Database(path)
+    database.migrate()
+    database.append_web_message(
+        "account-01",
+        "conversation-01",
+        "message-01",
+        direction="inbound",
+        message_type="TEXT",
+        text="hello",
+        timestamp_ms=1_000,
+        participant_username="buyer",
+    )
+    plan, _ = database.reserve_browser_reply_plan(
+        "account-01", "conversation-01", "message-01", "buyer", "hello", 1_000
+    )
+    database.complete_browser_reply_plan(plan.id, reply_text="reply", stage="engaged")
+    aliases = (str(plan.id), f"dm_send:+{plan.id}", f"dm_send:0{plan.id}")
+
+    for alias in aliases:
+        assert not database.claim_browser_dm_action(
+            "account-01",
+            alias,
+            "alias-owner",
+            1_000,
+            30,
+            default_ai_enabled=True,
+        )
+
+    barrier = Barrier(2)
+
+    def claim(owner_id: str) -> bool:
+        barrier.wait()
+        return Database(path).claim_browser_dm_action(
+            "account-01",
+            f"dm_send:{plan.id}",
+            owner_id,
+            1_000,
+            30,
+            default_ai_enabled=True,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = [
+            future.result()
+            for future in (
+                executor.submit(claim, "tab-a"),
+                executor.submit(claim, "tab-b"),
+            )
+        ]
+
+    assert results.count(True) == 1
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT action_key FROM browser_action_leases"
+        ).fetchall() == [(f"dm_send:{plan.id}",)]
 
 
 @pytest.mark.parametrize(

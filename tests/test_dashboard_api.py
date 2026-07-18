@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -203,14 +204,14 @@ def _browser_post_bodies() -> dict[str, dict[str, object]]:
         "/api/browser-actions/claim": {
             **identity,
             "action_type": "dm_send",
-            "action_key": "plan-guard",
+            "action_key": "dm_send:17",
             "owner_id": "tab-a",
             "timestamp_ms": 1_000,
         },
         "/api/browser-actions/result": {
             **identity,
             "action_type": "dm_send",
-            "action_key": "plan-guard",
+            "action_key": "dm_send:17",
             "owner_id": "tab-a",
             "state": "completed",
         },
@@ -933,6 +934,31 @@ def test_fastapi_browser_routes_preserve_responses_and_exact_cors(
     planned = client.post(
         "/api/browser-dm/reply-plan", json=_browser_inbound_body(), headers=headers
     )
+    database = Database(tmp_path / "fastapi.db")
+    database.append_web_message(
+        "account-01",
+        "conversation-01",
+        "fp-01",
+        direction="inbound",
+        message_type="TEXT",
+        text="hello",
+        timestamp_ms=1_720_000_000_000,
+        participant_username="prospect",
+    )
+    with sqlite3.connect(database.path) as connection:
+        connection.execute(
+            """
+            INSERT INTO browser_reply_plans(
+                id, account_id, conversation_id, inbound_fingerprint,
+                participant_username, inbound_text, inbound_timestamp_ms,
+                reply_text, stage, state, plan_origin,
+                source_inbound_fingerprint
+            ) VALUES (17, 'account-01', 'conversation-01', 'fp-01',
+                      'prospect', 'hello', 1720000000000,
+                      'Thanks. WhatsApp: +1 555 0100', 'invited', 'planned',
+                      'ai', 'fp-01')
+            """
+        )
     result = client.post(
         "/api/browser-dm/reply-result",
         json={
