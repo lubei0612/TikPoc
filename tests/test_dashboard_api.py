@@ -336,6 +336,7 @@ def test_browser_post_routes_reject_malformed_chrome_extension_origins(
         database_path,
         web_account_registry=_registry(tmp_path),
         browser_dm_service=service,
+        browser_extension_origins=(origin,),
     )
     try:
         with pytest.raises(HTTPError) as raised:
