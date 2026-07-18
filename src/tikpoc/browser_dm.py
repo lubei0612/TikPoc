@@ -235,6 +235,13 @@ class BrowserDmService:
                 raise KeyError(plan_id)
             if plan.account_id != account.account_id:
                 raise ValueError("browser reply plan belongs to a different account")
+            self.database.reconcile_browser_reply_invitation_evidence(
+                account.account_id,
+                plan.id,
+                private_channel_hint=_normalize_whitespace(
+                    account.private_channel_hint
+                ),
+            )
             return self.database.record_browser_reply_result(
                 account.account_id,
                 plan.id,

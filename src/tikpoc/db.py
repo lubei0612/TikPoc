@@ -57,6 +57,7 @@ class BrowserReplyPlan:
     stage: str
     state: str
     invitation_included: bool = False
+    invitation_evidence_known: bool = False
 
 
 class BrowserConversationBusy(RuntimeError):
@@ -92,6 +93,7 @@ def _row_browser_reply_plan(row: sqlite3.Row) -> BrowserReplyPlan:
         stage=str(row["stage"]),
         state=str(row["state"]),
         invitation_included=bool(row["invitation_included"]),
+        invitation_evidence_known=bool(row["invitation_evidence_known"]),
     )
 
 
@@ -406,6 +408,7 @@ class Database:
                     stage TEXT NOT NULL DEFAULT 'new',
                     state TEXT NOT NULL DEFAULT 'planning',
                     invitation_included INTEGER NOT NULL DEFAULT 0,
+                    invitation_evidence_known INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(account_id, inbound_fingerprint)
@@ -423,6 +426,13 @@ class Database:
                     ADD COLUMN invitation_included INTEGER NOT NULL DEFAULT 0
                     """
                 )
+            if "invitation_evidence_known" not in browser_reply_plan_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE browser_reply_plans
+                    ADD COLUMN invitation_evidence_known INTEGER NOT NULL DEFAULT 0
+                    """
+                )
             connection.execute(
                 """
                 UPDATE browser_reply_plans SET stage='qualified'
@@ -431,10 +441,8 @@ class Database:
             )
             connection.execute(
                 """
-                UPDATE browser_reply_plans SET invitation_included=1
-                WHERE invitation_included=0 AND stage='invited'
-                  AND state IN ('planned', 'uncertain')
-                  AND TRIM(reply_text) != ''
+                UPDATE browser_reply_plans SET invitation_evidence_known=1
+                WHERE invitation_included=1
                 """
             )
             connection.execute(
@@ -1229,6 +1237,7 @@ class Database:
                 """
                 UPDATE browser_reply_plans
                 SET reply_text=?, stage=?, state='planned', invitation_included=?,
+                    invitation_evidence_known=1,
                     updated_at=CURRENT_TIMESTAMP
                 WHERE id=? AND state='planning'
                 """,
@@ -1264,6 +1273,44 @@ class Database:
             ).fetchone()
             assert completed is not None
             return _row_browser_reply_plan(completed)
+
+    def reconcile_browser_reply_invitation_evidence(
+        self,
+        account_id: str,
+        plan_id: int,
+        *,
+        private_channel_hint: str,
+    ) -> BrowserReplyPlan:
+        _require_identity(account_id)
+        normalized_hint = " ".join(str(private_channel_hint).split())
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM browser_reply_plans WHERE id=?", (int(plan_id),)
+            ).fetchone()
+            if row is None:
+                raise KeyError(plan_id)
+            if row["account_id"] != account_id:
+                raise ValueError("browser reply plan belongs to a different account")
+            if not bool(row["invitation_evidence_known"]):
+                normalized_reply = " ".join(str(row["reply_text"]).split())
+                invitation_included = bool(
+                    normalized_hint and normalized_hint in normalized_reply
+                )
+                connection.execute(
+                    """
+                    UPDATE browser_reply_plans
+                    SET invitation_included=?, invitation_evidence_known=1,
+                        updated_at=CURRENT_TIMESTAMP
+                    WHERE id=? AND invitation_evidence_known=0
+                    """,
+                    (int(invitation_included), int(plan_id)),
+                )
+                row = connection.execute(
+                    "SELECT * FROM browser_reply_plans WHERE id=?", (int(plan_id),)
+                ).fetchone()
+                assert row is not None
+            return _row_browser_reply_plan(row)
 
     def record_browser_diagnostic_event(
         self,
@@ -1402,7 +1449,10 @@ class Database:
                 """,
                 (
                     next_stage,
-                    int(bool(row["invitation_included"])),
+                    int(
+                        bool(row["invitation_evidence_known"])
+                        and bool(row["invitation_included"])
+                    ),
                     int(now_ms),
                     account_id,
                     row["conversation_id"],

@@ -208,6 +208,7 @@ def test_browser_reply_plan_is_frozen() -> None:
         state="planning",
     )
 
+    assert plan.invitation_evidence_known is False
     with pytest.raises(FrozenInstanceError):
         plan.state = "planned"  # type: ignore[misc]
 
@@ -238,6 +239,8 @@ def test_browser_storage_migration_is_additive_and_idempotent(tmp_path: Path) ->
                 ("conversation-01",),
                 ("conversation-invited-planned",),
                 ("conversation-invited-uncertain",),
+                ("conversation-invited-ordinary",),
+                ("conversation-invited-empty-config",),
                 ("conversation-qualifying",),
             ),
         )
@@ -288,6 +291,20 @@ def test_browser_storage_migration_is_additive_and_idempotent(tmp_path: Path) ->
                     "Continue on WhatsApp: +1 555 0100",
                     "invited",
                     "uncertain",
+                ),
+                (
+                    "conversation-invited-ordinary",
+                    "invited-ordinary-fingerprint",
+                    "The current catalog has several options.",
+                    "invited",
+                    "planned",
+                ),
+                (
+                    "conversation-invited-empty-config",
+                    "invited-empty-config-fingerprint",
+                    "Continue on WhatsApp: +1 555 0100",
+                    "invited",
+                    "planned",
                 ),
                 (
                     "conversation-qualifying",
@@ -349,21 +366,39 @@ def test_browser_storage_migration_is_additive_and_idempotent(tmp_path: Path) ->
         assert plan_columns["invitation_included"]["type"] == "INTEGER"
         assert plan_columns["invitation_included"]["notnull"] == 1
         assert plan_columns["invitation_included"]["dflt_value"] == "0"
+        assert plan_columns["invitation_evidence_known"]["type"] == "INTEGER"
+        assert plan_columns["invitation_evidence_known"]["notnull"] == 1
+        assert plan_columns["invitation_evidence_known"]["dflt_value"] == "0"
         migrated_plan = database.get_browser_reply_plan(
             "account-01", "existing-fingerprint"
         )
         assert migrated_plan is not None
         assert migrated_plan.invitation_included is False
+        assert migrated_plan.invitation_evidence_known is False
         invited_planned = database.get_browser_reply_plan(
             "account-01", "invited-planned-fingerprint"
         )
         assert invited_planned is not None
-        assert invited_planned.invitation_included is True
+        assert invited_planned.invitation_included is False
+        assert invited_planned.invitation_evidence_known is False
         invited_uncertain = database.get_browser_reply_plan(
             "account-01", "invited-uncertain-fingerprint"
         )
         assert invited_uncertain is not None
-        assert invited_uncertain.invitation_included is True
+        assert invited_uncertain.invitation_included is False
+        assert invited_uncertain.invitation_evidence_known is False
+        invited_ordinary = database.get_browser_reply_plan(
+            "account-01", "invited-ordinary-fingerprint"
+        )
+        assert invited_ordinary is not None
+        assert invited_ordinary.invitation_included is False
+        assert invited_ordinary.invitation_evidence_known is False
+        invited_empty_config = database.get_browser_reply_plan(
+            "account-01", "invited-empty-config-fingerprint"
+        )
+        assert invited_empty_config is not None
+        assert invited_empty_config.invitation_included is False
+        assert invited_empty_config.invitation_evidence_known is False
         qualifying = database.get_browser_reply_plan(
             "account-01", "qualifying-fingerprint"
         )
@@ -391,18 +426,66 @@ def test_browser_storage_migration_is_additive_and_idempotent(tmp_path: Path) ->
     service = BrowserDmService(
         database,
         WebAccountRegistry(
-            (WebAccount(account_id="account-01", device_id="phone-01", mode="browser"),)
+            (
+                WebAccount(
+                    account_id="account-01",
+                    device_id="phone-01",
+                    mode="browser",
+                    private_channel_hint="WhatsApp: +1 555 0100",
+                ),
+            )
         ),
         object(),
         clock=lambda: 100.0,
     )
     assert service.record_result("account-01", "phone-01", invited_planned.id, "sent")
     assert service.record_result("account-01", "phone-01", invited_uncertain.id, "sent")
+    assert service.record_result("account-01", "phone-01", invited_ordinary.id, "sent")
     assert (
         database.browser_conversation_state(
             "account-01", "conversation-invited-planned"
         ).last_invited_at_ms
         == 100_000
+    )
+    assert (
+        database.browser_conversation_state(
+            "account-01", "conversation-invited-ordinary"
+        ).last_invited_at_ms
+        == 0
+    )
+    reconciled_planned = database.browser_reply_plan_by_id(invited_planned.id)
+    reconciled_uncertain = database.browser_reply_plan_by_id(invited_uncertain.id)
+    reconciled_ordinary = database.browser_reply_plan_by_id(invited_ordinary.id)
+    assert reconciled_planned is not None
+    assert reconciled_planned.invitation_included is True
+    assert reconciled_planned.invitation_evidence_known is True
+    assert reconciled_uncertain is not None
+    assert reconciled_uncertain.invitation_included is True
+    assert reconciled_uncertain.invitation_evidence_known is True
+    assert reconciled_ordinary is not None
+    assert reconciled_ordinary.invitation_included is False
+    assert reconciled_ordinary.invitation_evidence_known is True
+
+    empty_hint_service = BrowserDmService(
+        database,
+        WebAccountRegistry(
+            (WebAccount(account_id="account-01", device_id="phone-01", mode="browser"),)
+        ),
+        object(),
+        clock=lambda: 101.0,
+    )
+    assert empty_hint_service.record_result(
+        "account-01", "phone-01", invited_empty_config.id, "sent"
+    )
+    reconciled_empty = database.browser_reply_plan_by_id(invited_empty_config.id)
+    assert reconciled_empty is not None
+    assert reconciled_empty.invitation_included is False
+    assert reconciled_empty.invitation_evidence_known is True
+    assert (
+        database.browser_conversation_state(
+            "account-01", "conversation-invited-empty-config"
+        ).last_invited_at_ms
+        == 0
     )
     assert (
         database.browser_conversation_state(
@@ -417,6 +500,13 @@ def test_browser_storage_migration_backfills_existing_invitation_column(
 ) -> None:
     database = Database(tmp_path / "tasks.db")
     database.migrate()
+    with sqlite3.connect(database.path) as connection:
+        connection.row_factory = sqlite3.Row
+        plan_columns = {
+            row["name"]: row
+            for row in connection.execute("PRAGMA table_info(browser_reply_plans)")
+        }
+    assert plan_columns["invitation_evidence_known"]["dflt_value"] == "0"
     database.append_web_message(
         "account-01",
         "conversation-01",
@@ -427,19 +517,43 @@ def test_browser_storage_migration_backfills_existing_invitation_column(
         timestamp_ms=1_000,
         participant_username="prospect",
     )
+    database.append_web_message(
+        "account-01",
+        "conversation-known-invitation",
+        "inbound-known",
+        direction="inbound",
+        message_type="TEXT",
+        text="Do you ship?",
+        timestamp_ms=1_000,
+        participant_username="prospect",
+    )
     with sqlite3.connect(database.path) as connection:
-        connection.execute(
+        connection.executemany(
             """
             INSERT INTO browser_reply_plans(
                 account_id, conversation_id, inbound_fingerprint,
                 inbound_timestamp_ms, reply_text, stage, state,
-                invitation_included
-            ) VALUES (
-                'account-01', 'conversation-01', 'legacy-invitation',
-                1000, 'Continue on WhatsApp: +1 555 0100', 'invited',
-                'uncertain', 0
-            )
-            """
+                invitation_included, invitation_evidence_known
+            ) VALUES ('account-01', ?, ?, 1000, ?, 'invited', ?, ?, ?)
+            """,
+            (
+                (
+                    "conversation-01",
+                    "legacy-invitation",
+                    "Continue on WhatsApp: +1 555 0100",
+                    "uncertain",
+                    0,
+                    0,
+                ),
+                (
+                    "conversation-known-invitation",
+                    "known-invitation",
+                    "Continue on WhatsApp: +1 555 0100",
+                    "planned",
+                    1,
+                    0,
+                ),
+            ),
         )
 
     database.migrate()
@@ -447,22 +561,100 @@ def test_browser_storage_migration_backfills_existing_invitation_column(
 
     migrated = database.get_browser_reply_plan("account-01", "legacy-invitation")
     assert migrated is not None
-    assert migrated.invitation_included is True
+    assert migrated.invitation_included is False
+    assert migrated.invitation_evidence_known is False
+    known = database.get_browser_reply_plan("account-01", "known-invitation")
+    assert known is not None
+    assert known.invitation_included is True
+    assert known.invitation_evidence_known is True
     service = BrowserDmService(
         database,
         WebAccountRegistry(
-            (WebAccount(account_id="account-01", device_id="phone-01", mode="browser"),)
+            (
+                WebAccount(
+                    account_id="account-01",
+                    device_id="phone-01",
+                    mode="browser",
+                    private_channel_hint="WhatsApp: +1 555 0100",
+                ),
+            )
         ),
         object(),
         clock=lambda: 100.0,
     )
     assert service.record_result("account-01", "phone-01", migrated.id, "sent")
+    reconciled = database.browser_reply_plan_by_id(migrated.id)
+    assert reconciled is not None
+    assert reconciled.invitation_included is True
+    assert reconciled.invitation_evidence_known is True
     assert (
         database.browser_conversation_state(
             "account-01", "conversation-01"
         ).last_invited_at_ms
         == 100_000
     )
+    reloaded_service = BrowserDmService(
+        database,
+        WebAccountRegistry(
+            (WebAccount(account_id="account-01", device_id="phone-01", mode="browser"),)
+        ),
+        object(),
+        clock=lambda: 101.0,
+    )
+    assert reloaded_service.record_result("account-01", "phone-01", known.id, "sent")
+    assert (
+        database.browser_conversation_state(
+            "account-01", "conversation-known-invitation"
+        ).last_invited_at_ms
+        == 101_000
+    )
+
+
+def test_legacy_invitation_evidence_reconciliation_is_one_time_and_durable(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "tasks.db")
+    database.migrate()
+    database.append_web_message(
+        "account-01",
+        "conversation-01",
+        "legacy-reconcile-inbound",
+        direction="inbound",
+        message_type="TEXT",
+        text="Do you ship?",
+        timestamp_ms=1_000,
+        participant_username="prospect",
+    )
+    with sqlite3.connect(database.path) as connection:
+        cursor = connection.execute(
+            """
+            INSERT INTO browser_reply_plans(
+                account_id, conversation_id, inbound_fingerprint,
+                inbound_timestamp_ms, reply_text, stage, state,
+                invitation_included, invitation_evidence_known
+            ) VALUES (
+                'account-01', 'conversation-01', 'legacy-reconcile',
+                1000, 'Continue on WhatsApp: +1 555 0100', 'invited',
+                'planned', 0, 0
+            )
+            """
+        )
+        plan_id = int(cursor.lastrowid)
+
+    matched = database.reconcile_browser_reply_invitation_evidence(
+        "account-01",
+        plan_id,
+        private_channel_hint="WhatsApp:   +1 555 0100",
+    )
+    repeated = database.reconcile_browser_reply_invitation_evidence(
+        "account-01",
+        plan_id,
+        private_channel_hint="",
+    )
+
+    assert matched.invitation_included is True
+    assert matched.invitation_evidence_known is True
+    assert repeated == matched
 
 
 def test_reply_plan_duplicates_preserve_original_and_are_account_scoped(

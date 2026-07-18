@@ -753,7 +753,25 @@ def test_cooldown_timestamp_changes_only_when_draft_contains_invitation(
     assert ai.calls[1][1]["should_invite"] is False
     assert destination not in second.reply_text
     assert second.stage == "invited"
-    assert service.record_result("account-01", "phone-01", second.plan_id, "sent")
+    stored_before_migration = database.browser_reply_plan_by_id(second.plan_id)
+    assert stored_before_migration is not None
+    assert stored_before_migration.invitation_included is False
+
+    database.migrate()
+
+    stored_after_migration = database.browser_reply_plan_by_id(second.plan_id)
+    assert stored_after_migration is not None
+    assert stored_after_migration.invitation_included is False
+    assert stored_after_migration.invitation_evidence_known is True
+    reconciliation_service = BrowserDmService(
+        database,
+        registry_with_browser_account(private_channel_hint="current catalog"),
+        FakeReplyClient(),
+        clock=lambda: 102.0,
+    )
+    assert reconciliation_service.record_result(
+        "account-01", "phone-01", second.plan_id, "sent"
+    )
 
     state = database.browser_conversation_state("account-01", "conversation-01")
     assert state.last_invited_at_ms == 100_000
