@@ -2162,11 +2162,25 @@ class Database:
         )
         draft: dict[str, object] | None = None
         if inbound_fingerprint:
-            plan = self.get_browser_reply_plan(account_id, inbound_fingerprint)
+            with self._connect() as connection:
+                manual_row = connection.execute(
+                    """
+                    SELECT * FROM browser_reply_plans
+                    WHERE account_id=? AND conversation_id=?
+                      AND plan_origin='manual' AND source_inbound_fingerprint=?
+                    ORDER BY id LIMIT 1
+                    """,
+                    (account_id, conversation_id, inbound_fingerprint),
+                ).fetchone()
+            plan = (
+                _row_browser_reply_plan(manual_row)
+                if manual_row is not None
+                else self.get_browser_reply_plan(account_id, inbound_fingerprint)
+            )
             if plan is not None and plan.conversation_id == conversation_id:
                 draft = {
                     "plan_id": plan.id,
-                    "inbound_fingerprint": plan.inbound_fingerprint,
+                    "inbound_fingerprint": plan.source_inbound_fingerprint,
                     "reply_text": plan.reply_text,
                     "state": plan.state,
                 }

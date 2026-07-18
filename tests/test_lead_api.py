@@ -355,6 +355,45 @@ def test_manual_reply_plans_reuse_one_plan_for_same_inbound_across_commands(
     assert plan.source_inbound_fingerprint == "message-1"
 
 
+def test_selected_lead_shows_manual_plan_for_source_inbound_fingerprint(
+    tmp_path: Path,
+) -> None:
+    app, _ = _seeded_app(tmp_path)
+    client = TestClient(app)
+    assert (
+        client.post(
+            "/api/leads/account-01/conversation-01/takeover",
+            json={"command_id": "takeover-selected-manual", "reason": "operator"},
+        ).status_code
+        == 200
+    )
+    created = client.post(
+        "/api/leads/account-01/conversation-01/manual-reply-plan",
+        json={
+            "command_id": "manual-selected",
+            "inbound_fingerprint": "message-3",
+            "reply_text": "Persistent operator reply.",
+        },
+    )
+    assert created.status_code == 200
+
+    selected = client.get(
+        "/api/leads",
+        params={
+            "account_id": "account-01",
+            "conversation_id": "conversation-01",
+            "inbound_fingerprint": "message-3",
+        },
+    ).json()["selected"]
+
+    assert selected["draft"] == {
+        "plan_id": created.json()["plan_id"],
+        "inbound_fingerprint": created.json()["inbound_fingerprint"],
+        "reply_text": "Persistent operator reply.",
+        "state": "planned",
+    }
+
+
 def test_ai_off_still_allows_taken_over_manual_plan_to_claim_send_lease(
     tmp_path: Path,
 ) -> None:
