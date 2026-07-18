@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 
 import { getRounds, type RoundListItem } from "./api";
 import { OperationsView, type FleetHealthSummary } from "./views/OperationsView";
+import { AnalyticsView } from "./views/AnalyticsView";
+import { InboxView } from "./views/InboxView";
 
 type Tab = "operations" | "inbox" | "analytics";
 
@@ -55,7 +57,9 @@ export default function App() {
       {error && <div className="shell-error" role="alert">{error}</div>}
       {tab === "operations" && roundId && <OperationsView onHealthChange={setFleetHealth} roundId={roundId} />}
       {tab === "operations" && !roundId && !error && <div className="workspace-state">No acquisition rounds recorded.</div>}
-      {tab !== "operations" && <main className="placeholder-view"><span>{tab === "inbox" ? "Inbox" : "Analytics"}</span><strong>Workspace queued</strong></main>}
+      {tab === "inbox" && <InboxView />}
+      {tab === "analytics" && roundId && <AnalyticsView roundId={roundId} />}
+      {tab === "analytics" && !roundId && !error && <div className="workspace-state">No acquisition rounds recorded.</div>}
     </div>
   );
 }
