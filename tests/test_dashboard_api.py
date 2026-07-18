@@ -7,7 +7,9 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
+from fastapi.testclient import TestClient
 
+from tikpoc.api import create_app
 from tikpoc.browser_dm import BrowserDmService, BrowserInbound, BrowserReply
 from tikpoc.dashboard import create_server
 from tikpoc.db import BrowserConversationBusy, BrowserReplyPlan, Database
@@ -814,3 +816,165 @@ def test_browser_event_endpoint_enqueues_and_returns_cors_header(
         assert event.payload["device_id"] == "phone-01"
     finally:
         server.shutdown()
+
+
+def _fastapi_client(tmp_path: Path, **kwargs: object) -> TestClient:
+    return TestClient(create_app(tmp_path / "fastapi.db", **kwargs))
+
+
+def test_fastapi_status_recent_control_and_device_event_compatibility(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "fastapi.db"
+    client = _fastapi_client(tmp_path)
+    database = Database(database_path)
+    database.insert_task("batch", "1", "sample")
+
+    status = client.get("/api/status")
+    recent = client.get("/api/recent", params={"limit": 10})
+    control = client.post("/api/control/pause")
+    event_body = {
+        "device_id": "phone-01",
+        "event_type": "dm_received",
+        "dedup_key": "message-1",
+        "payload": {"username": "sample", "message": "hello"},
+    }
+    first_event = client.post("/api/device-events", json=event_body)
+    duplicate_event = client.post("/api/device-events", json=event_body)
+
+    assert status.status_code == 200
+    assert status.json()["total"] == 1
+    assert set(status.json()) >= {"control", "counts", "latest_event"}
+    assert recent.status_code == 200
+    assert recent.json() == []
+    assert control.json() == {"control": "paused"}
+    assert database.worker_control() == "paused"
+    assert first_event.json() == {"accepted": True}
+    assert duplicate_event.json() == {"accepted": False}
+
+
+def test_fastapi_browser_routes_preserve_responses_and_exact_cors(
+    tmp_path: Path,
+) -> None:
+    extension_origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+    service = FakeBrowserDmService()
+    client = _fastapi_client(
+        tmp_path,
+        registry=_registry(tmp_path),
+        browser_dm_service=service,
+        browser_extension_origins=(extension_origin,),
+    )
+    headers = {"Origin": extension_origin}
+
+    preflight = client.options(
+        "/api/browser-events",
+        headers={
+            **headers,
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    event = client.post(
+        "/api/browser-events",
+        json=_browser_post_bodies()["/api/browser-events"],
+        headers=headers,
+    )
+    planned = client.post(
+        "/api/browser-dm/reply-plan", json=_browser_inbound_body(), headers=headers
+    )
+    result = client.post(
+        "/api/browser-dm/reply-result",
+        json={
+            "account_id": "account-01",
+            "device_id": "phone-01",
+            "plan_id": 17,
+            "state": "sent",
+        },
+        headers=headers,
+    )
+    claim = client.post(
+        "/api/browser-actions/claim",
+        json=_browser_post_bodies()["/api/browser-actions/claim"],
+        headers=headers,
+    )
+    action_result = client.post(
+        "/api/browser-actions/result",
+        json=_browser_post_bodies()["/api/browser-actions/result"],
+        headers=headers,
+    )
+    health = client.post(
+        "/api/browser-health",
+        json=_browser_post_bodies()["/api/browser-health"],
+        headers=headers,
+    )
+
+    assert preflight.status_code == 204
+    assert preflight.headers["access-control-allow-origin"] == extension_origin
+    assert preflight.headers["access-control-allow-methods"] == "POST, OPTIONS"
+    assert event.json() == {"accepted": True}
+    assert planned.json() == {
+        "plan_id": 17,
+        "conversation_id": "conversation-01",
+        "inbound_fingerprint": "fp-01",
+        "reply_text": "Thanks. WhatsApp: +1 555 0100",
+        "stage": "invited",
+    }
+    assert result.json() == {"recorded": True}
+    assert claim.json() == {"claimed": True}
+    assert action_result.json() == {"recorded": True}
+    assert health.json() == {"recorded": True}
+    for response in (event, planned, result, claim, action_result, health):
+        assert response.headers["access-control-allow-origin"] == extension_origin
+
+
+def test_fastapi_browser_routes_reject_origin_and_media_type_before_side_effects(
+    tmp_path: Path,
+) -> None:
+    service = FakeBrowserDmService()
+    client = _fastapi_client(
+        tmp_path,
+        registry=_registry(tmp_path),
+        browser_dm_service=service,
+    )
+
+    wrong_origin = client.post(
+        "/api/browser-dm/reply-plan",
+        json=_browser_inbound_body(),
+        headers={"Origin": "https://evil.example"},
+    )
+    wrong_media = client.post(
+        "/api/browser-dm/reply-plan",
+        content=json.dumps(_browser_inbound_body()),
+        headers={
+            "Origin": "https://www.tiktok.com",
+            "Content-Type": "text/plain",
+        },
+    )
+
+    assert wrong_origin.status_code == 403
+    assert wrong_origin.json() == {"error": "browser origin is not allowed"}
+    assert "access-control-allow-origin" not in wrong_origin.headers
+    assert wrong_media.status_code == 415
+    assert wrong_media.json() == {"error": "browser request must use application/json"}
+    assert service.inbounds == []
+
+
+def test_fastapi_tiktok_webhook_verifies_and_deduplicates(tmp_path: Path) -> None:
+    client = _fastapi_client(
+        tmp_path,
+        registry=_registry(tmp_path),
+        tiktok_app_secret="app-secret",
+        clock=lambda: 1_720_000_010,
+    )
+    body = _webhook_body()
+    headers = {
+        "Content-Type": "application/json",
+        "TikTok-Signature": _webhook_signature(body, "app-secret", 1_720_000_000),
+    }
+
+    first = client.post("/api/tiktok-business/webhook", content=body, headers=headers)
+    duplicate = client.post(
+        "/api/tiktok-business/webhook", content=body, headers=headers
+    )
+
+    assert first.json() == {"accepted": True}
+    assert duplicate.json() == {"accepted": False}

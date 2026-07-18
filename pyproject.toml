@@ -8,12 +8,14 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
   "Appium-Python-Client>=5,<6",
+  "fastapi>=0.116,<1",
   "openpyxl>=3.1,<4",
   "PyYAML>=6,<7",
+  "uvicorn>=0.35,<1",
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8,<9"]
+test = ["httpx>=0.28,<1", "pytest>=8,<9"]
 
 [project.scripts]
 tikpoc = "tikpoc.cli:main"
