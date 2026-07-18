@@ -105,50 +105,50 @@ class AiReplyClient:
         max_characters: int = 300,
     ) -> str:
         effective_fallback = self.fallback if fallback is None else fallback
-        if not self.base_url or not self.api_key or not self.model:
-            return effective_fallback
-        selected = history[-max(1, int(max_history_messages)) :]
-        conversation: list[dict[str, str]] = []
-        for item in selected:
-            text = str(item.get("text") or "").strip()
-            if not text:
-                continue
-            role = "assistant" if item.get("direction") == "outbound" else "user"
-            conversation.append({"role": role, "content": text[:1000]})
-        payload = {
-            "model": self.model,
-            "temperature": 0.4,
-            "max_tokens": 220,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": _build_system_prompt(
-                        offer_context=offer_context,
-                        faq_context=faq_context,
-                        conversation_stage=conversation_stage,
-                        should_invite=should_invite,
-                        private_channel_hint=private_channel_hint,
-                    ),
-                },
-                *conversation,
-            ],
-        }
-        request = Request(
-            f"{self.base_url}/chat/completions",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        try:
-            with self.opener(request, timeout=30) as response:
-                data = json.loads(response.read())
-            content = data["choices"][0]["message"]["content"]
-            if not isinstance(content, str):
-                return effective_fallback
-            content = content.strip()
-            return content[: max(1, int(max_characters))] or effective_fallback
-        except (KeyError, IndexError, TypeError, ValueError, OSError):
-            return effective_fallback
+        reply_text = effective_fallback
+        reply_limit = max(1, int(max_characters))
+        if self.base_url and self.api_key and self.model:
+            selected = history[-max(1, int(max_history_messages)) :]
+            conversation: list[dict[str, str]] = []
+            for item in selected:
+                text = str(item.get("text") or "").strip()
+                if not text:
+                    continue
+                role = "assistant" if item.get("direction") == "outbound" else "user"
+                conversation.append({"role": role, "content": text[:1000]})
+            payload = {
+                "model": self.model,
+                "temperature": 0.4,
+                "max_tokens": 220,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": _build_system_prompt(
+                            offer_context=offer_context,
+                            faq_context=faq_context,
+                            conversation_stage=conversation_stage,
+                            should_invite=should_invite,
+                            private_channel_hint=private_channel_hint,
+                        ),
+                    },
+                    *conversation,
+                ],
+            }
+            try:
+                request = Request(
+                    f"{self.base_url}/chat/completions",
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    method="POST",
+                )
+                with self.opener(request, timeout=30) as response:
+                    data = json.loads(response.read())
+                content = data["choices"][0]["message"]["content"]
+                if isinstance(content, str) and content.strip():
+                    reply_text = content.strip()
+            except (KeyError, IndexError, TypeError, ValueError, OSError):
+                reply_text = effective_fallback
+        return reply_text[:reply_limit]

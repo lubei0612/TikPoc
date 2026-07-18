@@ -21,6 +21,20 @@ class FakeResponse:
         ).encode()
 
 
+class RawResponse:
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self.body
+
+
 def test_ai_reply_uses_openai_compatible_chat_endpoint() -> None:
     requests = []
 
@@ -126,9 +140,10 @@ def test_reply_conversation_uses_per_call_fallback_when_not_configured() -> None
     reply = client.reply_conversation(
         [{"direction": "inbound", "text": "Hello"}],
         fallback="Account fallback",
+        max_characters=7,
     )
 
-    assert reply == "Account fallback"
+    assert reply == "Account"
 
 
 def test_reply_conversation_uses_per_call_fallback_for_provider_error() -> None:
@@ -146,9 +161,10 @@ def test_reply_conversation_uses_per_call_fallback_for_provider_error() -> None:
     reply = client.reply_conversation(
         [{"direction": "inbound", "text": "Hello"}],
         fallback="Account fallback",
+        max_characters=7,
     )
 
-    assert reply == "Account fallback"
+    assert reply == "Account"
 
 
 @pytest.mark.parametrize("content", ["", "   ", None, {"text": "unexpected"}])
@@ -166,9 +182,56 @@ def test_reply_conversation_uses_per_call_fallback_for_invalid_content(
     reply = client.reply_conversation(
         [{"direction": "inbound", "text": "Hello"}],
         fallback="Account fallback",
+        max_characters=7,
     )
 
-    assert reply == "Account fallback"
+    assert reply == "Account"
+
+
+def test_reply_conversation_uses_fallback_for_malformed_provider_url() -> None:
+    client = AiReplyClient(
+        base_url="not-a-url",
+        api_key="secret",
+        model="reply-model",
+        fallback="Client fallback",
+    )
+
+    reply = client.reply_conversation(
+        [{"direction": "inbound", "text": "Hello"}],
+        fallback="Account fallback",
+        max_characters=7,
+    )
+
+    assert reply == "Account"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"{malformed-json",
+        json.dumps({}).encode(),
+        json.dumps({"choices": [{}]}).encode(),
+        json.dumps({"choices": [{"message": {}}]}).encode(),
+    ],
+)
+def test_reply_conversation_uses_fallback_for_malformed_provider_response(
+    body: bytes,
+) -> None:
+    client = AiReplyClient(
+        base_url="https://llm.example/v1",
+        api_key="secret",
+        model="reply-model",
+        opener=lambda request, timeout: RawResponse(body),
+        fallback="Client fallback",
+    )
+
+    reply = client.reply_conversation(
+        [{"direction": "inbound", "text": "Hello"}],
+        fallback="Account fallback",
+        max_characters=7,
+    )
+
+    assert reply == "Account"
 
 
 def test_ai_reply_uses_bounded_conversation_history_and_handoff_hint() -> None:
