@@ -101,7 +101,7 @@
     const key = stableId || core.conversationKey(href, username) || href;
     const messageId = firstAttribute(row, ["data-message-id", "data-last-message-id"]);
     const unread = Boolean(
-      row.matches && row.matches("[aria-current='true'], [data-unread='true']") ||
+      row.matches && row.matches("[data-unread='true']") ||
       row.querySelector("[aria-label*='unread' i], [data-e2e*='unread'], [data-unread='true']"),
     );
     const signature = core.normalizeText(
@@ -303,12 +303,19 @@
       if (!candidate) {
         return "idle";
       }
-      await adapter.openConversation(candidate.row);
+      const opened = await adapter.openConversation(candidate.row);
+      if (opened === false) {
+        return "navigation_failed";
+      }
       const inbound = adapter.readActiveConversation(settings.accountId);
       if (!core.isActionableInbound(inbound)) {
         baseline[candidate.snapshot.key] = candidate.snapshot.signature;
         await storage.set(BASELINES_KEY, baselines);
         return "ignored";
+      }
+      const activeKey = core.conversationKey(inbound.conversationId, inbound.sender);
+      if (activeKey !== candidate.snapshot.key) {
+        return "navigation_pending";
       }
       const fingerprint = await core.fingerprintMessage(inbound);
       const processed = await storage.get(PROCESSED_KEY) || {};
@@ -366,6 +373,8 @@
       const composer = adapter.findComposer();
       const composed = composer && adapter.setComposerText(composer, plan.reply_text);
       const sendButton = composed && adapter.findSendButton();
+      processed[fingerprint] = { state: "sending", updatedAt: now() };
+      await storage.set(PROCESSED_KEY, trimProcessed(processed));
       if (sendButton) {
         sendButton.click();
       }

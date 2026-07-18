@@ -34,16 +34,16 @@ function memoryStorage() {
   };
 }
 
-function harness({ reads = [inbound(), inbound()], outbound = true } = {}) {
+function harness({ reads = [inbound(), inbound()], outbound = true, failResult = false } = {}) {
   const calls = [];
   const storage = memoryStorage();
-  let currentRows = [{ key: "buyer", signature: "old", unread: false }];
+  let currentRows = [{ key: inbound().conversationId, signature: "old", unread: false }];
   let readIndex = 0;
   let clicks = 0;
   const adapter = {
     conversationRows() { return currentRows; },
     rowSnapshot(row) { return row; },
-    async openConversation() {},
+    async openConversation() { return true; },
     readActiveConversation() {
       return reads[Math.min(readIndex++, reads.length - 1)];
     },
@@ -54,6 +54,9 @@ function harness({ reads = [inbound(), inbound()], outbound = true } = {}) {
   };
   const transport = async (type, body) => {
     calls.push({ type, body });
+    if (failResult && type === "TIKPOC_DM_RESULT") {
+      throw new Error("result response lost");
+    }
     if (type === "TIKPOC_DM_PLAN") {
       return {
         plan_id: 17,
@@ -105,17 +108,17 @@ test("startup establishes an account baseline without requesting a plan", async 
   assert.equal(await run.workflow.scan(SETTINGS), "baseline");
   assert.equal(run.calls.length, 0);
   assert.deepEqual(run.storage.values.tikpocDmBaselines[SETTINGS.accountId], {
-    buyer: "old",
+    [inbound().conversationId]: "old",
   });
 });
 
 test("one inbound fingerprint is planned and sent only once", async () => {
   const run = harness();
   await run.workflow.scan(SETTINGS);
-  run.setRows([{ key: "buyer", signature: "new", unread: true }]);
+  run.setRows([{ key: inbound().conversationId, signature: "new", unread: true }]);
   assert.equal(await run.workflow.scan(SETTINGS), "sent");
   assert.equal(run.clicks, 1);
-  run.setRows([{ key: "buyer", signature: "newer-render", unread: true }]);
+  run.setRows([{ key: inbound().conversationId, signature: "newer-render", unread: true }]);
   assert.equal(await run.workflow.scan(SETTINGS), "duplicate");
   assert.equal(run.clicks, 1);
   assert.equal(run.calls.filter((call) => call.type === "TIKPOC_DM_PLAN").length, 1);
@@ -124,7 +127,7 @@ test("one inbound fingerprint is planned and sent only once", async () => {
 test("a changed active inbound supersedes the plan before claim or send", async () => {
   const run = harness({ reads: [inbound(), inbound({ messageId: "message-2", text: "Changed" })] });
   await run.workflow.scan(SETTINGS);
-  run.setRows([{ key: "buyer", signature: "new", unread: true }]);
+  run.setRows([{ key: inbound().conversationId, signature: "new", unread: true }]);
   assert.equal(await run.workflow.scan(SETTINGS), "superseded");
   assert.equal(run.clicks, 0);
   assert.equal(run.calls.some((call) => call.type === "TIKPOC_ACTION_CLAIM"), false);
@@ -134,10 +137,19 @@ test("a changed active inbound supersedes the plan before claim or send", async 
   );
 });
 
+test("does not plan while navigation is still on another conversation", async () => {
+  const run = harness();
+  await run.workflow.scan(SETTINGS);
+  run.setRows([{ key: "https://www.tiktok.com/messages/thread/two", signature: "new", unread: true }]);
+  assert.equal(await run.workflow.scan(SETTINGS), "navigation_pending");
+  assert.equal(run.calls.some((call) => call.type === "TIKPOC_DM_PLAN"), false);
+  assert.equal(run.clicks, 0);
+});
+
 test("a matching outbound bubble records sent and completes the action", async () => {
   const run = harness({ outbound: true });
   await run.workflow.scan(SETTINGS);
-  run.setRows([{ key: "buyer", signature: "new", unread: true }]);
+  run.setRows([{ key: inbound().conversationId, signature: "new", unread: true }]);
   assert.equal(await run.workflow.scan(SETTINGS), "sent");
   assert.equal(run.clicks, 1);
   assert.equal(run.calls.find((call) => call.type === "TIKPOC_DM_RESULT").body.state, "sent");
@@ -150,14 +162,25 @@ test("a matching outbound bubble records sent and completes the action", async (
 test("missing outbound confirmation records uncertain and does not immediately retry", async () => {
   const run = harness({ outbound: false });
   await run.workflow.scan(SETTINGS);
-  run.setRows([{ key: "buyer", signature: "new", unread: true }]);
+  run.setRows([{ key: inbound().conversationId, signature: "new", unread: true }]);
   assert.equal(await run.workflow.scan(SETTINGS), "uncertain");
   assert.equal(run.calls.find((call) => call.type === "TIKPOC_DM_RESULT").body.state, "uncertain");
   assert.equal(
     run.calls.find((call) => call.type === "TIKPOC_ACTION_RESULT").body.state,
     "uncertain",
   );
-  run.setRows([{ key: "buyer", signature: "rerender", unread: true }]);
+  run.setRows([{ key: inbound().conversationId, signature: "rerender", unread: true }]);
+  assert.equal(await run.workflow.scan(SETTINGS), "duplicate");
+  assert.equal(run.clicks, 1);
+});
+
+test("a lost result response after click does not click the same fingerprint again", async () => {
+  const run = harness({ failResult: true });
+  await run.workflow.scan(SETTINGS);
+  run.setRows([{ key: inbound().conversationId, signature: "new", unread: true }]);
+  await assert.rejects(run.workflow.scan(SETTINGS), /result response lost/);
+  assert.equal(run.clicks, 1);
+  run.setRows([{ key: inbound().conversationId, signature: "rerender", unread: true }]);
   assert.equal(await run.workflow.scan(SETTINGS), "duplicate");
   assert.equal(run.clicks, 1);
 });
