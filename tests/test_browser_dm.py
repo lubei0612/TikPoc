@@ -7,7 +7,12 @@ from threading import Barrier
 
 import pytest
 
-from tikpoc.browser_dm import BrowserDmService, BrowserInbound, BrowserReply
+from tikpoc.browser_dm import (
+    BrowserConversationBusy,
+    BrowserDmService,
+    BrowserInbound,
+    BrowserReply,
+)
 from tikpoc.db import Database
 from tikpoc.web_accounts import WebAccount, WebAccountRegistry
 
@@ -247,6 +252,67 @@ def test_missing_invite_configuration_is_recorded_once_without_queueing(
     assert rows[0]["state"] == "completed"
 
 
+def test_missing_invite_configuration_is_recorded_when_reply_budget_is_full(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "db.sqlite")
+    database.migrate()
+    database.append_web_message(
+        "account-01",
+        "conversation-01",
+        "inbound-confirmed",
+        direction="inbound",
+        message_type="TEXT",
+        text="Do you have this style?",
+        timestamp_ms=1,
+        participant_username="buyer",
+    )
+    database.append_web_message(
+        "account-01",
+        "conversation-01",
+        "outbound-confirmed",
+        direction="outbound",
+        message_type="TEXT",
+        text="Yes.",
+        timestamp_ms=2,
+        in_reply_to_message_id="inbound-confirmed",
+    )
+    ai = FakeReplyClient()
+    service = BrowserDmService(
+        database,
+        registry_with_browser_account(private_channel_hint="", max_auto_replies=1),
+        ai,
+        clock=lambda: 100.0,
+    )
+    inbound = BrowserInbound(
+        "account-01",
+        "phone-01",
+        "conversation-01",
+        "fp-missing-invite-at-budget",
+        "buyer",
+        "Do you ship this style?",
+        99_000,
+    )
+
+    first = service.plan(inbound)
+    second = service.plan(inbound)
+
+    assert first == second
+    assert first.stage == "closed"
+    assert first.reply_text == ""
+    assert ai.calls == []
+    with sqlite3.connect(database.path) as connection:
+        event_count = connection.execute(
+            """
+            SELECT COUNT(*) FROM web_events
+            WHERE account_id='account-01'
+              AND event_type='invite_configuration_missing'
+              AND dedup_key='fp-missing-invite-at-budget'
+            """
+        ).fetchone()[0]
+    assert event_count == 1
+
+
 def test_confirmed_result_appends_outbound_and_counts_once(tmp_path: Path) -> None:
     database = Database(tmp_path / "db.sqlite")
     database.migrate()
@@ -327,6 +393,48 @@ def test_uncertain_invitation_advances_only_after_confirmed_send(
     assert sent_state.stage == "invited"
     assert sent_state.auto_reply_count == 1
     assert sent_state.last_invited_at_ms == 100_000
+
+
+def test_uncertain_plan_keeps_conversation_busy_until_reconciled(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "db.sqlite")
+    database.migrate()
+    ai = FakeReplyClient(("First draft", "Reconciled next draft"))
+    service = BrowserDmService(database, registry_with_browser_account(), ai)
+    first = service.plan(
+        BrowserInbound(
+            "account-01",
+            "phone-01",
+            "conversation-01",
+            "fp-uncertain-first",
+            "buyer",
+            "Tell me about this style",
+            100,
+        )
+    )
+    assert service.record_result("account-01", "phone-01", first.plan_id, "uncertain")
+    next_inbound = BrowserInbound(
+        "account-01",
+        "phone-01",
+        "conversation-01",
+        "fp-while-uncertain",
+        "buyer",
+        "Which colors are available?",
+        101,
+    )
+
+    with pytest.raises(BrowserConversationBusy, match="uncertain"):
+        service.plan(next_inbound)
+
+    assert len(ai.calls) == 1
+    assert database.get_browser_reply_plan("account-01", "fp-while-uncertain") is None
+    assert service.record_result("account-01", "phone-01", first.plan_id, "superseded")
+
+    reconciled = service.plan(next_inbound)
+
+    assert reconciled.reply_text == "Reconciled next draft"
+    assert len(ai.calls) == 2
 
 
 def test_superseded_result_never_appends_outbound(tmp_path: Path) -> None:

@@ -3,9 +3,16 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
-from .db import BrowserReplyPlan, Database
+from .db import BrowserConversationBusy, BrowserReplyPlan, Database
 from .lead_conversion import ConversationStage, assess_inbound
 from .web_accounts import WebAccount, WebAccountRegistry
+
+__all__ = (
+    "BrowserConversationBusy",
+    "BrowserDmService",
+    "BrowserInbound",
+    "BrowserReply",
+)
 
 
 @dataclass(frozen=True)
@@ -139,6 +146,16 @@ class BrowserDmService:
                 )
                 return _reply_from_plan(completed)
 
+            private_channel_hint = _normalize_whitespace(account.private_channel_hint)
+            configured_invite = bool(assessment.should_invite and private_channel_hint)
+            if assessment.should_invite and not configured_invite:
+                self.database.record_browser_diagnostic_event(
+                    account.account_id,
+                    "invite_configuration_missing",
+                    plan.inbound_fingerprint,
+                    {"conversation_id": plan.conversation_id},
+                )
+
             confirmed_replies, reserved_replies = (
                 self.database.browser_reply_budget_counts(
                     account.account_id,
@@ -166,15 +183,6 @@ class BrowserDmService:
                 )
                 return _reply_from_plan(completed)
 
-            private_channel_hint = _normalize_whitespace(account.private_channel_hint)
-            configured_invite = bool(assessment.should_invite and private_channel_hint)
-            if assessment.should_invite and not configured_invite:
-                self.database.record_browser_diagnostic_event(
-                    account.account_id,
-                    "invite_configuration_missing",
-                    plan.inbound_fingerprint,
-                    {"conversation_id": plan.conversation_id},
-                )
             history = self.database.recent_web_messages(
                 account.account_id, plan.conversation_id, limit=12
             )

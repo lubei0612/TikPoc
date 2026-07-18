@@ -59,6 +59,14 @@ class BrowserReplyPlan:
     invitation_included: bool = False
 
 
+class BrowserConversationBusy(RuntimeError):
+    def __init__(self, plan: BrowserReplyPlan) -> None:
+        self.plan = plan
+        super().__init__(
+            f"conversation has an unresolved uncertain browser reply plan: {plan.id}"
+        )
+
+
 @dataclass(frozen=True)
 class BrowserConversationState:
     account_id: str
@@ -982,6 +990,25 @@ class Database:
         )
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT * FROM browser_reply_plans
+                WHERE account_id=? AND inbound_fingerprint=?
+                """,
+                (account_id, inbound_fingerprint),
+            ).fetchone()
+            if row is None:
+                unresolved = connection.execute(
+                    """
+                    SELECT * FROM browser_reply_plans
+                    WHERE account_id=? AND conversation_id=?
+                      AND state='uncertain' AND TRIM(reply_text) != ''
+                    ORDER BY id LIMIT 1
+                    """,
+                    (account_id, conversation_id),
+                ).fetchone()
+                if unresolved is not None:
+                    raise BrowserConversationBusy(_row_browser_reply_plan(unresolved))
             cursor = connection.execute(
                 """
                 INSERT OR IGNORE INTO browser_reply_plans(
@@ -999,13 +1026,14 @@ class Database:
                 ),
             )
             created = cursor.rowcount == 1
-            row = connection.execute(
-                """
-                SELECT * FROM browser_reply_plans
-                WHERE account_id=? AND inbound_fingerprint=?
-                """,
-                (account_id, inbound_fingerprint),
-            ).fetchone()
+            if row is None:
+                row = connection.execute(
+                    """
+                    SELECT * FROM browser_reply_plans
+                    WHERE account_id=? AND inbound_fingerprint=?
+                    """,
+                    (account_id, inbound_fingerprint),
+                ).fetchone()
             assert row is not None
             plan = _row_browser_reply_plan(row)
             if not created and plan.state != "planning":
