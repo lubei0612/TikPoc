@@ -373,8 +373,42 @@ class FleetSupervisor:
                     self._started = False
         return self.health()
 
-    def _start_devices(self) -> None:
-        for device in self.config.devices:
+    def restart_devices(
+        self, device_ids: tuple[str, ...]
+    ) -> tuple[FleetWorkerHealth, ...]:
+        requested = {str(device_id).strip() for device_id in device_ids}
+        configured = {device.device_id for device in self.config.devices}
+        if not requested or "" in requested:
+            raise ValueError("restart device identifiers are required")
+        unknown = requested - configured
+        if unknown:
+            raise ValueError(f"restart device is not configured: {sorted(unknown)[0]}")
+        with self._state_lock:
+            if self._starting or self._cancel_start.is_set():
+                return self.health()
+            devices = tuple(
+                device
+                for device in self.config.devices
+                if device.device_id in requested
+                and device.device_id not in self._workers
+                and device.device_id not in self._stopping
+            )
+            if not devices:
+                return self.health()
+            self._started = True
+            self._starting = True
+        try:
+            self._start_devices(devices)
+        finally:
+            with self._state_lock:
+                self._starting = False
+                if not self._workers:
+                    self._started = False
+        return self.health()
+
+    def _start_devices(self, devices: tuple[FleetDevice, ...] | None = None) -> None:
+        selected_devices = self.config.devices if devices is None else devices
+        for device in selected_devices:
             if self._cancel_start.is_set():
                 break
             try:

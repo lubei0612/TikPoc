@@ -12,6 +12,7 @@ from tikpoc.acquisition_models import (
     ProfileObservation,
 )
 from tikpoc.importer import Target
+from tikpoc.device import ProfileIdentityMismatch
 from tikpoc.mobile_worker import MobileAssignmentWorker
 from tikpoc.models import ProfileMetrics
 from tikpoc.outcome_planner import get_or_create_plan
@@ -181,6 +182,34 @@ def test_slow_action_is_deferred_without_false_completion(tmp_path: Path) -> Non
     assert repository.round_completion(assignment.round_id).completed == 0
     assert device.action_calls == [OutcomeKind.REPOST]
     assert device.reconcile_calls == [OutcomeKind.REPOST, OutcomeKind.REPOST]
+    assert device.diagnostic_calls == 1
+
+
+def test_identity_mismatch_is_durable_and_blocks_capacity(tmp_path: Path) -> None:
+    repository, assignment = _claimed_assignment(tmp_path)
+    device = ScriptedVerifiedDevice(metrics=ProfileMetrics(20, 10, 5))
+
+    def mismatch(target) -> None:
+        raise ProfileIdentityMismatch("profile mismatch")
+
+    device.confirm_profile_identity = mismatch
+    worker = MobileAssignmentWorker(
+        repository,
+        device,
+        device_id="phone-01",
+        owner_id="worker-1",
+        clock_ms=lambda: 1_000,
+    )
+
+    worker.run_assignment(assignment)
+
+    stored = repository.assignment(assignment.assignment_id)
+    audit = repository.capacity_audit(assignment.round_id, expected_devices=1)
+    assert stored.phase is AssignmentPhase.DEFERRED
+    assert stored.last_error_code == "ProfileIdentityMismatch"
+    assert audit.identity_mismatch_count == 1
+    assert repository.round_completion(assignment.round_id).completed == 0
+    assert device.action_calls == []
     assert device.diagnostic_calls == 1
 
 

@@ -1,7 +1,7 @@
 from tests.test_profile_parser import PROFILE_XML
 import pytest
-from tikpoc.acquisition_models import ActionResult, OutcomeKind
-from tikpoc.device import AppiumTikTokDevice
+from tikpoc.acquisition_models import ActionResult, OutcomeKind, PoolTarget
+from tikpoc.device import AppiumTikTokDevice, ProfileIdentityMismatch
 from tikpoc.models import ProfileMetrics
 
 
@@ -151,6 +151,20 @@ class DelayedProfileMarkerDriver(FakeDriver):
         return super().find_elements(by, value)
 
 
+class WrongProfileMarkerDriver(FakeDriver):
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if value == "com.zhiliaoapp.musically:id/s7e":
+            return [FakeElement("@different_user")]
+        return super().find_elements(by, value)
+
+
+class MissingProfileMarkerDriver(FakeDriver):
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if value == "com.zhiliaoapp.musically:id/s7e":
+            return []
+        return super().find_elements(by, value)
+
+
 def test_appium_device_opens_profile_with_deep_link() -> None:
     driver = FakeDriver()
     device = AppiumTikTokDevice(driver)
@@ -204,6 +218,49 @@ def test_appium_device_retries_deep_link_while_waiting_for_profile_marker() -> N
             },
         )
     ]
+
+
+def test_appium_device_classifies_profile_identity_mismatch() -> None:
+    device = AppiumTikTokDevice(
+        WrongProfileMarkerDriver(), metric_read_attempts=1, poll_interval=0
+    )
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="sec:1",
+        target_id="user-1",
+        sec_uid="sec-1",
+        username="expected_user",
+        profile_url="https://www.tiktok.com/@expected_user",
+        source_video_id="video-1",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    with pytest.raises(ProfileIdentityMismatch, match="profile mismatch"):
+        device.confirm_profile_identity(target)
+
+
+def test_appium_device_does_not_classify_a_missing_marker_as_identity_mismatch() -> (
+    None
+):
+    device = AppiumTikTokDevice(
+        MissingProfileMarkerDriver(), metric_read_attempts=1, poll_interval=0
+    )
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="sec:1",
+        target_id="user-1",
+        sec_uid="sec-1",
+        username="expected_user",
+        profile_url="https://www.tiktok.com/@expected_user",
+        source_video_id="video-1",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    with pytest.raises(ValueError, match="marker is not visible") as captured:
+        device.confirm_profile_identity(target)
+    assert not isinstance(captured.value, ProfileIdentityMismatch)
 
 
 def test_appium_device_scrolls_to_confirm_more_than_three_posts() -> None:

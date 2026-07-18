@@ -1,12 +1,19 @@
 import argparse
 import hashlib
+import json
 import os
+from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Sequence
 
+from .acquisition_db import AcquisitionRepository
+from .capacity import evaluate_round_capacity
 from .db import Database
+from .fleet import FleetConfig
 from .importer import read_targets
 from .interactions import ActionPolicy, InteractionPolicy
+from .rounds import create_exposure_round
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -18,6 +25,28 @@ def _parser() -> argparse.ArgumentParser:
     import_command.add_argument("csv", type=Path)
     import_command.add_argument("--db", type=Path, required=True)
     import_command.add_argument("--device-id", action="append", default=[])
+    pool_import = commands.add_parser("pool-import")
+    pool_import.add_argument("--db", type=Path, required=True)
+    pool_import.add_argument("--csv", type=Path, required=True)
+    round_create = commands.add_parser("round-create")
+    round_create.add_argument("--db", type=Path, required=True)
+    round_create.add_argument("--pool", required=True)
+    round_create.add_argument("--devices", type=Path, required=True)
+    round_create.add_argument("--starts-at", required=True)
+    fleet_run = commands.add_parser("fleet-run")
+    fleet_run.add_argument("--db", type=Path, required=True)
+    fleet_run.add_argument("--round", required=True)
+    fleet_run.add_argument("--devices", type=Path, required=True)
+    assignment_retry = commands.add_parser("assignment-retry")
+    assignment_retry.add_argument("--db", type=Path, required=True)
+    assignment_retry.add_argument("--assignment", type=int, required=True)
+    capacity = commands.add_parser("capacity")
+    capacity.add_argument("--db", type=Path, required=True)
+    capacity.add_argument("--round", required=True)
+    capacity.add_argument("--expected-devices", type=int, default=7)
+    capacity.add_argument("--target-count", type=int, default=10_000)
+    capacity.add_argument("--effective-hours", type=float, default=20)
+    capacity.add_argument("--json", action="store_true", dest="json_output")
     status = commands.add_parser("status")
     status.add_argument("--db", type=Path, required=True)
     dashboard = commands.add_parser("dashboard")
@@ -49,6 +78,117 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "pool-import":
+        _require_file(args.csv, "CSV file")
+        result = read_targets(args.csv)
+        checksum = hashlib.sha256(args.csv.read_bytes()).hexdigest()
+        repository = AcquisitionRepository(args.db)
+        repository.migrate()
+        imported = repository.import_pool(args.csv.name, checksum, result.targets)
+        print(
+            f"pool_id={imported.pool_id} unique_targets={imported.unique_targets} "
+            f"source_rows={imported.source_rows} "
+            f"duplicates={result.skipped_duplicates} invalid={result.skipped_invalid}"
+        )
+        return 0
+    if args.command == "round-create":
+        _require_file(args.db, "database")
+        _require_file(args.devices, "device configuration")
+        starts_at_ms = _parse_iso8601_ms(args.starts_at)
+        config = FleetConfig.from_path(args.devices)
+        pool_id = str(args.pool).strip()
+        if not pool_id:
+            raise SystemExit("pool id is required")
+        repository = AcquisitionRepository(args.db)
+        if not repository.pool_exists(pool_id):
+            raise SystemExit(f"target pool does not exist: {pool_id}")
+        repository.migrate()
+        round_id = create_exposure_round(
+            repository,
+            pool_id=pool_id,
+            device_seeds={
+                device.device_id: device.order_seed for device in config.devices
+            },
+            starts_at_ms=starts_at_ms,
+        )
+        print(
+            f"round_id={round_id} assignments={repository.assignment_count(round_id)} "
+            f"devices={len(config.devices)}"
+        )
+        return 0
+    if args.command == "fleet-run":
+        _require_file(args.db, "database")
+        _require_file(args.devices, "device configuration")
+        round_id = str(args.round).strip()
+        if not round_id:
+            raise SystemExit("round id is required")
+        config = FleetConfig.from_path(args.devices)
+        repository = AcquisitionRepository(args.db)
+        if not repository.round_exists(round_id):
+            raise SystemExit(f"round does not exist: {round_id}") from None
+        round_device_ids = repository.round_device_ids(round_id)
+        configured_device_ids = tuple(
+            sorted(device.device_id for device in config.devices)
+        )
+        if configured_device_ids != round_device_ids:
+            raise SystemExit("device ids do not match round")
+        repository.migrate()
+        return _run_acquisition_fleet(repository, round_id, config)
+    if args.command == "assignment-retry":
+        _require_file(args.db, "database")
+        if args.assignment <= 0:
+            raise SystemExit("assignment id must be positive")
+        repository = AcquisitionRepository(args.db)
+        if not repository.assignment_exists(args.assignment):
+            raise SystemExit(f"assignment does not exist: {args.assignment}")
+        repository.migrate()
+        try:
+            assignment = repository.retry_assignment(args.assignment)
+        except ValueError as error:
+            raise SystemExit(str(error)) from None
+        print(
+            f"assignment_id={assignment.assignment_id} "
+            f"phase={assignment.phase.value} retry_ready=true"
+        )
+        return 0
+    if args.command == "capacity":
+        _require_file(args.db, "database")
+        round_id = str(args.round).strip()
+        if not round_id:
+            raise SystemExit("round id is required")
+        if args.expected_devices <= 0:
+            raise SystemExit("expected device count must be positive")
+        if args.target_count <= 0:
+            raise SystemExit("target count must be positive")
+        if args.effective_hours <= 0:
+            raise SystemExit("effective hours must be positive")
+        repository = AcquisitionRepository(args.db)
+        if not repository.round_exists(round_id):
+            raise SystemExit(f"round does not exist: {round_id}")
+        try:
+            report = evaluate_round_capacity(
+                repository,
+                round_id,
+                expected_devices=args.expected_devices,
+                target_count=args.target_count,
+                effective_hours=args.effective_hours,
+            )
+        except KeyError:
+            raise SystemExit(f"round does not exist: {round_id}") from None
+        if args.json_output:
+            print(json.dumps(asdict(report), sort_keys=True, separators=(",", ":")))
+        else:
+            print(
+                f"measured_seconds={report.measured_seconds:.3f} "
+                f"projected_unique_per_day={report.projected_unique_per_day} "
+                f"slowest_device_id={report.slowest_device_id or 'none'} "
+                f"fully_covered_targets={report.fully_covered_targets} "
+                f"uncertain_count={report.uncertain_count} "
+                f"passed={str(report.passed).lower()}"
+            )
+            if report.reasons:
+                print("reasons=" + "; ".join(report.reasons))
+        return 0 if report.passed else 1
     if args.command == "validate":
         result = read_targets(args.csv)
         print(
@@ -114,8 +254,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.with_web_worker:
             if registry is None:
                 raise SystemExit(
-                    "--with-web-worker requires --web-accounts or "
-                    "TIKPOC_WEB_ACCOUNTS"
+                    "--with-web-worker requires --web-accounts or TIKPOC_WEB_ACCOUNTS"
                 )
             from .web_worker import start_web_worker_thread
 
@@ -191,6 +330,30 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _path_from_environment(name: str) -> Path | None:
     value = os.getenv(name, "").strip()
     return Path(value).expanduser() if value else None
+
+
+def _require_file(path: Path, label: str) -> None:
+    if not path.is_file():
+        raise SystemExit(f"{label} does not exist: {path}")
+
+
+def _parse_iso8601_ms(value: str) -> int:
+    normalized = str(value).strip()
+    try:
+        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError:
+        raise SystemExit("starts-at must be a valid ISO-8601 timestamp") from None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise SystemExit("starts-at must include a timezone")
+    return int(parsed.timestamp() * 1_000)
+
+
+def _run_acquisition_fleet(
+    repository: AcquisitionRepository, round_id: str, config: FleetConfig
+) -> int:
+    from .fleet_runtime import run_acquisition_fleet
+
+    return run_acquisition_fleet(repository, round_id, config)
 
 
 def _load_env_file(path: Path) -> None:

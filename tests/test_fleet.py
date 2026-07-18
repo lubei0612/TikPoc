@@ -762,6 +762,44 @@ def test_fleet_isolates_claim_error_to_one_device(tmp_path: Path, monkeypatch) -
     supervisor.stop()
 
 
+def test_fleet_restarts_only_requested_missing_device(tmp_path: Path) -> None:
+    repository = AcquisitionRepository(tmp_path / "tikpoc.db")
+    repository.migrate()
+    launches: list[str] = []
+    children: dict[str, list[FakeChild]] = {}
+
+    def launch(device, owner_id: str, fence: DeviceWorkerFence) -> FakeChild:
+        launches.append(device.device_id)
+        child = FakeChild(pid=100 + len(launches))
+        children.setdefault(device.device_id, []).append(child)
+        return child
+
+    supervisor = FleetSupervisor(
+        repository,
+        _two_device_config(tmp_path),
+        launcher=launch,
+        clock_ms=lambda: 1_000,
+        owner_factory=lambda device: f"worker-{device.device_id}",
+        lease_ttl_ms=100,
+    )
+    supervisor.start()
+    original_phone_02 = children["phone-02"][0]
+    failed_phone_01 = children["phone-01"][0]
+    failed_phone_01.alive = False
+    failed_phone_01.exitcode = 1
+    supervisor.poll(now_ms=1_010)
+
+    health = {
+        item.device_id: item for item in supervisor.restart_devices(("phone-01",))
+    }
+
+    assert launches == ["phone-01", "phone-02", "phone-01"]
+    assert original_phone_02.is_alive() is True
+    assert health["phone-01"].state is FleetWorkerState.HEALTHY
+    assert health["phone-02"].state is FleetWorkerState.HEALTHY
+    supervisor.stop()
+
+
 def test_launcher_and_health_write_errors_are_isolated_to_one_device(
     tmp_path: Path, monkeypatch
 ) -> None:

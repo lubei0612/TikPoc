@@ -20,6 +20,12 @@ from .profile_parser import parse_profile_page, parse_visible_post_keys
 TIKTOK_PACKAGE = "com.zhiliaoapp.musically"
 POST_CONTAINER_ID = f"{TIKTOK_PACKAGE}:id/eqx"
 PROFILE_USERNAME_ID = f"{TIKTOK_PACKAGE}:id/s7e"
+
+
+class ProfileIdentityMismatch(ValueError):
+    pass
+
+
 LIKE_CONTROL_XPATH = '//*[starts-with(@content-desc, "Like video.")]'
 LIKE_ACTIVE_XPATH = (
     '//*[@content-desc="Video liked" or starts-with(@content-desc,"Unlike video")]'
@@ -112,7 +118,7 @@ class AppiumTikTokDevice:
                 if actual == normalized:
                     return
                 if actual:
-                    last_error = ValueError(
+                    last_error = ProfileIdentityMismatch(
                         f"profile mismatch: expected {normalized}, got {actual}"
                     )
             else:

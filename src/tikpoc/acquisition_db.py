@@ -23,6 +23,7 @@ from .acquisition_models import (
     RoundAssignment,
     RoundCompletion,
 )
+from .capacity import AssignmentTiming, RoundCapacityAudit
 from .importer import Target, target_identity_key
 from .models import ProfileMetrics
 from .rules import evaluate_profile
@@ -70,6 +71,11 @@ _ALLOWED_PHASE_TRANSITIONS = {
         AssignmentPhase.DEFERRED,
     },
 }
+_CAPACITY_QUOTA_LIMITS = {
+    OutcomeKind.LIKE: 100,
+    OutcomeKind.FAVORITE: 14,
+    OutcomeKind.REPOST: 25,
+}
 
 
 def _clock_ms() -> int:
@@ -97,6 +103,31 @@ class AcquisitionRepository:
                 yield connection
         finally:
             connection.close()
+
+    @contextmanager
+    def _connect_read_only(self) -> Iterator[sqlite3.Connection]:
+        database_uri = f"{self.path.resolve().as_uri()}?mode=ro"
+        connection = sqlite3.connect(database_uri, timeout=30, uri=True)
+        try:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA busy_timeout=30000")
+            connection.execute("PRAGMA foreign_keys=ON")
+            yield connection
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _table_exists(connection: sqlite3.Connection, table_name: str) -> bool:
+        return (
+            connection.execute(
+                """
+                SELECT 1 FROM sqlite_schema
+                WHERE type = 'table' AND name = ?
+                """,
+                (table_name,),
+            ).fetchone()
+            is not None
+        )
 
     def migrate(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -271,6 +302,14 @@ class AcquisitionRepository:
                     details_json TEXT NOT NULL DEFAULT '{}',
                     changed_at_ms INTEGER NOT NULL,
                     FOREIGN KEY(assignment_id) REFERENCES round_assignments(assignment_id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS assignment_phase_history_capacity_idx
+                ON assignment_phase_history(
+                    assignment_id, to_phase, changed_at_ms
                 )
                 """
             )
@@ -723,6 +762,21 @@ class AcquisitionRepository:
         with self._connect() as connection:
             return self._pool_targets(connection, pool_id)
 
+    def pool_exists(self, pool_id: str) -> bool:
+        normalized_pool_id = str(pool_id).strip()
+        if not normalized_pool_id:
+            return False
+        with self._connect_read_only() as connection:
+            if not self._table_exists(connection, "pool_targets"):
+                return False
+            return (
+                connection.execute(
+                    "SELECT 1 FROM pool_targets WHERE pool_id = ? LIMIT 1",
+                    (normalized_pool_id,),
+                ).fetchone()
+                is not None
+            )
+
     def create_round(
         self,
         *,
@@ -869,6 +923,39 @@ class AcquisitionRepository:
                 (round_id, device_id),
             ).fetchall()
             return tuple(str(row["identity_key"]) for row in rows)
+
+    def round_device_ids(self, round_id: str) -> tuple[str, ...]:
+        with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT 1 FROM exposure_rounds WHERE round_id = ?", (round_id,)
+            ).fetchone()
+            if existing is None:
+                raise KeyError(round_id)
+            return tuple(
+                str(row["device_id"])
+                for row in connection.execute(
+                    """
+                    SELECT device_id FROM round_device_seeds
+                    WHERE round_id = ? ORDER BY device_id
+                    """,
+                    (round_id,),
+                )
+            )
+
+    def round_exists(self, round_id: str) -> bool:
+        normalized_round_id = str(round_id).strip()
+        if not normalized_round_id:
+            return False
+        with self._connect_read_only() as connection:
+            if not self._table_exists(connection, "exposure_rounds"):
+                return False
+            return (
+                connection.execute(
+                    "SELECT 1 FROM exposure_rounds WHERE round_id = ? LIMIT 1",
+                    (normalized_round_id,),
+                ).fetchone()
+                is not None
+            )
 
     def claim_next_assignment(
         self,
@@ -1073,6 +1160,23 @@ class AcquisitionRepository:
         with self._connect() as connection:
             return self._assignment_by_id(connection, assignment_id)
 
+    def assignment_exists(self, assignment_id: int) -> bool:
+        if assignment_id <= 0:
+            return False
+        with self._connect_read_only() as connection:
+            if not self._table_exists(connection, "round_assignments"):
+                return False
+            return (
+                connection.execute(
+                    """
+                    SELECT 1 FROM round_assignments
+                    WHERE assignment_id = ? LIMIT 1
+                    """,
+                    (assignment_id,),
+                ).fetchone()
+                is not None
+            )
+
     def assignment_phase_history(
         self, assignment_id: int
     ) -> tuple[AssignmentTransition, ...]:
@@ -1259,6 +1363,522 @@ class AcquisitionRepository:
                 completed=int(row["completed"] or 0),
                 deferred=int(row["deferred"] or 0),
             )
+
+    def retry_assignment(self, assignment_id: int) -> RoundAssignment:
+        if assignment_id <= 0:
+            raise ValueError("assignment id must be positive")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT phase, lease_owner FROM round_assignments
+                WHERE assignment_id = ?
+                """,
+                (assignment_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(assignment_id)
+            if AssignmentPhase(str(row["phase"])) is not AssignmentPhase.DEFERRED:
+                raise ValueError("assignment is not deferred")
+            if row["lease_owner"] is not None:
+                raise ValueError("deferred assignment still has an active owner")
+            connection.execute(
+                """
+                UPDATE round_assignments SET next_attempt_at_ms = 0
+                WHERE assignment_id = ?
+                """,
+                (assignment_id,),
+            )
+            return self._assignment_by_id(connection, assignment_id)
+
+    def capacity_audit(
+        self, round_id: str, *, expected_devices: int
+    ) -> RoundCapacityAudit:
+        if expected_devices <= 0:
+            raise ValueError("expected device count must be positive")
+        with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT 1 FROM exposure_rounds WHERE round_id = ?", (round_id,)
+            ).fetchone()
+            if existing is None:
+                raise KeyError(round_id)
+            device_ids = tuple(
+                str(row["device_id"])
+                for row in connection.execute(
+                    """
+                    SELECT device_id FROM round_device_seeds
+                    WHERE round_id = ? ORDER BY device_id
+                    """,
+                    (round_id,),
+                )
+            )
+            assignment_rows = connection.execute(
+                """
+                SELECT assignment_id, identity_key, device_id, phase,
+                       visit_confirmed_at_ms, completed_at_ms
+                FROM round_assignments
+                WHERE round_id = ?
+                ORDER BY assignment_id
+                """,
+                (round_id,),
+            ).fetchall()
+            first_claims = {
+                int(row["assignment_id"]): int(row["started_at_ms"])
+                for row in connection.execute(
+                    """
+                    SELECT history.assignment_id,
+                           MIN(history.changed_at_ms) AS started_at_ms
+                    FROM assignment_phase_history AS history
+                    JOIN round_assignments AS assignment
+                      ON assignment.assignment_id = history.assignment_id
+                    WHERE assignment.round_id = ?
+                      AND history.to_phase = 'profile_opening'
+                    GROUP BY history.assignment_id
+                    """,
+                    (round_id,),
+                )
+            }
+            video_confirmations = {
+                int(row["assignment_id"]): int(row["confirmed_at_ms"])
+                for row in connection.execute(
+                    """
+                    SELECT history.assignment_id,
+                           MIN(history.changed_at_ms) AS confirmed_at_ms
+                    FROM assignment_phase_history AS history
+                    JOIN round_assignments AS assignment
+                      ON assignment.assignment_id = history.assignment_id
+                    WHERE assignment.round_id = ?
+                      AND history.from_phase = 'video_opening'
+                      AND history.to_phase = 'video_confirmed'
+                    GROUP BY history.assignment_id
+                    """,
+                    (round_id,),
+                )
+            }
+            confirmed_plans = {
+                (str(row["identity_key"]), str(row["device_id"])): dict(row)
+                for row in connection.execute(
+                    """
+                    SELECT plan.plan_id, plan.identity_key, plan.device_id,
+                           plan.requested_outcome, plan.effective_outcome,
+                           plan.created_at_ms, plan.video_key,
+                           plan.quota_window_start_ms, plan.quota_reason,
+                           CASE WHEN effective_quota.device_id IS NULL
+                               THEN 0 ELSE 1 END AS effective_quota_matched,
+                           requested_quota.reserved_count
+                               AS requested_quota_reserved_count,
+                           requested_quota.confirmed_count
+                               AS requested_quota_confirmed_count,
+                           requested_quota.uncertain_count
+                               AS requested_quota_uncertain_count,
+                           MIN(CASE WHEN attempt.result = 'confirmed'
+                               THEN attempt.attempted_at_ms END) AS confirmed_at_ms
+                    FROM device_action_plans AS plan
+                    LEFT JOIN action_attempts AS attempt
+                      ON attempt.plan_id = plan.plan_id
+                    LEFT JOIN acquisition_quota_windows AS effective_quota
+                      ON effective_quota.device_id = plan.device_id
+                     AND effective_quota.outcome = plan.effective_outcome
+                     AND effective_quota.window_start_ms =
+                         plan.quota_window_start_ms
+                    LEFT JOIN acquisition_quota_windows AS requested_quota
+                      ON requested_quota.device_id = plan.device_id
+                     AND requested_quota.outcome = plan.requested_outcome
+                     AND requested_quota.window_start_ms =
+                         plan.quota_window_start_ms
+                    WHERE plan.round_id = ? AND plan.state = 'confirmed'
+                    GROUP BY plan.plan_id
+                    """,
+                    (round_id,),
+                )
+            }
+            snapshots = {
+                str(row["identity_key"]): dict(row)
+                for row in connection.execute(
+                    """
+                    SELECT snapshot.*, target.username AS expected_username,
+                           EXISTS (
+                               SELECT 1 FROM round_assignments AS observer
+                               WHERE observer.round_id = snapshot.round_id
+                                 AND observer.identity_key = snapshot.identity_key
+                                 AND observer.device_id =
+                                     snapshot.observed_by_device_id
+                                 AND observer.visit_confirmed_at_ms IS NOT NULL
+                                 AND observer.visit_confirmed_at_ms
+                                     <= snapshot.observed_at_ms
+                           ) AS observer_valid
+                    FROM profile_snapshots AS snapshot
+                    JOIN exposure_rounds AS round
+                      ON round.round_id = snapshot.round_id
+                    JOIN pool_targets AS target
+                      ON target.pool_id = round.pool_id
+                     AND target.identity_key = snapshot.identity_key
+                    WHERE snapshot.round_id = ?
+                    """,
+                    (round_id,),
+                )
+            }
+
+            timings: list[AssignmentTiming] = []
+            invalid_outcome_plan_ids: set[int] = set()
+            completed_count = 0
+            for row in assignment_rows:
+                if str(row["phase"]) != AssignmentPhase.COMPLETED.value:
+                    continue
+                completed_count += 1
+                assignment_id = int(row["assignment_id"])
+                started_at_ms = first_claims.get(assignment_id)
+                completed_at_ms = row["completed_at_ms"]
+                plan_key = (str(row["identity_key"]), str(row["device_id"]))
+                plan_evidence = confirmed_plans.get(plan_key)
+                snapshot_evidence = snapshots.get(plan_key[0])
+                video_confirmed_at_ms = video_confirmations.get(assignment_id)
+                visit_confirmed_at_ms = row["visit_confirmed_at_ms"]
+                visit_value = (
+                    None
+                    if visit_confirmed_at_ms is None
+                    else int(visit_confirmed_at_ms)
+                )
+                completed_value = (
+                    None if completed_at_ms is None else int(completed_at_ms)
+                )
+                plan_valid = False
+                if (
+                    plan_evidence is not None
+                    and snapshot_evidence is not None
+                    and started_at_ms is not None
+                    and completed_value is not None
+                    and visit_value is not None
+                ):
+                    plan_id = int(plan_evidence["plan_id"])
+                    plan_created_at_ms = int(plan_evidence["created_at_ms"])
+                    video_key = str(plan_evidence["video_key"] or "").strip() or None
+                    confirmed_at_ms = (
+                        None
+                        if plan_evidence["confirmed_at_ms"] is None
+                        else int(plan_evidence["confirmed_at_ms"])
+                    )
+                    snapshot_eligible = int(snapshot_evidence["eligible"])
+                    snapshot_observed_at_ms = int(snapshot_evidence["observed_at_ms"])
+                    relationship_valid, effective_outcome = (
+                        self._capacity_plan_relationship_is_valid(
+                            plan_evidence,
+                            snapshot_eligible=bool(snapshot_eligible),
+                        )
+                    )
+                    if not relationship_valid:
+                        invalid_outcome_plan_ids.add(plan_id)
+                    snapshot_valid = (
+                        self._capacity_snapshot_is_valid(snapshot_evidence)
+                        and bool(snapshot_evidence["observer_valid"])
+                        and snapshot_observed_at_ms <= plan_created_at_ms
+                    )
+                    outcome_valid = relationship_valid and (
+                        snapshot_eligible == 0
+                        or (
+                            video_key is not None
+                            and video_confirmed_at_ms is not None
+                            and plan_created_at_ms
+                            <= video_confirmed_at_ms
+                            <= completed_value
+                        )
+                    )
+                    plan_valid = (
+                        started_at_ms
+                        <= visit_value
+                        <= plan_created_at_ms
+                        <= completed_value
+                        and snapshot_valid
+                        and outcome_valid
+                        and (
+                            effective_outcome is OutcomeKind.TRACE
+                            or (
+                                confirmed_at_ms is not None
+                                and video_confirmed_at_ms is not None
+                                and video_confirmed_at_ms
+                                <= confirmed_at_ms
+                                <= completed_value
+                            )
+                        )
+                    )
+                if (
+                    visit_value is None
+                    or completed_value is None
+                    or started_at_ms is None
+                    or completed_value <= started_at_ms
+                    or not started_at_ms <= visit_value <= completed_value
+                    or not plan_valid
+                ):
+                    continue
+                timings.append(
+                    AssignmentTiming(
+                        assignment_id=assignment_id,
+                        identity_key=plan_key[0],
+                        device_id=plan_key[1],
+                        duration_ms=completed_value - started_at_ms,
+                    )
+                )
+
+            devices_by_target: dict[str, list[str]] = {}
+            for timing in timings:
+                devices_by_target.setdefault(timing.identity_key, []).append(
+                    timing.device_id
+                )
+            fully_covered_targets = sum(
+                len(devices) == expected_devices
+                and len(set(devices)) == expected_devices
+                for devices in devices_by_target.values()
+            )
+
+            uncertain_count = int(
+                connection.execute(
+                    """
+                    SELECT COUNT(*) AS count FROM device_action_plans
+                    WHERE round_id = ? AND state = 'uncertain'
+                    """,
+                    (round_id,),
+                ).fetchone()["count"]
+            )
+            deferred_count = sum(
+                str(row["phase"]) == AssignmentPhase.DEFERRED.value
+                for row in assignment_rows
+            )
+            identity_mismatch_assignments: set[int] = set()
+            history_rows = connection.execute(
+                """
+                SELECT history.assignment_id, history.details_json,
+                       assignment.last_error_code
+                FROM assignment_phase_history AS history
+                JOIN round_assignments AS assignment
+                  ON assignment.assignment_id = history.assignment_id
+                WHERE assignment.round_id = ?
+                """,
+                (round_id,),
+            ).fetchall()
+            for row in history_rows:
+                details = dict(json.loads(str(row["details_json"])))
+                codes = (
+                    str(details.get("error_code") or ""),
+                    str(details.get("reason") or ""),
+                    str(row["last_error_code"] or ""),
+                )
+                if any(
+                    "mismatch" in code.lower()
+                    and ("identity" in code.lower() or "profile" in code.lower())
+                    for code in codes
+                ):
+                    identity_mismatch_assignments.add(int(row["assignment_id"]))
+
+            missing_quota_plan_ids = {
+                int(row["plan_id"])
+                for row in connection.execute(
+                    """
+                    SELECT plan.plan_id
+                    FROM device_action_plans AS plan
+                    WHERE plan.round_id = ?
+                      AND plan.effective_outcome <> 'trace'
+                      AND (
+                          plan.quota_window_start_ms IS NULL
+                          OR plan.quota_window_start_ms <>
+                              plan.created_at_ms - plan.created_at_ms % 3600000
+                          OR NOT EXISTS (
+                              SELECT 1 FROM acquisition_quota_windows AS quota
+                              WHERE quota.device_id = plan.device_id
+                                AND quota.outcome = plan.effective_outcome
+                                AND quota.window_start_ms = plan.quota_window_start_ms
+                          )
+                      )
+                    """,
+                    (round_id,),
+                )
+            }
+            quota_overrun_count = len(missing_quota_plan_ids | invalid_outcome_plan_ids)
+            quota_limits = {
+                outcome.value: limit
+                for outcome, limit in _CAPACITY_QUOTA_LIMITS.items()
+            }
+            quota_rows = connection.execute(
+                """
+                SELECT DISTINCT quota.device_id, quota.outcome,
+                                quota.window_start_ms, quota.reserved_count,
+                                quota.confirmed_count, quota.uncertain_count,
+                                (
+                                    SELECT COUNT(*) FROM device_action_plans AS linked
+                                    WHERE linked.device_id = quota.device_id
+                                      AND linked.effective_outcome = quota.outcome
+                                      AND linked.quota_window_start_ms = quota.window_start_ms
+                                ) AS plan_count,
+                                (
+                                    SELECT COUNT(*) FROM device_action_plans AS linked
+                                    WHERE linked.device_id = quota.device_id
+                                      AND linked.effective_outcome = quota.outcome
+                                      AND linked.quota_window_start_ms = quota.window_start_ms
+                                      AND linked.state = 'confirmed'
+                                ) AS confirmed_plan_count,
+                                (
+                                    SELECT COUNT(*) FROM device_action_plans AS linked
+                                    WHERE linked.device_id = quota.device_id
+                                      AND linked.effective_outcome = quota.outcome
+                                      AND linked.quota_window_start_ms = quota.window_start_ms
+                                      AND linked.state = 'uncertain'
+                                ) AS uncertain_plan_count
+                FROM acquisition_quota_windows AS quota
+                JOIN device_action_plans AS plan
+                  ON plan.device_id = quota.device_id
+                 AND plan.quota_window_start_ms = quota.window_start_ms
+                 AND (
+                      plan.effective_outcome = quota.outcome
+                      OR (
+                          plan.effective_outcome = 'trace'
+                          AND plan.requested_outcome = quota.outcome
+                      )
+                 )
+                WHERE plan.round_id = ?
+                """,
+                (round_id,),
+            ).fetchall()
+            for row in quota_rows:
+                limit = quota_limits.get(str(row["outcome"]))
+                reserved = int(row["reserved_count"])
+                confirmed = int(row["confirmed_count"])
+                uncertain = int(row["uncertain_count"])
+                plan_count = int(row["plan_count"])
+                confirmed_plan_count = int(row["confirmed_plan_count"])
+                uncertain_plan_count = int(row["uncertain_plan_count"])
+                if limit is not None and (
+                    reserved > limit
+                    or confirmed + uncertain > limit
+                    or confirmed + uncertain > reserved
+                    or reserved != plan_count
+                    or confirmed != confirmed_plan_count
+                    or uncertain != uncertain_plan_count
+                ):
+                    quota_overrun_count += 1
+
+            return RoundCapacityAudit(
+                device_ids=device_ids,
+                timings=tuple(timings),
+                total_assignment_count=len(assignment_rows),
+                fully_covered_targets=fully_covered_targets,
+                uncertain_count=uncertain_count,
+                identity_mismatch_count=len(identity_mismatch_assignments),
+                false_success_count=completed_count - len(timings),
+                quota_overrun_count=quota_overrun_count,
+                deferred_count=deferred_count,
+            )
+
+    @classmethod
+    def _capacity_snapshot_is_valid(cls, snapshot: Mapping[str, object]) -> bool:
+        try:
+            access_state = ProfileAccessState(str(snapshot["access_state"]))
+            private_value = int(snapshot["private_account"])
+            eligible_value = int(snapshot["eligible"])
+            if private_value not in {0, 1} or eligible_value not in {0, 1}:
+                return False
+            counts = (
+                snapshot["following_count"],
+                snapshot["followers_count"],
+                snapshot["post_count"],
+            )
+            if not (
+                all(value is None for value in counts)
+                or all(value is not None for value in counts)
+            ):
+                return False
+            metrics = (
+                None
+                if all(value is None for value in counts)
+                else ProfileMetrics(*(int(value) for value in counts))
+            )
+        except (KeyError, TypeError, ValueError):
+            return False
+
+        private_account = bool(private_value)
+        if private_account != (access_state is ProfileAccessState.PRIVATE):
+            return False
+        if access_state in {ProfileAccessState.PUBLIC, ProfileAccessState.PRIVATE}:
+            observed_username = cls._normalize_username(
+                str(snapshot["observed_username"])
+            )
+            expected_username = cls._normalize_username(
+                str(snapshot["expected_username"])
+            )
+            if not observed_username or observed_username != expected_username:
+                return False
+
+        reason = str(snapshot["reason"])
+        if access_state is ProfileAccessState.PUBLIC:
+            if metrics is None:
+                return False
+            decision = evaluate_profile(metrics)
+            expected_reason = (
+                "eligible" if decision.eligible else ",".join(decision.reasons)
+            )
+            return (
+                eligible_value == int(decision.eligible) and reason == expected_reason
+            )
+
+        expected_reason = (
+            "private_account"
+            if access_state is ProfileAccessState.PRIVATE
+            else f"profile_{access_state.value}"
+        )
+        return eligible_value == 0 and reason == expected_reason
+
+    @staticmethod
+    def _capacity_plan_relationship_is_valid(
+        plan: Mapping[str, object], *, snapshot_eligible: bool
+    ) -> tuple[bool, OutcomeKind | None]:
+        try:
+            requested = OutcomeKind(str(plan["requested_outcome"]))
+            effective = OutcomeKind(str(plan["effective_outcome"]))
+            created_at_ms = int(plan["created_at_ms"])
+            window_start_ms = (
+                None
+                if plan["quota_window_start_ms"] is None
+                else int(plan["quota_window_start_ms"])
+            )
+        except (KeyError, TypeError, ValueError):
+            return False, None
+        reason = None if plan["quota_reason"] is None else str(plan["quota_reason"])
+
+        if not snapshot_eligible:
+            valid = (
+                requested is OutcomeKind.TRACE
+                and effective is OutcomeKind.TRACE
+                and window_start_ms is None
+                and reason == "profile_ineligible"
+            )
+            return valid, effective
+
+        if requested is OutcomeKind.TRACE:
+            valid = (
+                effective is OutcomeKind.TRACE
+                and window_start_ms is None
+                and reason is None
+            )
+            return valid, effective
+
+        limit = _CAPACITY_QUOTA_LIMITS.get(requested)
+        expected_window_start_ms = created_at_ms - created_at_ms % 3_600_000
+        if limit is None or window_start_ms != expected_window_start_ms:
+            return False, effective
+        if effective is requested:
+            return (
+                reason is None and bool(plan["effective_quota_matched"]),
+                effective,
+            )
+        if effective is not OutcomeKind.TRACE:
+            return False, effective
+
+        try:
+            reserved = int(plan["requested_quota_reserved_count"])
+        except (KeyError, TypeError, ValueError):
+            return False, effective
+        valid_fallback = (
+            reason == f"{requested.value}_limit_reached" and reserved >= limit
+        )
+        return valid_fallback, effective
 
     def claim_snapshot_lease(
         self,
