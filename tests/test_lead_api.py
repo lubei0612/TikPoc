@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -268,3 +269,117 @@ def test_sale_uses_minor_units_and_account_switches_persist(tmp_path: Path) -> N
         "confirmed_revenue_minor": {"USD": 12_345},
         "sales": 1,
     }
+
+
+def test_disabled_account_controls_reject_browser_action_claims_without_leases(
+    tmp_path: Path,
+) -> None:
+    app, database = _seeded_app(tmp_path)
+    client = TestClient(app)
+    headers = {"origin": "https://www.tiktok.com"}
+    assert (
+        client.post(
+            "/api/accounts/account-01/followback-enable",
+            json={"command_id": "followback-off", "enabled": False},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            "/api/accounts/account-01/ai-enable",
+            json={"command_id": "ai-off", "enabled": False},
+        ).status_code
+        == 200
+    )
+
+    for action_type, action_key in (
+        ("followback", "buyer-01"),
+        ("dm_send", "plan-123"),
+    ):
+        response = client.post(
+            "/api/browser-actions/claim",
+            headers=headers,
+            json={
+                "account_id": "account-01",
+                "device_id": "phone-01",
+                "action_type": action_type,
+                "action_key": action_key,
+                "owner_id": "tab-01",
+                "timestamp_ms": 5_000,
+                "lease_seconds": 30,
+            },
+        )
+        assert response.status_code == 200
+        assert response.json() == {"claimed": False}
+
+    with sqlite3.connect(database.path) as connection:
+        assert (
+            connection.execute("SELECT COUNT(*) FROM browser_action_leases").fetchone()[
+                0
+            ]
+            == 0
+        )
+
+
+def test_uncertain_send_blocks_manual_reply_plan_in_same_conversation(
+    tmp_path: Path,
+) -> None:
+    app, database = _seeded_app(tmp_path)
+    client = TestClient(app)
+    draft = database.get_browser_reply_plan("account-01", "message-3")
+    assert draft is not None
+    database.set_browser_reply_plan_state(draft.id, "uncertain")
+    assert (
+        client.post(
+            "/api/leads/account-01/conversation-01/takeover",
+            json={"command_id": "takeover-uncertain", "reason": "operator"},
+        ).status_code
+        == 200
+    )
+
+    response = client.post(
+        "/api/leads/account-01/conversation-01/manual-reply-plan",
+        json={
+            "command_id": "manual-blocked",
+            "inbound_fingerprint": "message-3",
+            "reply_text": "Do not create this plan.",
+        },
+    )
+
+    assert response.status_code == 409
+    assert (
+        database.get_browser_reply_plan(
+            "account-01", "operator-manual:conversation-01:manual-blocked"
+        )
+        is None
+    )
+
+
+def test_lead_inbox_only_returns_registry_accounts_and_unconfigured_is_empty(
+    tmp_path: Path,
+) -> None:
+    app, database = _seeded_app(tmp_path)
+    database.append_web_message(
+        "unknown-account",
+        "unknown-conversation",
+        "unknown-message",
+        direction="inbound",
+        message_type="TEXT",
+        text="Secret destination: UNKNOWN_DESTINATION",
+        timestamp_ms=9_000,
+        participant_username="unknown-buyer",
+    )
+
+    configured = TestClient(app).get("/api/leads").json()
+    assert configured["configured"] is True
+    assert {item["account_id"] for item in configured["conversations"]} == {
+        "account-01"
+    }
+    assert "UNKNOWN_DESTINATION" not in json.dumps(configured)
+
+    unconfigured = TestClient(create_app(database.path)).get("/api/leads").json()
+    assert unconfigured["configured"] is False
+    assert unconfigured["accounts"] == []
+    assert unconfigured["conversations"] == []
+    assert unconfigured["selected"] is None
+    assert "UNKNOWN_DESTINATION" not in json.dumps(unconfigured)

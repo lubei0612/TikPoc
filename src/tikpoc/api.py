@@ -287,7 +287,18 @@ def create_app(
     async def browser_action_claim(request: Request) -> JSONResponse:
         try:
             body = BrowserActionClaimRequest.model_validate(await _json_object(request))
-            _browser_account(registry, body)
+            account = _browser_account(registry, body)
+            settings = database.account_operator_settings(
+                account.account_id,
+                default_ai_enabled=(account.enabled and account.browser_dm_enabled),
+                default_followback_enabled=(
+                    account.enabled and account.browser_followback_enabled
+                ),
+            )
+            if (
+                body.action_type == "followback" and not settings["followback_enabled"]
+            ) or (body.action_type == "dm_send" and not settings["ai_enabled"]):
+                return _json({"claimed": False})
             claimed = database.claim_browser_action(
                 body.account_id,
                 body.action_type,
@@ -572,7 +583,14 @@ def create_app(
             if registry is None
             else [account_readiness(account) for account in registry.accounts]
         )
-        conversations = database.lead_conversations(limit=limit)
+        account_ids = (
+            ()
+            if registry is None
+            else tuple(account.account_id for account in registry.accounts)
+        )
+        conversations = database.lead_conversations(
+            account_ids=account_ids, limit=limit
+        )
         conversations = [
             redact_destination(item, str(item["account_id"])) for item in conversations
         ]
@@ -580,6 +598,7 @@ def create_app(
             selected = redact_destination(selected, account_id)
         return _json(
             {
+                "configured": registry is not None,
                 "accounts": accounts,
                 "conversations": conversations,
                 "selected": selected,

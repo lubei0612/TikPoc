@@ -1831,11 +1831,16 @@ class Database:
             )
             return result
 
-    def lead_conversations(self, *, limit: int = 20) -> list[dict[str, object]]:
+    def lead_conversations(
+        self, *, account_ids: tuple[str, ...], limit: int = 20
+    ) -> list[dict[str, object]]:
+        if not account_ids:
+            return []
         bounded_limit = max(1, min(int(limit), 100))
+        placeholders = ", ".join("?" for _ in account_ids)
         with self._connect() as connection:
             rows = connection.execute(
-                """
+                f"""
                 SELECT c.account_id, c.conversation_id, c.participant_username,
                        c.stage, c.human_required,
                        COALESCE((
@@ -1849,12 +1854,13 @@ class Database:
                            WHERE m.account_id=c.account_id
                              AND m.conversation_id=c.conversation_id
                            ORDER BY m.timestamp_ms DESC, m.id DESC LIMIT 1
-                       ), 0) AS last_message_at_ms
+                ), 0) AS last_message_at_ms
                 FROM web_conversations c
+                WHERE c.account_id IN ({placeholders})
                 ORDER BY last_message_at_ms DESC, c.account_id, c.conversation_id
                 LIMIT ?
                 """,
-                (bounded_limit,),
+                (*account_ids, bounded_limit),
             ).fetchall()
         return [
             {
@@ -2049,6 +2055,17 @@ class Database:
             )
             if stored is not None:
                 return stored
+            uncertain = connection.execute(
+                """
+                SELECT 1 FROM browser_reply_plans
+                WHERE account_id=? AND conversation_id=? AND state='uncertain'
+                  AND TRIM(reply_text) != ''
+                LIMIT 1
+                """,
+                (account_id, conversation_id),
+            ).fetchone()
+            if uncertain is not None:
+                raise ValueError("conversation has an uncertain browser send")
             inbound = connection.execute(
                 """
                 SELECT text, timestamp_ms FROM web_messages
