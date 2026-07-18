@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import App from "./App";
+import { CommandBar } from "./components/CommandBar";
 import { OperationsView } from "./views/OperationsView";
 
 const operationSnapshot = (state = "running") => ({
@@ -159,6 +160,18 @@ function deferredResponse() {
   });
   return { promise, resolve };
 }
+
+it("confirms fleet and round commands before dispatch", () => {
+  const onCommand = vi.fn();
+  render(<CommandBar errors={{}} onCommand={onCommand} pendingKeys={new Set()} roundState="running" />);
+
+  fireEvent.click(screen.getByRole("button", { name: "Stop fleet" }));
+
+  expect(onCommand).not.toHaveBeenCalled();
+  expect(screen.getByRole("dialog", { name: "Confirm stop fleet" })).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Confirm stop fleet" }));
+  expect(onCommand).toHaveBeenCalledWith("stop", "fleet");
+});
 
 it("loads the operations snapshot and coverage for the selected round", async () => {
   const fetchMock = mockInitialLoad();

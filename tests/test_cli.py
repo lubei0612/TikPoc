@@ -649,6 +649,19 @@ def test_cli_serve_starts_uvicorn_console(tmp_path: Path, monkeypatch) -> None:
     assert captured["app"].state.database.path == tmp_path / "tasks.db"
 
 
+def test_cli_serve_rejects_non_loopback_host(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "serve",
+                "--db",
+                str(tmp_path / "tasks.db"),
+                "--host",
+                "0.0.0.0",
+            ]
+        )
+
+
 def test_cli_web_worker_passes_registry_and_once_flag(
     tmp_path: Path, monkeypatch
 ) -> None:

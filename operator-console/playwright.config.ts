@@ -4,6 +4,7 @@ export default defineConfig({
   testDir: "../tests/e2e",
   outputDir: "../test-results/operator-console",
   fullyParallel: false,
+  workers: 1,
   retries: 0,
   reporter: "line",
   use: {

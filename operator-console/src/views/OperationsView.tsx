@@ -193,7 +193,7 @@ export function OperationsView({
 
       <section className="workspace-section split-section">
         <div>
-          <header className="section-heading"><div><span className="section-index">02</span><div><h2>Rolling quotas</h2><p>Current one-hour reservation windows</p></div></div></header>
+          <header className="section-heading"><div><span className="section-index">02</span><div><h2>Natural-hour quotas</h2><p>Current fixed hour reservation windows</p></div></div></header>
           <QuotaTable quotas={snapshot.quotas} />
         </div>
         <aside className="coverage-ledger">

@@ -60,7 +60,7 @@ truthful control path.
 
 ## Quotas, Retry, And Diagnostics
 
-Rolling quota rows show limit, reserved, confirmed, uncertain, remaining, and
+Natural-hour quota rows show limit, reserved, confirmed, uncertain, remaining, and
 reset time per account/device and outcome. Reserved work consumes remaining
 capacity until it reaches a verified terminal state.
 

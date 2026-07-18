@@ -52,7 +52,11 @@ def _parser() -> argparse.ArgumentParser:
     for command_name in ("serve", "dashboard"):
         serve = commands.add_parser(command_name)
         serve.add_argument("--db", type=Path, required=True)
-        serve.add_argument("--host", default="127.0.0.1")
+        serve.add_argument(
+            "--host",
+            choices=("127.0.0.1", "::1", "localhost"),
+            default="127.0.0.1",
+        )
         serve.add_argument("--port", type=int, default=8765)
         serve.add_argument("--web-accounts", type=Path)
         serve.add_argument("--env-file", type=Path, default=Path(".env.local"))

@@ -1,4 +1,5 @@
 import { CirclePause, CirclePlay, Octagon, RadioTower } from "lucide-react";
+import { useState } from "react";
 
 import type { CommandAction, RoundState } from "../api";
 
@@ -21,6 +22,8 @@ const actions: Array<{
 ];
 
 export function CommandBar({ roundState, pendingKeys, errors, onCommand }: CommandBarProps) {
+  const [confirmation, setConfirmation] = useState<{ action: CommandAction; scope: "fleet" | "round" } | null>(null);
+  const confirmationLabel = confirmation ? `${confirmation.action} ${confirmation.scope}` : "";
   return (
     <section className="command-band" aria-label="Fleet and round controls">
       <div className="command-context">
@@ -44,7 +47,10 @@ export function CommandBar({ roundState, pendingKeys, errors, onCommand }: Comma
                       aria-label={`${label} ${scope}`}
                       className={`icon-command ${tone}`}
                       disabled={pending || (roundState === "completed" && scope === "round")}
-                      onClick={() => onCommand(action, scope)}
+                      onClick={() => {
+                        if (action === "stop") setConfirmation({ action, scope });
+                        else onCommand(action, scope);
+                      }}
                       title={`${label} ${scope}`}
                       type="button"
                     >
@@ -59,6 +65,29 @@ export function CommandBar({ roundState, pendingKeys, errors, onCommand }: Comma
           </div>
         ))}
       </div>
+      {confirmation && (
+        <div className="command-dialog-backdrop">
+          <div aria-label={`Confirm ${confirmationLabel}`} aria-modal="true" className="command-dialog" role="dialog">
+            <span className="eyebrow">Confirm command</span>
+            <strong>{confirmation.action[0].toUpperCase() + confirmation.action.slice(1)} {confirmation.scope}</strong>
+            <p>This changes the persisted control state for the selected {confirmation.scope}.</p>
+            <div>
+              <button className="action-button" onClick={() => setConfirmation(null)} type="button">Cancel</button>
+              <button
+                aria-label={`Confirm ${confirmationLabel}`}
+                className="action-button warning"
+                onClick={() => {
+                  onCommand(confirmation.action, confirmation.scope);
+                  setConfirmation(null);
+                }}
+                type="button"
+              >
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
