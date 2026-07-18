@@ -51,7 +51,7 @@ Execute Tasks 1-9 from
 - [x] Task 6: durable mobile assignment state machine.
 - [x] Task 7: Appium semantic action verification.
 - [x] Task 8: MYT discovery, allowlisted proxy relay, and fleet ownership.
-- [ ] Task 9: CLI operations, capacity report, and coverage gate.
+- [x] Task 9: CLI operations, capacity report, and coverage gate.
 
 After every task, run its focused tests, the applicable full suite, Ruff check,
 Ruff format check, `git diff --check`, specification review, quality review, and

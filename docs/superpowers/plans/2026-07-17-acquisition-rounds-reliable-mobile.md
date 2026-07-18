@@ -859,7 +859,7 @@ git commit -m "feat: manage MYT fleet and local proxy relay"
 - Create: `tests/test_capacity.py`
 - Modify: `tests/test_cli.py`
 
-- [ ] **Step 1: Write failing strict capacity tests**
+- [x] **Step 1: Write failing strict capacity tests**
 
 ```python
 def test_capacity_uses_slowest_device_and_completed_assignments() -> None:
@@ -885,13 +885,13 @@ def test_uncertain_or_missing_coverage_fails_promotion() -> None:
     assert "7/7 coverage incomplete" in report.reasons
 ```
 
-- [ ] **Step 2: Run capacity and CLI tests**
+- [x] **Step 2: Run capacity and CLI tests**
 
 Run: `uv run pytest tests/test_capacity.py tests/test_cli.py -q`
 
 Expected: FAIL because the acquisition capacity module and commands are absent.
 
-- [ ] **Step 3: Implement capacity value types and math**
+- [x] **Step 3: Implement capacity value types and math**
 
 ```python
 @dataclass(frozen=True)
@@ -920,7 +920,7 @@ Use assignment completion durations only. Require every expected device, mean
 below 6,500 ms, p90 below 8,640 ms, zero identity mismatch, zero false success,
 zero quota overrun, zero pending deferred work, and exact target 7/7 coverage.
 
-- [ ] **Step 4: Add acquisition CLI commands**
+- [x] **Step 4: Add acquisition CLI commands**
 
 Add:
 
@@ -935,13 +935,13 @@ tikpoc capacity --db DB --round ROUND --expected-devices 7 --target-count 10000 
 Validate paths and IDs before mutations. JSON output has stable keys matching
 `CapacityReport`; text output labels measured and projected values separately.
 
-- [ ] **Step 5: Run capacity, CLI, and repository tests**
+- [x] **Step 5: Run capacity, CLI, and repository tests**
 
 Run: `uv run pytest tests/test_capacity.py tests/test_cli.py tests/test_acquisition_db.py -q`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit operations and capacity gate**
+- [x] **Step 6: Commit operations and capacity gate**
 
 ```bash
 git add src/tikpoc/capacity.py src/tikpoc/cli.py src/tikpoc/acquisition_db.py tests/test_capacity.py tests/test_cli.py

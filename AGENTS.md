@@ -235,16 +235,20 @@ Completed on `feat/web-lead-conversion`:
 - Web Task 2: durable reply plans and exclusive browser action leases.
 - Web Task 3: reviewed lead-conversation policy with bilingual handoff,
   monotonic stages, invitation cooldown, contact priority, and prompt limits.
-- Mobile Tasks 1-8: stable target identity, immutable pools, deterministic
+- Mobile Tasks 1-9: stable target identity, immutable pools, deterministic
   rounds, shared qualification snapshots, independent quota-controlled plans,
   durable workers, semantic Appium verification, MYT discovery, proxy relay,
-  and fenced fleet ownership.
-- Latest code commit: `9a356de` (`feat: manage MYT fleet and local proxy relay`).
-- Task 8 repeated specification and quality reviews passed with no Critical,
-  Important, or Minor findings after the final concurrency fixes.
-- Last fresh full Python verification: `312 passed`.
-- Last focused Task 8 verification: `56 passed`.
-- Ruff check, focused format check for all seven Task 8 Python files, and
+  fenced fleet ownership, acquisition CLI operations, and strict capacity and
+  coverage gates.
+- Task 9 implementation commit: `b22bf69`
+  (`feat: operate and gate acquisition capacity`).
+- Latest code commit: `e58080c`
+  (`fix: harden capacity and fleet shutdown gates`).
+- Task 9 repeated specification and quality reviews passed with no Critical,
+  Important, or Minor findings after the final lease-release fixes.
+- Last fresh full Python verification: `402 passed`.
+- Last focused Task 9 verification: `162 passed`.
+- Ruff check, focused format check for all seven Task 9 review-fix files, and
   `git diff --check` passed.
 - Read-only MYT discovery found running slot 1 at ADB/web ports `30000/30001`
   and slot 2 at `30100/30101`. No account action was performed.
@@ -253,11 +257,9 @@ Completed on `feat/web-lead-conversion`:
 
 Outstanding at the current checkpoint:
 
-1. Execute Mobile Task 9: acquisition CLI operations, the capacity report, and
-   the strict coverage gate.
-2. Continue Web Tasks 4-10 and the operator-console plan in roadmap order.
-3. Execute Mobile Task 10 only at the roadmap's two-device live gate.
-4. Finish full regression, two-device calibration, four-/eight-hour
+1. Continue Web Tasks 4-10 and the operator-console plan in roadmap order.
+2. Execute Mobile Task 10 only at the roadmap's two-device live gate.
+3. Finish full regression, two-device calibration, four-/eight-hour
    endurance tests, seven-device benchmark, runbooks, branch integration, and
    GitHub setup.
 
@@ -266,12 +268,11 @@ Outstanding at the current checkpoint:
 1. Enter the active feature worktree and read this file plus both current plans.
 2. Run `git status --short --branch` and `git log -5 --oneline`.
 3. Preserve any new user changes and inspect them before proceeding.
-4. Read Mobile Task 9 plus the current CLI and acquisition repository before
-   editing.
-5. Add the strict capacity and CLI tests, run them to observe the expected
-   failure, and implement only enough behavior to pass each red-green slice.
+4. Read Web Task 4 plus the current messaging client and tests before editing.
+5. Add the prompt-context test, run it to observe the expected failure, and
+   implement only enough behavior to pass the red-green slice.
 6. Repeat focused and full verification plus specification and quality review
-   before committing Task 9.
+   before committing Web Task 4.
 
 If runtime state differs from this checkpoint, report the concrete difference,
 update the checkpoint, and continue from the latest verified state.
