@@ -166,7 +166,7 @@ export type OperatorCommand =
   | {
       action: CommandAction;
       commandId: string;
-      scope: "fleet" | "round";
+      scope: "device" | "fleet" | "round";
       scopeId: string;
     }
   | {

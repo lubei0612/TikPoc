@@ -34,9 +34,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .topbar-context label { color: #aeb7b2; font-size: 11px; font-weight: 700; text-transform: uppercase; }
 .topbar select { width: min(330px, 34vw); height: 34px; padding: 0 30px 0 10px; color: #f6f8f5; background: #262c29; border: 1px solid #48514d; border-radius: 5px; }
 .global-health { height: 30px; display: flex; align-items: center; gap: 7px; padding: 0 9px; color: #c6cec9; font-size: 12px; text-transform: capitalize; border-left: 1px solid #46504b; }
-.global-health.state-running { color: #91d6ad; }
-.global-health.state-paused { color: #efc371; }
-.global-health.state-stopped { color: #f09890; }
+.global-health.state-healthy { color: #91d6ad; }
+.global-health.state-degraded { color: #efc371; }
 
 .primary-nav { height: 45px; display: flex; align-items: stretch; gap: 3px; padding: 0 26px; background: #e8ebe7; border-bottom: 1px solid var(--line-strong); position: sticky; top: 58px; z-index: 25; }
 .primary-nav button { min-width: 124px; display: flex; align-items: center; justify-content: center; gap: 8px; color: #58625c; background: transparent; border: 0; border-bottom: 2px solid transparent; cursor: pointer; font-size: 13px; font-weight: 650; }
@@ -63,6 +62,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .command-group { display: grid; gap: 4px; }
 .command-group > span { color: #626c66; font-size: 10px; font-weight: 750; text-transform: uppercase; }
 .segmented-actions { display: flex; gap: 3px; }
+.command-control { display: grid; gap: 2px; }
+.command-control .cell-error { max-width: 82px; }
 .icon-command { width: 82px; height: 31px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; color: #26312b; background: #f9faf8; border: 1px solid #bcc5be; border-radius: 5px; cursor: pointer; font-size: 11px; font-weight: 700; }
 .icon-command:hover:not(:disabled) { border-color: #66746b; background: white; }
 .icon-command.positive svg { color: var(--green); }
@@ -96,14 +97,18 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .status-degraded > span, .status-uncertain > span, .status-pending > span { background: var(--amber); }
 .status-unhealthy > span, .status-failed > span { background: var(--red); }
 .cell-note { display: block; margin-top: 3px; color: var(--red); font-size: 9px; }
+.control-state { display: block; margin-top: 3px; font-size: 9px; font-weight: 700; text-transform: uppercase; }
 .timing-pair { display: grid; gap: 4px; color: #52605a; font-family: "SFMono-Regular", Consolas, monospace; font-size: 10px; }
 .timing-pair span { display: flex; align-items: center; gap: 5px; }
 .icon-only { width: 32px; height: 32px; display: inline-grid; place-items: center; color: #3e4b45; background: #f8faf7; border: 1px solid #c7cec8; border-radius: 5px; cursor: pointer; }
 .icon-only:hover:not(:disabled) { color: var(--cyan); border-color: var(--cyan); }
+.device-controls { display: flex; align-items: flex-start; gap: 4px; }
+.device-control { display: grid; gap: 2px; }
+.device-control .cell-error { max-width: 92px; }
 .diagnostic-row td { height: auto; padding: 0 12px 9px 52px; background: #f7f8f5; }
 .diagnostic-strip { min-height: 37px; display: grid; grid-template-columns: 95px 1fr auto; align-items: center; gap: 12px; padding: 5px 9px; border-left: 2px solid var(--amber); }
 .diagnostic-strip p { margin: 0; color: #525d57; font-size: 11px; }
-.diagnostic-strip code { color: #6a756f; font-size: 9px; }
+.diagnostic-strip > .icon-only { justify-self: end; }
 .muted { color: #8a928e; }
 
 .split-section { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 18px; }

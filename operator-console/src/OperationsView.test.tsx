@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
+import App from "./App";
 import { OperationsView } from "./views/OperationsView";
 
 const operationSnapshot = (state = "running") => ({
@@ -151,6 +152,14 @@ function mockInitialLoad() {
   });
 }
 
+function deferredResponse() {
+  let resolve!: (response: Response) => void;
+  const promise = new Promise<Response>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
+
 it("loads the operations snapshot and coverage for the selected round", async () => {
   const fetchMock = mockInitialLoad();
   render(<OperationsView roundId="round-1" />);
@@ -194,6 +203,63 @@ it("pauses the round only after server confirmation", async () => {
   );
 });
 
+it("pauses phone-01 with device scope and refreshes after success", async () => {
+  let operationsCalls = 0;
+  const pending = deferredResponse();
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+    const url = String(input);
+    if (url.startsWith("/api/coverage")) return jsonResponse(coverageSnapshot);
+    if (url === "/api/operations?round_id=round-1") {
+      operationsCalls += 1;
+      const snapshot = operationSnapshot();
+      snapshot.devices[0].control_state = operationsCalls > 1 ? "paused" : "running";
+      return jsonResponse(snapshot);
+    }
+    if (url === "/api/commands/pause") {
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        scope: "device",
+        scope_id: "phone-01",
+      });
+      return pending.promise;
+    }
+    throw new Error(`Unexpected request ${url}`);
+  });
+
+  render(<OperationsView roundId="round-1" />);
+  const pausePhoneOne = await screen.findByRole("button", { name: "Pause phone-01" });
+  fireEvent.click(pausePhoneOne);
+
+  expect(pausePhoneOne).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Start phone-01" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Pause phone-02" })).toBeEnabled();
+  pending.resolve(await jsonResponse({ state: "paused" }));
+  expect(await screen.findByText("Paused")).toBeVisible();
+  expect(operationsCalls).toBe(2);
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/commands/pause",
+    expect.objectContaining({ method: "POST" }),
+  );
+});
+
+it("disables only the fleet or round command that is pending", async () => {
+  const pending = deferredResponse();
+  vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+    const url = String(input);
+    if (url.startsWith("/api/coverage")) return jsonResponse(coverageSnapshot);
+    if (url === "/api/commands/pause") return pending.promise;
+    return jsonResponse(operationSnapshot());
+  });
+
+  render(<OperationsView roundId="round-1" />);
+  const pauseRound = await screen.findByRole("button", { name: "Pause round" });
+  fireEvent.click(pauseRound);
+
+  expect(pauseRound).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Start round" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Pause fleet" })).toBeEnabled();
+  pending.resolve(await jsonResponse({ state: "paused" }));
+});
+
 it("retries a deferred assignment and refreshes confirmed data", async () => {
   const fetchMock = mockInitialLoad();
   render(<OperationsView roundId="round-1" />);
@@ -210,6 +276,78 @@ it("retries a deferred assignment and refreshes confirmed data", async () => {
       }),
     ),
   );
+});
+
+it("disables only the matching coverage retry while it is pending", async () => {
+  const pending = deferredResponse();
+  const twoRetryRows = {
+    ...coverageSnapshot,
+    items: [
+      ...coverageSnapshot.items,
+      {
+        identity_key: "sec:buyer-2",
+        username: "buyer_2",
+        devices: [
+          {
+            ...coverageSnapshot.items[0].devices[1],
+            assignment_id: 43,
+          },
+        ],
+      },
+    ],
+    total: 2,
+  };
+  vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+    const url = String(input);
+    if (url.startsWith("/api/coverage")) return jsonResponse(twoRetryRows);
+    if (url === "/api/commands/retry") return pending.promise;
+    return jsonResponse(operationSnapshot());
+  });
+
+  render(<OperationsView roundId="round-1" />);
+  const firstRetry = await screen.findByRole("button", { name: "Retry phone-02 for buyer_1" });
+  fireEvent.click(firstRetry);
+
+  expect(firstRetry).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Retry phone-02 for buyer_2" })).toBeEnabled();
+  pending.resolve(await jsonResponse({ state: "pending" }));
+});
+
+it("shows screenshot evidence as an accessible Lucide icon control", async () => {
+  mockInitialLoad();
+  render(<OperationsView roundId="round-1" />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Diagnostics for phone-02" }));
+
+  const screenshot = screen.getByRole("button", { name: "Screenshot evidence shot-1" });
+  expect(screenshot).toHaveAttribute("title", "Screenshot evidence shot-1");
+  expect(screenshot.querySelector("svg")).toHaveClass("lucide-image");
+  expect(screen.queryByText("capture shot-1")).not.toBeInTheDocument();
+});
+
+it("derives topbar fleet health from operations device and browser data", async () => {
+  vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+    const url = String(input);
+    if (url.startsWith("/api/rounds")) {
+      return jsonResponse({
+        items: [{
+          round_id: "round-1",
+          pool_id: "pool-1",
+          state: "running",
+          starts_at_ms: 1_000,
+          created_at_ms: 500,
+          target_count: 2,
+          device_count: 2,
+        }],
+      });
+    }
+    if (url.startsWith("/api/coverage")) return jsonResponse(coverageSnapshot);
+    return jsonResponse(operationSnapshot());
+  });
+
+  render(<App />);
+
+  expect(await screen.findByLabelText("Fleet health: 1 of 2 devices healthy; 1 of 1 browser observers healthy")).toHaveTextContent("1/2 devices · 1/1 browser");
 });
 
 it("retains the last confirmed snapshot when a command fails", async () => {

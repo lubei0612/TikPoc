@@ -4,7 +4,7 @@ import type { CoverageAssignment, CoverageSnapshot } from "../api";
 
 interface CoverageTableProps {
   coverage: CoverageSnapshot;
-  pendingKey: string | null;
+  pendingKeys: ReadonlySet<string>;
   rowErrors: Record<number, string>;
   onRetry: (assignmentId: number) => void;
 }
@@ -15,7 +15,7 @@ function statusIcon(assignment: CoverageAssignment) {
   return <Clock3 size={14} aria-hidden="true" />;
 }
 
-export function CoverageTable({ coverage, pendingKey, rowErrors, onRetry }: CoverageTableProps) {
+export function CoverageTable({ coverage, pendingKeys, rowErrors, onRetry }: CoverageTableProps) {
   const deviceIds = Array.from(new Set(coverage.items.flatMap((item) => item.devices.map((item) => item.device_id))));
   return (
     <div className="coverage-scroll" data-testid="coverage-scroller">
@@ -29,6 +29,7 @@ export function CoverageTable({ coverage, pendingKey, rowErrors, onRetry }: Cove
                 const assignment = target.devices.find((item) => item.device_id === deviceId);
                 if (!assignment) return <td key={deviceId}><span className="muted">Missing</span></td>;
                 const retryable = assignment.phase === "deferred";
+                const pending = pendingKeys.has(`retry:${assignment.assignment_id}`);
                 return (
                   <td key={deviceId}>
                     <div className={`coverage-state coverage-${assignment.phase}`}>
@@ -38,13 +39,13 @@ export function CoverageTable({ coverage, pendingKey, rowErrors, onRetry }: Cove
                         <button
                           aria-label={`Retry ${deviceId} for ${target.username}`}
                           className="retry-button"
-                          disabled={pendingKey !== null}
+                          disabled={pending}
                           onClick={() => onRetry(assignment.assignment_id)}
                           title={`Retry ${deviceId} for ${target.username}`}
                           type="button"
                         >
                           <RotateCcw size={14} aria-hidden="true" />
-                          {pendingKey === `retry:${assignment.assignment_id}` ? "Retrying" : "Retry"}
+                          {pending ? "Retrying" : "Retry"}
                         </button>
                       )}
                       {rowErrors[assignment.assignment_id] && <small className="cell-error" role="alert">{rowErrors[assignment.assignment_id]}</small>}

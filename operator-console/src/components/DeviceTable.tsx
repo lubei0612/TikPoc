@@ -1,16 +1,19 @@
-import { Activity, ChevronDown, ChevronUp, Gauge, MonitorCog } from "lucide-react";
+import { Activity, ChevronDown, ChevronUp, CirclePause, CirclePlay, Gauge, Image, MonitorCog, Octagon } from "lucide-react";
 import { useState } from "react";
 
-import type { Device } from "../api";
+import type { CommandAction, Device } from "../api";
 
 interface DeviceTableProps {
   devices: Device[];
+  pendingKeys: ReadonlySet<string>;
+  errors: Record<string, string>;
+  onCommand: (action: CommandAction, deviceId: string) => void;
 }
 
 const duration = (milliseconds: number) =>
   milliseconds > 0 ? `${(milliseconds / 1000).toFixed(1)}s` : "--";
 
-export function DeviceTable({ devices }: DeviceTableProps) {
+export function DeviceTable({ devices, pendingKeys, errors, onCommand }: DeviceTableProps) {
   const [expanded, setExpanded] = useState<string | null>(null);
 
   return (
@@ -22,6 +25,7 @@ export function DeviceTable({ devices }: DeviceTableProps) {
             <th>Health</th>
             <th>Current assignment</th>
             <th>Timing</th>
+            <th>Controls</th>
             <th className="align-right">Inspect</th>
           </tr>
         </thead>
@@ -33,8 +37,11 @@ export function DeviceTable({ devices }: DeviceTableProps) {
               <DeviceRows
                 active={active}
                 device={device}
+                errors={errors}
                 key={device.device_id}
+                onCommand={onCommand}
                 onToggle={() => setExpanded(active ? null : device.device_id)}
+                pendingKeys={pendingKeys}
               />
             );
           })}
@@ -44,7 +51,21 @@ export function DeviceTable({ devices }: DeviceTableProps) {
   );
 }
 
-function DeviceRows({ device, active, onToggle }: { device: Device; active: boolean; onToggle: () => void }) {
+function DeviceRows({
+  device,
+  active,
+  pendingKeys,
+  errors,
+  onCommand,
+  onToggle,
+}: {
+  device: Device;
+  active: boolean;
+  pendingKeys: ReadonlySet<string>;
+  errors: Record<string, string>;
+  onCommand: (action: CommandAction, deviceId: string) => void;
+  onToggle: () => void;
+}) {
   const assignment = device.current_assignment;
   const diagnostic = device.latest_diagnostic;
   return (
@@ -60,6 +81,9 @@ function DeviceRows({ device, active, onToggle }: { device: Device; active: bool
           <span className={`status-label status-${device.health}`}>
             <span aria-hidden="true" />{device.health}
           </span>
+          <small className={`control-state state-${device.control_state}`}>
+            {device.control_state[0].toUpperCase() + device.control_state.slice(1)}
+          </small>
           {device.health_error_code && <small className="cell-note">{device.health_error_code}</small>}
         </td>
         <td data-label="Current assignment">
@@ -75,6 +99,32 @@ function DeviceRows({ device, active, onToggle }: { device: Device; active: bool
           <div className="timing-pair">
             <span><Activity size={13} aria-hidden="true" />mean {duration(device.mean_ms)}</span>
             <span><Gauge size={13} aria-hidden="true" />p90 {duration(device.p90_ms)}</span>
+          </div>
+        </td>
+        <td data-label="Controls">
+          <div className="device-controls">
+            {([
+              ["start", "Start", CirclePlay],
+              ["pause", "Pause", CirclePause],
+              ["stop", "Stop", Octagon],
+            ] as const).map(([action, label, Icon]) => {
+              const key = `device:${device.device_id}:${action}`;
+              return (
+                <div className="device-control" key={action}>
+                  <button
+                    aria-label={`${label} ${device.device_id}`}
+                    className="icon-only"
+                    disabled={pendingKeys.has(key)}
+                    onClick={() => onCommand(action, device.device_id)}
+                    title={`${label} ${device.device_id}`}
+                    type="button"
+                  >
+                    <Icon size={15} aria-hidden="true" />
+                  </button>
+                  {errors[key] && <small className="cell-error" role="alert">{errors[key]}</small>}
+                </div>
+              );
+            })}
           </div>
         </td>
         <td className="align-right" data-label="Inspect">
@@ -93,11 +143,21 @@ function DeviceRows({ device, active, onToggle }: { device: Device; active: bool
       </tr>
       {active && diagnostic && (
         <tr className="diagnostic-row">
-          <td colSpan={5}>
+          <td colSpan={6}>
             <div className="diagnostic-strip">
               <span className={`status-label status-${diagnostic.result}`}><span aria-hidden="true" />{diagnostic.result}</span>
               <p>{diagnostic.ui_summary || "No visible UI summary recorded."}</p>
-              <code>{diagnostic.screenshot_id ? `capture ${diagnostic.screenshot_id}` : "no capture"}</code>
+              {diagnostic.screenshot_id ? (
+                <button
+                  aria-label={`Screenshot evidence ${diagnostic.screenshot_id}`}
+                  className="icon-only"
+                  data-screenshot-id={diagnostic.screenshot_id}
+                  title={`Screenshot evidence ${diagnostic.screenshot_id}`}
+                  type="button"
+                >
+                  <Image size={16} aria-hidden="true" />
+                </button>
+              ) : <span className="muted">No screenshot</span>}
             </div>
           </td>
         </tr>

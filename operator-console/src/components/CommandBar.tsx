@@ -4,8 +4,8 @@ import type { CommandAction, RoundState } from "../api";
 
 interface CommandBarProps {
   roundState: RoundState;
-  pendingKey: string | null;
-  error: string | null;
+  pendingKeys: ReadonlySet<string>;
+  errors: Record<string, string>;
   onCommand: (action: CommandAction, scope: "fleet" | "round") => void;
 }
 
@@ -20,7 +20,7 @@ const actions: Array<{
   { action: "stop", label: "Stop", Icon: Octagon, tone: "danger" },
 ];
 
-export function CommandBar({ roundState, pendingKey, error, onCommand }: CommandBarProps) {
+export function CommandBar({ roundState, pendingKeys, errors, onCommand }: CommandBarProps) {
   return (
     <section className="command-band" aria-label="Fleet and round controls">
       <div className="command-context">
@@ -37,26 +37,28 @@ export function CommandBar({ roundState, pendingKey, error, onCommand }: Command
             <div className="segmented-actions">
               {actions.map(({ action, label, Icon, tone }) => {
                 const key = `${scope}:${action}`;
+                const pending = pendingKeys.has(key);
                 return (
-                  <button
-                    aria-label={`${label} ${scope}`}
-                    className={`icon-command ${tone}`}
-                    disabled={pendingKey !== null || (roundState === "completed" && scope === "round")}
-                    key={action}
-                    onClick={() => onCommand(action, scope)}
-                    title={`${label} ${scope}`}
-                    type="button"
-                  >
-                    <Icon size={16} aria-hidden="true" />
-                    <span>{pendingKey === key ? "Working" : label}</span>
-                  </button>
+                  <div className="command-control" key={action}>
+                    <button
+                      aria-label={`${label} ${scope}`}
+                      className={`icon-command ${tone}`}
+                      disabled={pending || (roundState === "completed" && scope === "round")}
+                      onClick={() => onCommand(action, scope)}
+                      title={`${label} ${scope}`}
+                      type="button"
+                    >
+                      <Icon size={16} aria-hidden="true" />
+                      <span>{pending ? "Working" : label}</span>
+                    </button>
+                    {errors[key] && <small className="cell-error" role="alert">{errors[key]}</small>}
+                  </div>
                 );
               })}
             </div>
           </div>
         ))}
       </div>
-      {error && <p className="inline-error" role="alert">{error}</p>}
     </section>
   );
 }

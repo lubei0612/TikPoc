@@ -16,14 +16,36 @@ import { DeviceTable } from "../components/DeviceTable";
 import { QuotaTable } from "../components/QuotaTable";
 import { RuntimeEvidence } from "../components/RuntimeEvidence";
 
-export function OperationsView({ roundId }: { roundId: string }) {
+export interface FleetHealthSummary {
+  healthyDevices: number;
+  totalDevices: number;
+  healthyBrowserObservers: number;
+  totalBrowserObservers: number;
+}
+
+export function OperationsView({
+  roundId,
+  onHealthChange,
+}: {
+  roundId: string;
+  onHealthChange?: (health: FleetHealthSummary) => void;
+}) {
   const [snapshot, setSnapshot] = useState<OperationsSnapshot | null>(null);
   const [coverage, setCoverage] = useState<CoverageSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [commandError, setCommandError] = useState<string | null>(null);
+  const [commandErrors, setCommandErrors] = useState<Record<string, string>>({});
   const [rowErrors, setRowErrors] = useState<Record<number, string>>({});
-  const [pendingKey, setPendingKey] = useState<string | null>(null);
+  const [pendingKeys, setPendingKeys] = useState<Set<string>>(() => new Set());
+
+  const setPending = (key: string, pending: boolean) => {
+    setPendingKeys((current) => {
+      const next = new Set(current);
+      if (pending) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  };
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -33,6 +55,12 @@ export function OperationsView({ roundId }: { roundId: string }) {
       ]);
       setSnapshot(nextSnapshot);
       setCoverage(nextCoverage);
+      onHealthChange?.({
+        healthyDevices: nextSnapshot.devices.filter((device) => device.health === "healthy").length,
+        totalDevices: nextSnapshot.devices.length,
+        healthyBrowserObservers: nextSnapshot.browser_health.filter((observer) => observer.status === "healthy").length,
+        totalBrowserObservers: nextSnapshot.browser_health.length,
+      });
       setLoadError(null);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
@@ -40,7 +68,7 @@ export function OperationsView({ roundId }: { roundId: string }) {
     } finally {
       setLoading(false);
     }
-  }, [roundId]);
+  }, [onHealthChange, roundId]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -49,28 +77,32 @@ export function OperationsView({ roundId }: { roundId: string }) {
     return () => controller.abort();
   }, [load]);
 
-  async function runControl(action: CommandAction, scope: "fleet" | "round") {
-    const key = `${scope}:${action}`;
+  async function runControl(action: CommandAction, scope: "device" | "fleet" | "round", scopeId?: string) {
+    const key = scope === "device" ? `device:${scopeId}:${action}` : `${scope}:${action}`;
     const commandId = crypto.randomUUID();
-    setPendingKey(key);
-    setCommandError(null);
+    setPending(key, true);
+    setCommandErrors((current) => ({ ...current, [key]: "" }));
     try {
       await postCommand({
         action,
         commandId,
         scope,
-        scopeId: scope === "fleet" ? "all" : roundId,
+        scopeId: scopeId || (scope === "fleet" ? "all" : roundId),
       });
       await load();
     } catch (error) {
-      setCommandError(error instanceof ApiError || error instanceof Error ? error.message : "Command failed");
+      setCommandErrors((current) => ({
+        ...current,
+        [key]: error instanceof ApiError || error instanceof Error ? error.message : "Command failed",
+      }));
     } finally {
-      setPendingKey(null);
+      setPending(key, false);
     }
   }
 
   async function retryAssignment(assignmentId: number) {
-    setPendingKey(`retry:${assignmentId}`);
+    const key = `retry:${assignmentId}`;
+    setPending(key, true);
     setRowErrors((current) => ({ ...current, [assignmentId]: "" }));
     try {
       await postCommand({ action: "retry", commandId: crypto.randomUUID(), assignmentId });
@@ -81,7 +113,7 @@ export function OperationsView({ roundId }: { roundId: string }) {
         [assignmentId]: error instanceof Error ? error.message : "Retry failed",
       }));
     } finally {
-      setPendingKey(null);
+      setPending(key, false);
     }
   }
 
@@ -100,12 +132,17 @@ export function OperationsView({ roundId }: { roundId: string }) {
         <button aria-label="Refresh operations" className="icon-only" onClick={() => void load()} title="Refresh operations" type="button"><RefreshCw size={17} /></button>
       </section>
 
-      <CommandBar error={commandError} onCommand={runControl} pendingKey={pendingKey} roundState={snapshot.round.state} />
+      <CommandBar errors={commandErrors} onCommand={runControl} pendingKeys={pendingKeys} roundState={snapshot.round.state} />
       {loadError && <p className="stale-warning" role="status">Showing last confirmed snapshot. Refresh failed: {loadError}</p>}
 
       <section className="workspace-section">
         <header className="section-heading"><div><span className="section-index">01</span><div><h2>Device runtime</h2><p>Identity, visible state and active assignment diagnostics</p></div></div><span>{snapshot.devices.length} configured</span></header>
-        <DeviceTable devices={snapshot.devices} />
+        <DeviceTable
+          devices={snapshot.devices}
+          errors={commandErrors}
+          onCommand={(action, deviceId) => runControl(action, "device", deviceId)}
+          pendingKeys={pendingKeys}
+        />
       </section>
 
       <section className="workspace-section split-section">
@@ -126,7 +163,7 @@ export function OperationsView({ roundId }: { roundId: string }) {
 
       <section className="workspace-section">
         <header className="section-heading"><div><span className="section-index">03</span><div><h2>Target coverage</h2><p>Per-account visit evidence and retryable assignments</p></div></div><span>{coverage.total} targets</span></header>
-        <CoverageTable coverage={coverage} onRetry={retryAssignment} pendingKey={pendingKey} rowErrors={rowErrors} />
+        <CoverageTable coverage={coverage} onRetry={retryAssignment} pendingKeys={pendingKeys} rowErrors={rowErrors} />
       </section>
 
       <section className="workspace-section">
