@@ -182,6 +182,35 @@ def test_return_to_ai_requires_nonterminal_state_and_no_uncertain_send(
     assert terminal.status_code == 409
 
 
+def test_return_to_ai_replays_stored_result_before_current_ai_switch(
+    tmp_path: Path,
+) -> None:
+    app, _ = _seeded_app(tmp_path)
+    client = TestClient(app)
+    command = {"command_id": "return-before-ai-off"}
+
+    first = client.post(
+        "/api/leads/account-01/conversation-01/return-to-ai", json=command
+    )
+    disabled = client.post(
+        "/api/accounts/account-01/ai-enable",
+        json={"command_id": "disable-after-return", "enabled": False},
+    )
+    replay = client.post(
+        "/api/leads/account-01/conversation-01/return-to-ai", json=command
+    )
+    new_command = client.post(
+        "/api/leads/account-01/conversation-01/return-to-ai",
+        json={"command_id": "return-after-ai-off"},
+    )
+
+    assert first.status_code == 200
+    assert disabled.status_code == 200
+    assert replay.status_code == 200
+    assert replay.json() == first.json()
+    assert new_command.status_code == 409
+
+
 def test_manual_reply_plan_is_immutable_and_uses_normal_send_lease_path(
     tmp_path: Path,
 ) -> None:

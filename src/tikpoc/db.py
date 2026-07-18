@@ -2000,7 +2000,12 @@ class Database:
             return result
 
     def return_lead_to_ai(
-        self, account_id: str, conversation_id: str, command_id: str
+        self,
+        account_id: str,
+        conversation_id: str,
+        command_id: str,
+        *,
+        account_ai_enabled: bool,
     ) -> dict[str, object]:
         _require_identity(account_id, conversation_id, command_id)
         with self._connect() as connection:
@@ -2010,6 +2015,8 @@ class Database:
             )
             if stored is not None:
                 return stored
+            if not account_ai_enabled:
+                raise ValueError("account AI replies are disabled")
             row = connection.execute(
                 """
                 SELECT stage, human_required FROM web_conversations

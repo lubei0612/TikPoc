@@ -660,10 +660,13 @@ def create_app(
                     account.enabled and account.browser_followback_enabled
                 ),
             )
-            if not settings["ai_enabled"]:
-                return _json({"error": "account AI replies are disabled"}, 409)
             return _json(
-                database.return_lead_to_ai(account_id, conversation_id, body.command_id)
+                database.return_lead_to_ai(
+                    account_id,
+                    conversation_id,
+                    body.command_id,
+                    account_ai_enabled=bool(account.enabled and settings["ai_enabled"]),
+                )
             )
         except KeyError:
             return _json({"error": "lead conversation not found"}, 404)
