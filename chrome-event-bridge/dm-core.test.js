@@ -92,6 +92,20 @@ test("finds exactly one visible semantic button", () => {
   assert.equal(dm.findSemanticButton(buttons, ["reply"]), null);
 });
 
+test("ignores hidden DOM semantic buttons", () => {
+  const hidden = {
+    textContent: "Send",
+    getAttribute() { return null; },
+    getClientRects() { return []; },
+  };
+  const visible = {
+    textContent: "Send",
+    getAttribute() { return null; },
+    getClientRects() { return [{}]; },
+  };
+  assert.equal(dm.findSemanticButton([hidden, visible], ["send"]), visible);
+});
+
 test("reconciles only an exact normalized outbound bubble", () => {
   assert.equal(
     dm.hasMatchingOutbound("Thanks for asking", [

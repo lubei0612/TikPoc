@@ -91,13 +91,34 @@
     return normalizeText(ariaLabel || button.textContent).toLowerCase();
   }
 
+  function buttonVisible(button) {
+    if (!button || button.visible === false || button.hidden === true) {
+      return false;
+    }
+    if (
+      typeof button.getAttribute === "function" &&
+      button.getAttribute("aria-hidden") === "true"
+    ) {
+      return false;
+    }
+    if (typeof button.closest === "function" && button.closest("[hidden], [aria-hidden='true']")) {
+      return false;
+    }
+    if (typeof button.getClientRects === "function" && button.getClientRects().length === 0) {
+      return false;
+    }
+    const view = button.ownerDocument && button.ownerDocument.defaultView;
+    const style = view && typeof view.getComputedStyle === "function" ? view.getComputedStyle(button) : null;
+    return !style || (style.display !== "none" && style.visibility !== "hidden");
+  }
+
   function findSemanticButton(buttons, labels) {
     const accepted = new Set((labels || []).map((label) => normalizeText(label).toLowerCase()));
     if (!accepted.size) {
       return null;
     }
     const matches = Array.from(buttons || []).filter(
-      (button) => button && button.visible !== false && accepted.has(buttonLabel(button)),
+      (button) => buttonVisible(button) && accepted.has(buttonLabel(button)),
     );
     return matches.length === 1 ? matches[0] : null;
   }
