@@ -149,6 +149,27 @@ def _post_json(base_url: str, path: str, body: dict[str, object]):
     )
 
 
+def _post_browser_request(
+    base_url: str,
+    path: str,
+    body: dict[str, object],
+    *,
+    origin: str | None,
+    content_type: str = "application/json",
+):
+    headers = {"Content-Type": content_type}
+    if origin is not None:
+        headers["Origin"] = origin
+    return urlopen(
+        Request(
+            base_url + path,
+            data=json.dumps(body).encode(),
+            headers=headers,
+            method="POST",
+        )
+    )
+
+
 def _browser_inbound_body() -> dict[str, object]:
     return {
         "account_id": "account-01",
@@ -159,6 +180,107 @@ def _browser_inbound_body() -> dict[str, object]:
         "text": "hello",
         "timestamp_ms": 1_720_000_000_000,
     }
+
+
+def _browser_post_bodies() -> dict[str, dict[str, object]]:
+    identity = {"account_id": "account-01", "device_id": "phone-01"}
+    return {
+        "/api/browser-events": {
+            **identity,
+            "event_type": "followback_completed",
+            "dedup_key": "prospect:/@prospect",
+            "payload": {"username": "prospect"},
+        },
+        "/api/browser-dm/reply-plan": _browser_inbound_body(),
+        "/api/browser-dm/reply-result": {
+            **identity,
+            "plan_id": 17,
+            "state": "sent",
+        },
+        "/api/browser-actions/claim": {
+            **identity,
+            "action_type": "dm_send",
+            "action_key": "plan-guard",
+            "owner_id": "tab-a",
+            "timestamp_ms": 1_000,
+        },
+        "/api/browser-actions/result": {
+            **identity,
+            "action_type": "dm_send",
+            "action_key": "plan-guard",
+            "owner_id": "tab-a",
+            "state": "completed",
+        },
+        "/api/browser-health": {
+            **identity,
+            "page_role": "messages",
+            "path": "/messages",
+            "signed_in": True,
+            "timestamp_ms": 1_000,
+        },
+    }
+
+
+def test_browser_post_routes_validate_origin_and_json_before_side_effects(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "db.sqlite"
+    service = FakeBrowserDmService()
+    server, base_url = _start_server(
+        database_path,
+        web_account_registry=_registry(tmp_path),
+        browser_dm_service=service,
+    )
+    try:
+        for path, body in _browser_post_bodies().items():
+            with pytest.raises(HTTPError) as evil_origin:
+                _post_browser_request(
+                    base_url,
+                    path,
+                    body,
+                    origin="https://evil.example",
+                )
+            assert evil_origin.value.code == 403
+            assert json.load(evil_origin.value) == {
+                "error": "browser origin is not allowed"
+            }
+
+            with pytest.raises(HTTPError) as missing_origin:
+                _post_browser_request(base_url, path, body, origin=None)
+            assert missing_origin.value.code == 403
+            assert json.load(missing_origin.value) == {
+                "error": "browser origin is not allowed"
+            }
+
+            with pytest.raises(HTTPError) as wrong_media_type:
+                _post_browser_request(
+                    base_url,
+                    path,
+                    body,
+                    origin="https://www.tiktok.com",
+                    content_type="text/plain",
+                )
+            assert wrong_media_type.value.code == 415
+            assert json.load(wrong_media_type.value) == {
+                "error": "browser request must use application/json"
+            }
+
+        database = Database(database_path)
+        assert service.inbounds == []
+        assert service.results == []
+        assert database.claim_web_event("account-01") is None
+        assert database.latest_runtime_event() is None
+        assert json.load(
+            _post_browser_request(
+                base_url,
+                "/api/browser-actions/claim",
+                _browser_post_bodies()["/api/browser-actions/claim"],
+                origin="https://www.tiktok.com",
+                content_type="application/json; charset=utf-8",
+            )
+        ) == {"claimed": True}
+    finally:
+        server.shutdown()
 
 
 def test_browser_dm_plan_and_result_endpoints(tmp_path: Path) -> None:

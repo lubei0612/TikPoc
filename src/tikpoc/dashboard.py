@@ -96,6 +96,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_error(HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:
+        if self.path in self._browser_post_paths:
+            if self._allowed_origin() is None:
+                self._send_json(
+                    {"error": "browser origin is not allowed"},
+                    HTTPStatus.FORBIDDEN,
+                )
+                return
+            media_type = self.headers.get("Content-Type", "").split(";", 1)[0]
+            if media_type.strip().lower() != "application/json":
+                self._send_json(
+                    {"error": "browser request must use application/json"},
+                    HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                )
+                return
         if self.path == "/api/tiktok-business/webhook":
             self._receive_tiktok_business_webhook()
             return
