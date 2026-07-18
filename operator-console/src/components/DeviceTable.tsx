@@ -152,6 +152,11 @@ function DeviceRows({
                   aria-label={`Screenshot evidence ${diagnostic.screenshot_id}`}
                   className="icon-only"
                   data-screenshot-id={diagnostic.screenshot_id}
+                  onClick={() => window.open(
+                    `/api/diagnostic-screenshots/${encodeURIComponent(diagnostic.screenshot_id!)}`,
+                    "_blank",
+                    "noopener,noreferrer",
+                  )}
                   title={`Screenshot evidence ${diagnostic.screenshot_id}`}
                   type="button"
                 >

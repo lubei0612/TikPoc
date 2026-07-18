@@ -1,5 +1,5 @@
 import { RefreshCw, ShieldCheck, Smartphone, Target } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   ApiError,
@@ -37,6 +37,15 @@ export function OperationsView({
   const [commandErrors, setCommandErrors] = useState<Record<string, string>>({});
   const [rowErrors, setRowErrors] = useState<Record<number, string>>({});
   const [pendingKeys, setPendingKeys] = useState<Set<string>>(() => new Set());
+  const [loadedRoundId, setLoadedRoundId] = useState<string | null>(null);
+  const [failedRoundId, setFailedRoundId] = useState<string | null>(null);
+  const activeController = useRef<AbortController | null>(null);
+  const healthChange = useRef(onHealthChange);
+  const mounted = useRef(false);
+  const requestGeneration = useRef(0);
+  const selectedRoundId = useRef(roundId);
+  healthChange.current = onHealthChange;
+  selectedRoundId.current = roundId;
 
   const setPending = (key: string, pending: boolean) => {
     setPendingKeys((current) => {
@@ -47,15 +56,28 @@ export function OperationsView({
     });
   };
 
-  const load = useCallback(async (signal?: AbortSignal) => {
+  const load = useCallback(async () => {
+    activeController.current?.abort();
+    const controller = new AbortController();
+    activeController.current = controller;
+    const generation = ++requestGeneration.current;
+    const requestedRoundId = roundId;
+    const isCurrent = () => mounted.current
+      && !controller.signal.aborted
+      && requestGeneration.current === generation
+      && selectedRoundId.current === requestedRoundId;
+
     try {
       const [nextSnapshot, nextCoverage] = await Promise.all([
-        getOperations(roundId, signal),
-        getCoverage(roundId, signal),
+        getOperations(requestedRoundId, controller.signal),
+        getCoverage(requestedRoundId, controller.signal),
       ]);
+      if (!isCurrent()) return;
       setSnapshot(nextSnapshot);
       setCoverage(nextCoverage);
-      onHealthChange?.({
+      setLoadedRoundId(requestedRoundId);
+      setFailedRoundId(null);
+      healthChange.current?.({
         healthyDevices: nextSnapshot.devices.filter((device) => device.health === "healthy").length,
         totalDevices: nextSnapshot.devices.length,
         healthyBrowserObservers: nextSnapshot.browser_health.filter((observer) => observer.status === "healthy").length,
@@ -63,21 +85,42 @@ export function OperationsView({
       });
       setLoadError(null);
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
+      if (!isCurrent() || (error instanceof DOMException && error.name === "AbortError")) return;
       setLoadError(error instanceof Error ? error.message : "Operations data is unavailable");
+      setFailedRoundId(requestedRoundId);
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, [onHealthChange, roundId]);
+  }, [roundId]);
 
   useEffect(() => {
-    const controller = new AbortController();
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      requestGeneration.current += 1;
+      activeController.current?.abort();
+    };
+  }, []);
+
+  useEffect(() => {
     setLoading(true);
-    void load(controller.signal);
-    return () => controller.abort();
+    setSnapshot(null);
+    setCoverage(null);
+    setLoadedRoundId(null);
+    setFailedRoundId(null);
+    setLoadError(null);
+    setCommandErrors({});
+    setRowErrors({});
+    setPendingKeys(new Set());
+    void load();
+    return () => {
+      requestGeneration.current += 1;
+      activeController.current?.abort();
+    };
   }, [load]);
 
   async function runControl(action: CommandAction, scope: "device" | "fleet" | "round", scopeId?: string) {
+    const commandRoundId = roundId;
     const key = scope === "device" ? `device:${scopeId}:${action}` : `${scope}:${action}`;
     const commandId = crypto.randomUUID();
     setPending(key, true);
@@ -87,37 +130,40 @@ export function OperationsView({
         action,
         commandId,
         scope,
-        scopeId: scopeId || (scope === "fleet" ? "all" : roundId),
+        scopeId: scopeId || (scope === "fleet" ? "all" : commandRoundId),
       });
-      await load();
+      if (mounted.current && selectedRoundId.current === commandRoundId) await load();
     } catch (error) {
+      if (!mounted.current || selectedRoundId.current !== commandRoundId) return;
       setCommandErrors((current) => ({
         ...current,
         [key]: error instanceof ApiError || error instanceof Error ? error.message : "Command failed",
       }));
     } finally {
-      setPending(key, false);
+      if (mounted.current && selectedRoundId.current === commandRoundId) setPending(key, false);
     }
   }
 
   async function retryAssignment(assignmentId: number) {
+    const commandRoundId = roundId;
     const key = `retry:${assignmentId}`;
     setPending(key, true);
     setRowErrors((current) => ({ ...current, [assignmentId]: "" }));
     try {
       await postCommand({ action: "retry", commandId: crypto.randomUUID(), assignmentId });
-      await load();
+      if (mounted.current && selectedRoundId.current === commandRoundId) await load();
     } catch (error) {
+      if (!mounted.current || selectedRoundId.current !== commandRoundId) return;
       setRowErrors((current) => ({
         ...current,
         [assignmentId]: error instanceof Error ? error.message : "Retry failed",
       }));
     } finally {
-      setPending(key, false);
+      if (mounted.current && selectedRoundId.current === commandRoundId) setPending(key, false);
     }
   }
 
-  if (loading && !snapshot) return <div className="workspace-state"><span className="loading-line" />Loading operations</div>;
+  if ((loadedRoundId !== roundId && failedRoundId !== roundId) || (loading && !snapshot)) return <div className="workspace-state"><span className="loading-line" />Loading operations</div>;
   if (!snapshot || !coverage) return <div className="workspace-state error-state" role="alert">{loadError || "Round data is unavailable"}</div>;
 
   const healthyDevices = snapshot.devices.filter((device) => device.health === "healthy").length;

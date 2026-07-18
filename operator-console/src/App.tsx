@@ -27,7 +27,8 @@ export default function App() {
   const healthLabel = fleetHealth
     ? `Fleet health: ${fleetHealth.healthyDevices} of ${fleetHealth.totalDevices} devices healthy; ${fleetHealth.healthyBrowserObservers} of ${fleetHealth.totalBrowserObservers} browser observers healthy`
     : "Fleet health unavailable";
-  const healthState = fleetHealth && fleetHealth.healthyDevices === fleetHealth.totalDevices
+  const healthState = fleetHealth && fleetHealth.totalDevices > 0 && fleetHealth.totalBrowserObservers > 0
+    && fleetHealth.healthyDevices === fleetHealth.totalDevices
     && fleetHealth.healthyBrowserObservers === fleetHealth.totalBrowserObservers ? "healthy" : "degraded";
   return (
     <div className="app-shell">

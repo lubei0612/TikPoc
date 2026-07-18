@@ -175,6 +175,130 @@ it("loads the operations snapshot and coverage for the selected round", async ()
   );
 });
 
+it("clears the previous round while the selected round loads", async () => {
+  const nextOperations = deferredResponse();
+  const nextCoverage = deferredResponse();
+  vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+    const url = String(input);
+    if (url === "/api/operations?round_id=round-2") return nextOperations.promise;
+    if (url === "/api/coverage?round_id=round-2&offset=0&limit=100") return nextCoverage.promise;
+    if (url.startsWith("/api/coverage")) return jsonResponse(coverageSnapshot);
+    return jsonResponse(operationSnapshot());
+  });
+
+  const view = render(<OperationsView roundId="round-1" />);
+  expect((await screen.findAllByText("phone-01"))[0]).toBeVisible();
+
+  view.rerender(<OperationsView roundId="round-2" />);
+
+  expect(await screen.findByText("Loading operations")).toBeVisible();
+  expect(screen.queryByText("phone-01")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Pause round" })).not.toBeInTheDocument();
+
+  const roundTwo = operationSnapshot();
+  roundTwo.round.round_id = "round-2";
+  roundTwo.devices[0].device_id = "phone-03";
+  nextOperations.resolve(await jsonResponse(roundTwo));
+  nextCoverage.resolve(await jsonResponse({ ...coverageSnapshot, round_id: "round-2" }));
+  expect((await screen.findAllByText("phone-03"))[0]).toBeVisible();
+});
+
+it("ignores late responses from the previously selected round", async () => {
+  const oldOperations = deferredResponse();
+  const oldCoverage = deferredResponse();
+  const healthChanged = vi.fn();
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+    const url = String(input);
+    if (url === "/api/operations?round_id=round-1") return oldOperations.promise;
+    if (url === "/api/coverage?round_id=round-1&offset=0&limit=100") return oldCoverage.promise;
+    if (url.startsWith("/api/coverage")) return jsonResponse({ ...coverageSnapshot, round_id: "round-2" });
+    const current = operationSnapshot();
+    current.round.round_id = "round-2";
+    current.devices[0].device_id = "phone-current";
+    return jsonResponse(current);
+  });
+
+  const view = render(<OperationsView onHealthChange={healthChanged} roundId="round-1" />);
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  view.rerender(<OperationsView onHealthChange={healthChanged} roundId="round-2" />);
+  expect((await screen.findAllByText("phone-current"))[0]).toBeVisible();
+
+  oldOperations.resolve(await jsonResponse(operationSnapshot()));
+  oldCoverage.resolve(await jsonResponse(coverageSnapshot));
+  await waitFor(() => expect(healthChanged).toHaveBeenCalledTimes(1));
+  expect(within(screen.getByTestId("device-table")).queryByText("phone-01")).not.toBeInTheDocument();
+});
+
+it("applies only the newest overlapping refresh", async () => {
+  const refreshOneOperations = deferredResponse();
+  const refreshOneCoverage = deferredResponse();
+  const refreshTwoOperations = deferredResponse();
+  const refreshTwoCoverage = deferredResponse();
+  let operationsCalls = 0;
+  let coverageCalls = 0;
+  vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+    const url = String(input);
+    if (url.startsWith("/api/operations")) {
+      operationsCalls += 1;
+      if (operationsCalls === 2) return refreshOneOperations.promise;
+      if (operationsCalls === 3) return refreshTwoOperations.promise;
+      return jsonResponse(operationSnapshot());
+    }
+    coverageCalls += 1;
+    if (coverageCalls === 2) return refreshOneCoverage.promise;
+    if (coverageCalls === 3) return refreshTwoCoverage.promise;
+    return jsonResponse(coverageSnapshot);
+  });
+
+  render(<OperationsView roundId="round-1" />);
+  const refresh = await screen.findByRole("button", { name: "Refresh operations" });
+  fireEvent.click(refresh);
+  fireEvent.click(refresh);
+
+  const newest = operationSnapshot();
+  newest.devices[0].device_id = "phone-newest";
+  refreshTwoOperations.resolve(await jsonResponse(newest));
+  refreshTwoCoverage.resolve(await jsonResponse(coverageSnapshot));
+  expect((await screen.findAllByText("phone-newest"))[0]).toBeVisible();
+
+  const stale = operationSnapshot();
+  stale.devices[0].device_id = "phone-stale";
+  refreshOneOperations.resolve(await jsonResponse(stale));
+  refreshOneCoverage.resolve(await jsonResponse(coverageSnapshot));
+  await waitFor(() => expect(screen.queryByText("phone-stale")).not.toBeInTheDocument());
+  expect(screen.getAllByText("phone-newest")[0]).toBeVisible();
+});
+
+it("does not publish health after unmount", async () => {
+  const operations = deferredResponse();
+  const coverage = deferredResponse();
+  const healthChanged = vi.fn();
+  vi.spyOn(globalThis, "fetch").mockImplementation((input) =>
+    String(input).startsWith("/api/coverage") ? coverage.promise : operations.promise,
+  );
+
+  const view = render(<OperationsView onHealthChange={healthChanged} roundId="round-1" />);
+  view.unmount();
+  operations.resolve(await jsonResponse(operationSnapshot()));
+  coverage.resolve(await jsonResponse(coverageSnapshot));
+
+  await Promise.resolve();
+  expect(healthChanged).not.toHaveBeenCalled();
+});
+
+it("shows a round-scoped error when the initial load fails", async () => {
+  vi.spyOn(globalThis, "fetch").mockImplementation((input) =>
+    String(input).startsWith("/api/coverage")
+      ? jsonResponse(coverageSnapshot)
+      : jsonResponse({ error: "operations unavailable" }, false, 503),
+  );
+
+  render(<OperationsView roundId="round-1" />);
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("operations unavailable");
+  expect(screen.queryByRole("button", { name: "Pause round" })).not.toBeInTheDocument();
+});
+
 it("pauses the round only after server confirmation", async () => {
   let operationsCalls = 0;
   const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
@@ -314,6 +438,7 @@ it("disables only the matching coverage retry while it is pending", async () => 
 });
 
 it("shows screenshot evidence as an accessible Lucide icon control", async () => {
+  const open = vi.spyOn(window, "open").mockImplementation(() => null);
   mockInitialLoad();
   render(<OperationsView roundId="round-1" />);
 
@@ -323,6 +448,12 @@ it("shows screenshot evidence as an accessible Lucide icon control", async () =>
   expect(screenshot).toHaveAttribute("title", "Screenshot evidence shot-1");
   expect(screenshot.querySelector("svg")).toHaveClass("lucide-image");
   expect(screen.queryByText("capture shot-1")).not.toBeInTheDocument();
+  fireEvent.click(screenshot);
+  expect(open).toHaveBeenCalledWith(
+    "/api/diagnostic-screenshots/shot-1",
+    "_blank",
+    "noopener,noreferrer",
+  );
 });
 
 it("derives topbar fleet health from operations device and browser data", async () => {
@@ -348,6 +479,35 @@ it("derives topbar fleet health from operations device and browser data", async 
   render(<App />);
 
   expect(await screen.findByLabelText("Fleet health: 1 of 2 devices healthy; 1 of 1 browser observers healthy")).toHaveTextContent("1/2 devices · 1/1 browser");
+});
+
+it("keeps global health degraded without browser heartbeat evidence", async () => {
+  vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+    const url = String(input);
+    if (url.startsWith("/api/rounds")) {
+      return jsonResponse({
+        items: [{
+          round_id: "round-1",
+          pool_id: "pool-1",
+          state: "running",
+          starts_at_ms: 1_000,
+          created_at_ms: 500,
+          target_count: 2,
+          device_count: 2,
+        }],
+      });
+    }
+    if (url.startsWith("/api/coverage")) return jsonResponse(coverageSnapshot);
+    const snapshot = operationSnapshot();
+    snapshot.devices.forEach((device) => { device.health = "healthy"; });
+    snapshot.browser_health = [];
+    return jsonResponse(snapshot);
+  });
+
+  render(<App />);
+
+  const health = await screen.findByLabelText("Fleet health: 2 of 2 devices healthy; 0 of 0 browser observers healthy");
+  expect(health).toHaveClass("state-degraded");
 });
 
 it("retains the last confirmed snapshot when a command fails", async () => {
