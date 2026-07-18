@@ -1,10 +1,13 @@
 from collections import deque
 from pathlib import Path
 
+import pytest
+
 from tikpoc.acquisition_db import AcquisitionRepository
 from tikpoc.acquisition_models import (
     ActionPlanState,
     ActionResult,
+    AssignmentStage,
     AssignmentPhase,
     DeviceDiagnostics,
     OutcomeKind,
@@ -77,6 +80,45 @@ class ScriptedVerifiedDevice:
 
     def recover(self, phase: AssignmentPhase) -> None:
         self.recovery_calls.append(phase)
+
+
+class MutableClock:
+    def __init__(self, now_ms: int = 1_000) -> None:
+        self.now_ms = now_ms
+
+    def __call__(self) -> int:
+        return self.now_ms
+
+    def advance(self, milliseconds: int) -> None:
+        self.now_ms += milliseconds
+
+
+class TimedScriptedDevice(ScriptedVerifiedDevice):
+    def __init__(self, clock: MutableClock) -> None:
+        super().__init__(
+            metrics=ProfileMetrics(20, 10, 5),
+            action_results=[ActionResult.CONFIRMED],
+        )
+        self.clock = clock
+
+    def open_target(self, target) -> None:
+        super().open_target(target)
+        self.clock.advance(100)
+
+    def confirm_profile_identity(self, target) -> None:
+        self.clock.advance(200)
+
+    def read_profile_observation(self) -> ProfileObservation:
+        self.clock.advance(300)
+        return super().read_profile_observation()
+
+    def open_and_confirm_video(self, video_key: str) -> None:
+        super().open_and_confirm_video(video_key)
+        self.clock.advance(400)
+
+    def execute_outcome(self, outcome: OutcomeKind) -> ActionResult:
+        self.clock.advance(500)
+        return super().execute_outcome(outcome)
 
 
 def _claimed_assignment(
@@ -156,6 +198,60 @@ def test_worker_does_not_complete_until_visible_action_is_confirmed(
     assert device.action_calls == [OutcomeKind.LIKE]
     assert device.reconcile_calls == [OutcomeKind.LIKE]
     assert repository.round_completion(assignment.round_id).completed == 1
+
+
+def test_worker_persists_route_identity_metrics_video_and_action_timings(
+    tmp_path: Path,
+) -> None:
+    repository, assignment = _claimed_assignment(tmp_path)
+    clock = MutableClock()
+    worker = MobileAssignmentWorker(
+        repository,
+        TimedScriptedDevice(clock),
+        device_id="phone-01",
+        owner_id="worker-1",
+        clock_ms=clock,
+        plan_provider=_forced_plan(OutcomeKind.LIKE),
+    )
+
+    worker.run_assignment(assignment)
+
+    timings = repository.assignment_stage_timings(assignment.assignment_id)
+    assert {timing.stage: timing.duration_ms for timing in timings} == {
+        AssignmentStage.ROUTE: 100,
+        AssignmentStage.IDENTITY: 200,
+        AssignmentStage.METRICS: 300,
+        AssignmentStage.VIDEO: 400,
+        AssignmentStage.ACTION: 500,
+    }
+
+
+def test_assignment_stage_timing_replaces_the_previous_attempt(
+    tmp_path: Path,
+) -> None:
+    repository, assignment = _claimed_assignment(tmp_path)
+    repository.record_assignment_stage_timing(
+        assignment.assignment_id,
+        AssignmentStage.ROUTE,
+        duration_ms=900,
+        recorded_at_ms=2_000,
+    )
+
+    latest = repository.record_assignment_stage_timing(
+        assignment.assignment_id,
+        AssignmentStage.ROUTE,
+        duration_ms=120,
+        recorded_at_ms=3_000,
+    )
+
+    assert repository.assignment_stage_timings(assignment.assignment_id) == (latest,)
+    with pytest.raises(ValueError, match="nonnegative"):
+        repository.record_assignment_stage_timing(
+            assignment.assignment_id,
+            AssignmentStage.IDENTITY,
+            duration_ms=-1,
+            recorded_at_ms=3_000,
+        )
 
 
 def test_slow_action_is_deferred_without_false_completion(tmp_path: Path) -> None:

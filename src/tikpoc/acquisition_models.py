@@ -25,6 +25,14 @@ class AssignmentPhase(StrEnum):
     COMPLETED = "completed"
 
 
+class AssignmentStage(StrEnum):
+    ROUTE = "route"
+    IDENTITY = "identity"
+    METRICS = "metrics"
+    VIDEO = "video"
+    ACTION = "action"
+
+
 class ProfileAccessState(StrEnum):
     PUBLIC = "public"
     PRIVATE = "private"
@@ -189,3 +197,11 @@ class AssignmentTransition:
     to_phase: AssignmentPhase
     details: dict[str, object]
     changed_at_ms: int
+
+
+@dataclass(frozen=True)
+class AssignmentStageTiming:
+    assignment_id: int
+    stage: AssignmentStage
+    duration_ms: int
+    recorded_at_ms: int

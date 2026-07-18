@@ -15,6 +15,8 @@ from .acquisition_models import (
     ActionResult,
     AssignmentPhase,
     AssignmentTransition,
+    AssignmentStage,
+    AssignmentStageTiming,
     DeviceDiagnostics,
     OutcomeKind,
     PoolImport,
@@ -335,6 +337,19 @@ class AcquisitionRepository:
                     details_json TEXT NOT NULL DEFAULT '{}',
                     changed_at_ms INTEGER NOT NULL,
                     FOREIGN KEY(assignment_id) REFERENCES round_assignments(assignment_id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS assignment_stage_timings (
+                    assignment_id INTEGER NOT NULL,
+                    stage TEXT NOT NULL,
+                    duration_ms INTEGER NOT NULL CHECK(duration_ms >= 0),
+                    recorded_at_ms INTEGER NOT NULL,
+                    PRIMARY KEY(assignment_id, stage),
+                    FOREIGN KEY(assignment_id)
+                        REFERENCES round_assignments(assignment_id)
                 )
                 """
             )
@@ -1247,6 +1262,69 @@ class AcquisitionRepository:
                 )
                 for row in rows
             )
+
+    def record_assignment_stage_timing(
+        self,
+        assignment_id: int,
+        stage: AssignmentStage | str,
+        *,
+        duration_ms: int,
+        recorded_at_ms: int,
+    ) -> AssignmentStageTiming:
+        normalized = AssignmentStage(stage)
+        if assignment_id <= 0:
+            raise ValueError("assignment id must be positive")
+        if duration_ms < 0 or recorded_at_ms < 0:
+            raise ValueError("assignment stage timing must be nonnegative")
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO assignment_stage_timings(
+                    assignment_id, stage, duration_ms, recorded_at_ms
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT(assignment_id, stage) DO UPDATE SET
+                    duration_ms=excluded.duration_ms,
+                    recorded_at_ms=excluded.recorded_at_ms
+                """,
+                (
+                    assignment_id,
+                    normalized.value,
+                    duration_ms,
+                    recorded_at_ms,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("assignment stage timing was not recorded")
+        return AssignmentStageTiming(
+            assignment_id=assignment_id,
+            stage=normalized,
+            duration_ms=duration_ms,
+            recorded_at_ms=recorded_at_ms,
+        )
+
+    def assignment_stage_timings(
+        self, assignment_id: int
+    ) -> tuple[AssignmentStageTiming, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT assignment_id, stage, duration_ms, recorded_at_ms
+                FROM assignment_stage_timings
+                WHERE assignment_id = ?
+                """,
+                (assignment_id,),
+            ).fetchall()
+        timings = tuple(
+            AssignmentStageTiming(
+                assignment_id=int(row["assignment_id"]),
+                stage=AssignmentStage(str(row["stage"])),
+                duration_ms=int(row["duration_ms"]),
+                recorded_at_ms=int(row["recorded_at_ms"]),
+            )
+            for row in rows
+        )
+        order = {stage: index for index, stage in enumerate(AssignmentStage)}
+        return tuple(sorted(timings, key=lambda timing: order[timing.stage]))
 
     def transition_assignment(
         self,

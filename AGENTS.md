@@ -315,18 +315,31 @@ Completed on `feat/web-lead-conversion`:
 - TikTok 44.8.42 compatibility now covers current profile/stat/post resource
   IDs, zero-idle Appium sessions, pixel-verified favorites, and stable user-ID
   routes for renamed handles. See `docs/mobile-fleet-runbook.md`.
+- Rolling-hour pacing now spreads like/favorite/repost toward 100/14/25 per
+  account, accepts profiles with at least one post, and keeps trace-only visits
+  when no action is due.
+- Blank stable routes now perform bounded route retries, an Inbox baseline
+  reset, and one TikTok restart before a terminal failure. Route, identity,
+  metrics, video, and action durations are persisted per assignment.
+- The Chinese Operations console now shows rolling pacing and 20-hour capacity
+  KPIs. Component tests pass 29/29 and Playwright passes 12/12 at 1440x1000,
+  1920x1080, and 390x844 with inspected full-page screenshots.
 - The retained debug round failed capacity promotion: mean 170.718 seconds,
   P90 15.572 seconds, projected 421 targets per 20-hour day, with historical
   identity mismatch evidence. A fresh calibration-free round is still required.
-- Last fresh full Python verification: `562 passed`; Chrome Node verification:
+- Last fresh full Python verification: `573 passed`; Chrome Node verification:
   `31 passed`; Android bridge build passed with the portable build-root fix.
 - Full-repository Ruff format check has a pre-existing 14-file formatting
   baseline; do not reformat those unrelated files as part of a narrow task.
 
 Outstanding at the current checkpoint:
 
-1. Execute the remaining Mobile Task 10 two-device live gate on slots 1 and 2.
-2. Finish full regression, two-device calibration, four-/eight-hour
+1. Run the fresh 500-target slot-1 pacing/performance gate and record measured
+   stage mean/P90 separately from projections.
+2. Implement and calibrate configurable multi-account web follow-back/reply,
+   notifying the user before the first two-account live acceptance.
+3. Execute the remaining Mobile Task 10 two-device live gate on slots 1 and 2.
+4. Finish full regression, two-device calibration, four-/eight-hour
    endurance tests, seven-device benchmark, runbooks, branch integration, and
    GitHub setup.
 

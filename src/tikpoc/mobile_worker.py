@@ -9,6 +9,7 @@ from .acquisition_models import (
     ActionPlanState,
     ActionResult,
     AssignmentPhase,
+    AssignmentStage,
     DeviceDiagnostics,
     OutcomeKind,
     PoolTarget,
@@ -127,15 +128,24 @@ class MobileAssignmentWorker:
             source_line_numbers=(),
             ordinal=0,
         )
+        route_started_at_ms = self.clock_ms()
         self.device.ensure_ready()
         self.device.open_target(target)
+        self._record_stage(
+            assignment.assignment_id, AssignmentStage.ROUTE, route_started_at_ms
+        )
+        identity_started_at_ms = self.clock_ms()
         self.device.confirm_profile_identity(target)
+        self._record_stage(
+            assignment.assignment_id, AssignmentStage.IDENTITY, identity_started_at_ms
+        )
         now_ms = self.clock_ms()
         self.repository.record_visit_confirmed(
             assignment.assignment_id, self.owner_id, now_ms=now_ms
         )
         self._renew_lease(assignment.assignment_id)
 
+        metrics_started_at_ms = self.clock_ms()
         snapshot = self.repository.profile_snapshot(
             assignment.round_id, assignment.identity_key
         )
@@ -168,6 +178,9 @@ class MobileAssignmentWorker:
                 access_state=observation.access_state,
                 observed_at_ms=self.clock_ms(),
             )
+        self._record_stage(
+            assignment.assignment_id, AssignmentStage.METRICS, metrics_started_at_ms
+        )
 
         plan = self.plan_provider(
             self.repository,
@@ -194,6 +207,7 @@ class MobileAssignmentWorker:
             )
             return
 
+        video_started_at_ms = self.clock_ms()
         if plan.video_key is None:
             video_keys = self.device.list_video_keys()
             if not video_keys:
@@ -210,6 +224,9 @@ class MobileAssignmentWorker:
         )
         self._renew_lease(assignment.assignment_id)
         self.device.open_and_confirm_video(plan.video_key or "")
+        self._record_stage(
+            assignment.assignment_id, AssignmentStage.VIDEO, video_started_at_ms
+        )
         self.repository.transition_assignment(
             assignment.assignment_id,
             self.owner_id,
@@ -218,6 +235,7 @@ class MobileAssignmentWorker:
             now_ms=self.clock_ms(),
         )
         if plan.effective_outcome is OutcomeKind.TRACE:
+            action_started_at_ms = self.clock_ms()
             self.repository.confirm_trace_plan(plan.plan_id)
             self.repository.complete_assignment(
                 assignment.assignment_id,
@@ -225,8 +243,17 @@ class MobileAssignmentWorker:
                 AssignmentPhase.VIDEO_CONFIRMED,
                 now_ms=self.clock_ms(),
             )
+            self._record_stage(
+                assignment.assignment_id,
+                AssignmentStage.ACTION,
+                action_started_at_ms,
+            )
             return
+        action_started_at_ms = self.clock_ms()
         self._execute_interaction(assignment.assignment_id, plan)
+        self._record_stage(
+            assignment.assignment_id, AssignmentStage.ACTION, action_started_at_ms
+        )
 
     def _execute_interaction(self, assignment_id: int, plan: ActionPlan) -> None:
         started_at_ms = self.clock_ms()
@@ -332,6 +359,20 @@ class MobileAssignmentWorker:
             self.owner_id,
             now_ms=now_ms,
             ttl_ms=self.assignment_lease_ttl_ms,
+        )
+
+    def _record_stage(
+        self,
+        assignment_id: int,
+        stage: AssignmentStage,
+        started_at_ms: int,
+    ) -> None:
+        recorded_at_ms = self.clock_ms()
+        self.repository.record_assignment_stage_timing(
+            assignment_id,
+            stage,
+            duration_ms=recorded_at_ms - started_at_ms,
+            recorded_at_ms=recorded_at_ms,
         )
 
     @staticmethod

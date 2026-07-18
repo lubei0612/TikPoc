@@ -292,7 +292,16 @@ class AppiumTikTokDevice:
                     return
                 if attempt + 1 < self.metric_read_attempts:
                     self.sleeper(self.poll_interval)
-            raise ValueError("stable profile route did not change")
+            self.restart_app()
+            self._open_route(stable_uri)
+            for attempt in range(self.metric_read_attempts):
+                actual = self._visible_profile_username()
+                if actual:
+                    self._wait_profile_surface()
+                    return
+                if attempt + 1 < self.metric_read_attempts:
+                    self.sleeper(self.poll_interval)
+            raise ValueError("stable profile route did not load after restart")
         self.wait_profile_ready(target.username)
         self._wait_profile_surface()
 
