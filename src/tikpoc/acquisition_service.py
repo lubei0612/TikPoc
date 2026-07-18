@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from .acquisition_db import AcquisitionRepository
+from .db import Database
 from .importer import read_targets
 from .rounds import create_exposure_round
 
@@ -28,11 +29,13 @@ class AcquisitionService:
         *,
         clock_ms: Callable[[], int],
         import_roots: Sequence[Path],
+        database: Database | None = None,
     ) -> None:
         self.repository = repository
         self.path = repository.path
         self.clock_ms = clock_ms
         self.import_roots = tuple(root.resolve() for root in import_roots)
+        self.database = database or Database(repository.path)
 
     def migrate(self) -> None:
         with self._connect() as connection:
@@ -161,12 +164,17 @@ class AcquisitionService:
             coverage = self._coverage_summary(connection, round_id)
             quotas = self._quota_rows(connection, round_id)
             recent_traces = self._recent_traces(connection, round_id, limit=100)
+            diagnostics = self._latest_diagnostics(connection, round_id)
+        for device in device_rows:
+            device["latest_diagnostic"] = diagnostics.get(str(device["device_id"]))
+        browser_health = self.database.browser_health_snapshot()
         return {
             "round": dict(round_row),
             "devices": device_rows,
             "quotas": quotas,
             "coverage": coverage,
             "recent_mobile_traces": recent_traces,
+            "browser_health": browser_health,
         }
 
     def coverage(self, round_id: str, *, offset: int, limit: int) -> dict[str, object]:
@@ -407,32 +415,23 @@ class AcquisitionService:
                 (state, scope_id),
             )
         elif scope == "fleet":
+            rows = connection.execute(
+                "SELECT round_id, state FROM exposure_rounds"
+            ).fetchall()
+            if state != "stopped" and any(
+                str(row["state"]) == "stopped" for row in rows
+            ):
+                raise AcquisitionConflict("fleet contains a stopped round")
             connection.execute(
-                "UPDATE exposure_rounds SET state = ? WHERE state != 'completed'",
-                (state,),
+                """
+                UPDATE exposure_rounds SET state = ?
+                WHERE state NOT IN ('completed', 'stopped')
+                   OR (state = 'stopped' AND ? = 'stopped')
+                """,
+                (state, state),
             )
-        elif scope == "device":
-            if (
-                connection.execute(
-                    "SELECT 1 FROM round_device_seeds WHERE device_id = ? LIMIT 1",
-                    (scope_id,),
-                ).fetchone()
-                is None
-            ):
-                raise AcquisitionNotFound(scope_id)
         else:
-            try:
-                assignment_id = int(scope_id)
-            except ValueError as error:
-                raise AcquisitionNotFound(scope_id) from error
-            if (
-                connection.execute(
-                    "SELECT 1 FROM round_assignments WHERE assignment_id = ?",
-                    (assignment_id,),
-                ).fetchone()
-                is None
-            ):
-                raise AcquisitionNotFound(scope_id)
+            raise AcquisitionConflict("control scope is not supported")
         return {
             "command_id": command_id,
             "command": command_type,
@@ -529,6 +528,46 @@ class AcquisitionService:
                 }
             )
         return devices
+
+    def _latest_diagnostics(
+        self, connection: sqlite3.Connection, round_id: str
+    ) -> dict[str, dict[str, object]]:
+        rows = connection.execute(
+            """
+            WITH ranked AS (
+                SELECT plan.device_id, attempt.result, attempt.diagnostics_json,
+                       attempt.attempted_at_ms,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY plan.device_id
+                           ORDER BY attempt.attempted_at_ms DESC, attempt.attempt_id DESC
+                       ) AS rank
+                FROM action_attempts AS attempt
+                JOIN device_action_plans AS plan ON plan.plan_id = attempt.plan_id
+                WHERE plan.round_id = ?
+            )
+            SELECT device_id, result, diagnostics_json, attempted_at_ms
+            FROM ranked WHERE rank = 1
+            """,
+            (round_id,),
+        ).fetchall()
+        result: dict[str, dict[str, object]] = {}
+        for row in rows:
+            try:
+                diagnostic = json.loads(str(row["diagnostics_json"]))
+            except (TypeError, json.JSONDecodeError):
+                diagnostic = {}
+            screenshot_path = str(diagnostic.get("screenshot_path") or "")
+            result[str(row["device_id"])] = {
+                "result": str(row["result"]),
+                "attempted_at_ms": int(row["attempted_at_ms"]),
+                "ui_summary": str(diagnostic.get("ui_summary") or "")[:500],
+                "screenshot_id": (
+                    hashlib.sha256(screenshot_path.encode()).hexdigest()[:24]
+                    if screenshot_path
+                    else None
+                ),
+            }
+        return result
 
     def _coverage_summary(
         self, connection: sqlite3.Connection, round_id: str

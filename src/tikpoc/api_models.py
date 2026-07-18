@@ -83,7 +83,7 @@ CommandId = Annotated[
 
 class OperatorCommand(ApiRequest):
     command_id: CommandId
-    scope: Literal["fleet", "round", "device", "assignment"]
+    scope: Literal["fleet", "round"]
     scope_id: Identifier
 
 

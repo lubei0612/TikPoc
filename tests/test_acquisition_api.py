@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from tikpoc.acquisition_db import AcquisitionRepository
 from tikpoc.api import create_app
+from tikpoc.db import Database
 from tikpoc.importer import Target
 from tikpoc.rounds import create_exposure_round
 
@@ -119,6 +120,16 @@ def _seeded_operations_app(tmp_path: Path) -> tuple[object, str, int]:
                 '"ui_summary":"visible selector missing"}',
             ),
         )
+    database = Database(path)
+    database.migrate()
+    database.upsert_browser_health(
+        "account-01",
+        "messages",
+        device_id="phone-01",
+        status="healthy",
+        observed_at_ms=11_500,
+        detail="ready",
+    )
     return create_app(path, clock=lambda: 12), round_id, deferred_id
 
 
@@ -154,6 +165,10 @@ def test_operations_snapshot_contains_dynamic_round_devices_and_traces(
         "resets_at_ms",
     }
     assert payload["recent_mobile_traces"][0]["username"] == "buyer_1"
+    assert payload["browser_health"][0]["account_id"] == "account-01"
+    assert payload["devices"][-1]["latest_diagnostic"]["ui_summary"] == (
+        "visible selector missing"
+    )
 
 
 def test_pool_round_lists_and_paginated_coverage_are_bounded(tmp_path: Path) -> None:
@@ -273,3 +288,30 @@ def test_operator_command_models_reject_unknown_scope_and_extra_fields(
 
     assert unknown_scope.status_code == 422
     assert oversized.status_code == 422
+
+
+def test_controls_reject_fake_device_scope_and_do_not_revive_stopped_rounds(
+    tmp_path: Path,
+) -> None:
+    app, round_id, _ = _seeded_operations_app(tmp_path)
+    client = TestClient(app)
+    unsupported = client.post(
+        "/api/commands/pause",
+        json={"command_id": "device-1", "scope": "device", "scope_id": "phone-01"},
+    )
+    stopped = client.post(
+        "/api/commands/stop",
+        json={"command_id": "stop-all", "scope": "fleet", "scope_id": "all"},
+    )
+    restarted = client.post(
+        "/api/commands/start",
+        json={"command_id": "restart-all", "scope": "fleet", "scope_id": "all"},
+    )
+
+    assert unsupported.status_code == 422
+    assert stopped.status_code == 200
+    assert restarted.status_code == 409
+    rounds = client.get("/api/rounds").json()["items"]
+    assert next(item for item in rounds if item["round_id"] == round_id)["state"] == (
+        "stopped"
+    )
