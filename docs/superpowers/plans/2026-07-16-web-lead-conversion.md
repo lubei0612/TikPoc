@@ -647,33 +647,33 @@ git commit -m "feat: add browser DM identity core"
 - Modify: `chrome-event-bridge/background.js:1-62`
 - Modify: `chrome-event-bridge/manifest.json`
 
-- [ ] **Step 1: Add localhost transport messages**
+- [x] **Step 1: Add localhost transport messages**
 
 Define these message types in `background.js`: `TIKPOC_DM_PLAN`, `TIKPOC_DM_RESULT`, `TIKPOC_ACTION_CLAIM`, `TIKPOC_ACTION_RESULT`, and `TIKPOC_BROWSER_HEALTH`. Route each through a shared `postLocal(dashboardUrl, path, body)` that retains the existing localhost origin validation.
 
-- [ ] **Step 2: Add DM scripts and permissions to the manifest**
+- [x] **Step 2: Add DM scripts and permissions to the manifest**
 
 Load scripts in this order: `core.js`, `dm-core.js`, `content.js`, `dm-content.js`. Add `alarms` and `tabs` permissions while retaining `storage` and localhost host permissions.
 
-- [ ] **Step 3: Implement the page adapter in `dm-content.js`**
+- [x] **Step 3: Implement the page adapter in `dm-content.js`**
 
 Create focused functions `pageRole`, `visible`, `elementLabel`, `conversationRows`, `openConversation`, `readActiveConversation`, `findComposer`, `setComposerText`, `findSendButton`, and `waitForOutbound`. Prefer accessible roles, labels, links, and `data-e2e` attributes; treat hashed class names as diagnostics only.
 
-- [ ] **Step 4: Implement the serialized observer**
+- [x] **Step 4: Implement the serialized observer**
 
 On `/messages`, establish a per-account baseline in `chrome.storage.local`, observe `document.documentElement`, debounce for 250 ms, and process one changed/unread row at a time. Build the inbound fingerprint, request a plan, re-read the active thread, claim `dm_send:<plan_id>`, fill the composer, click Send, reconcile the outbound bubble, post the result, and release the lease.
 
-- [ ] **Step 5: Add browser health reporting**
+- [x] **Step 5: Add browser health reporting**
 
 Report account, device, `messages` page role, URL path, signed-in signal, and current timestamp on load and every extension alarm. Exclude message text from health payloads.
 
-- [ ] **Step 6: Run JS syntax and core tests**
+- [x] **Step 6: Run JS syntax and core tests**
 
 Run: `node --check chrome-event-bridge/background.js && node --check chrome-event-bridge/dm-content.js && node --test chrome-event-bridge/core.test.js chrome-event-bridge/dm-core.test.js`
 
 Expected: syntax checks and tests PASS.
 
-- [ ] **Step 7: Commit the DM content bridge**
+- [x] **Step 7: Commit the DM content bridge**
 
 ```bash
 git add chrome-event-bridge/background.js chrome-event-bridge/dm-content.js chrome-event-bridge/manifest.json

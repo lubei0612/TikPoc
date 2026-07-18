@@ -259,6 +259,8 @@ Completed on `feat/web-lead-conversion`:
   real Chrome extension transport coverage.
 - Web Task 7: stable browser message identity, semantic control matching, and
   exact outbound reconciliation helpers.
+- Web Task 8: serialized Messages observation, active-thread-bound visible send,
+  outbound reconciliation, and browser health reporting.
 - Mobile Tasks 1-9: stable target identity, immutable pools, deterministic
   rounds, shared qualification snapshots, independent quota-controlled plans,
   durable workers, semantic Appium verification, MYT discovery, proxy relay,
@@ -272,8 +274,8 @@ Completed on `feat/web-lead-conversion`:
   Important, or Minor findings after the final lease-release fixes.
 - Web Task 4 implementation commit: `a9c01d1`
   (`feat: add conversion context to AI replies`).
-- Latest code commit: `eeb3e73`
-  (`fix: ignore hidden browser DM controls`).
+- Latest code commit: `97d8996`
+  (`fix: align browser conversation identities`).
 - Web Task 4 repeated specification and quality reviews passed with no Critical
   or Important findings after the fallback and provider-boundary fixes.
 - Web Task 5 repeated specification and quality reviews passed with no Critical
@@ -296,7 +298,7 @@ Completed on `feat/web-lead-conversion`:
 
 Outstanding at the current checkpoint:
 
-1. Continue Web Tasks 8-10 and the operator-console plan in roadmap order.
+1. Continue Web Tasks 9-10 and the operator-console plan in roadmap order.
 2. Execute Mobile Task 10 only at the roadmap's two-device live gate.
 3. Finish full regression, two-device calibration, four-/eight-hour
    endurance tests, seven-device benchmark, runbooks, branch integration, and
