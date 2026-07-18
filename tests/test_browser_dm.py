@@ -1337,6 +1337,7 @@ def test_browser_dm_emits_idempotent_funnel_and_verified_invitation_events(
     plan = service.plan(inbound)
     service.plan(inbound)
     assert database.lead_funnel_snapshot() == {
+        "followers": 0,
         "dm_inbound": 1,
         "engaged": 1,
         "qualified": 1,

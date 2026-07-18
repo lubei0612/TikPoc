@@ -2,6 +2,14 @@ import { MessageSquareText } from "lucide-react";
 
 import type { LeadConversation } from "../api";
 
+const formatDuration = (durationMs: number) => {
+  const seconds = Math.floor(Math.max(0, durationMs) / 1_000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h`;
+};
+
 interface ConversationListProps {
   conversations: LeadConversation[];
   selectedId: string | null;
@@ -26,7 +34,12 @@ export function ConversationList({ conversations, selectedId, onSelect }: Conver
             <span className="conversation-copy">
               <span><strong>{conversation.participant_username}</strong><small>{conversation.account_id}</small></span>
               <span className="conversation-preview">{conversation.last_message_preview || "No message preview"}</span>
-              <span className="conversation-signals"><small>{conversation.stage === "invited" ? "Invited" : "Invitation --"}</small><small>{["contact_captured", "closed"].includes(conversation.stage) ? "Contact captured" : "Contact --"}</small></span>
+              <span className="conversation-signals">
+                <small>{conversation.invitation_seen ? "Invitation seen" : "No invitation"}</small>
+                <small>{conversation.contact_captured ? "Contact captured" : "No contact captured"}</small>
+                <small>{conversation.reply_wait_ms === null ? "Reply wait complete" : `Reply wait ${formatDuration(conversation.reply_wait_ms)}`}</small>
+                <small>{conversation.last_message_age_ms === null ? "No messages" : `Last message ${formatDuration(conversation.last_message_age_ms)} ago${conversation.last_message_direction ? ` · ${conversation.last_message_direction}` : ""}`}</small>
+              </span>
             </span>
             <span className={`stage-tag stage-${conversation.stage}`}>{conversation.stage.replaceAll("_", " ")}</span>
             <span className={`status-label ${conversation.human_required ? "status-degraded" : "status-healthy"}`}><span />{conversation.human_required ? "Human" : "AI"}</span>

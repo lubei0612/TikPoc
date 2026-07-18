@@ -141,8 +141,13 @@ export interface LeadConversation {
   participant_username: string;
   stage: string;
   human_required: boolean;
+  invitation_seen: boolean;
+  contact_captured: boolean;
   last_message_preview: string;
   last_message_at_ms: number;
+  last_message_direction: "inbound" | "outbound" | null;
+  reply_wait_ms: number | null;
+  last_message_age_ms: number | null;
 }
 
 export interface LeadMessage {
@@ -170,6 +175,7 @@ export interface SelectedLead {
 }
 
 export interface FunnelSnapshot {
+  followers?: number | null;
   dm_inbound: number;
   engaged: number;
   qualified: number;

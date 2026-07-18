@@ -24,12 +24,18 @@ const leadPayload = (selected: object | null = null) => ({
       participant_username: "buyer_01",
       stage: selected ? "human_required" : "qualified",
       human_required: Boolean(selected),
+      invitation_seen: true,
+      contact_captured: true,
       last_message_preview: "Can you send the details?",
       last_message_at_ms: 8_000,
+      last_message_direction: "inbound",
+      reply_wait_ms: 4_000,
+      last_message_age_ms: 4_000,
     },
   ],
   selected,
   funnel: {
+    followers: 17,
     dm_inbound: 12,
     engaged: 8,
     qualified: 4,
@@ -143,12 +149,61 @@ it("labels measured capacity separately from projection and uses dynamic coverag
 
   render(<AnalyticsView roundId="round-1" />);
 
-  expect(await screen.findByText("Measured completions")).toBeVisible();
-  expect(screen.getByText("Projected daily capacity")).toBeVisible();
+  const evidence = await screen.findByRole("table", { name: "Acquisition evidence" });
+  expect(within(evidence).getByText("Measured completions")).toBeVisible();
+  expect(within(evidence).getByText("Exact coverage")).toBeVisible();
+  expect(within(evidence).getByText("Measured confirmed visits")).toBeVisible();
+  expect(within(evidence).getByText("Projected daily capacity")).toBeVisible();
+  expect(within(evidence).getByText("Sales")).toBeVisible();
+  expect(within(evidence).getByText("Confirmed revenue")).toBeVisible();
+  expect(within(evidence).getByText("Revenue per 1,000 fully covered targets")).toBeVisible();
   expect(screen.getByText("Not promoted")).toBeVisible();
-  expect(screen.getByText("652 targets at 2/2")).toBeVisible();
-  expect(within(screen.getByTestId("funnel-table")).getByText("Qualified leads")).toBeVisible();
-  expect(screen.getByText("USD 125.00")).toBeVisible();
+  expect(within(evidence).getByText("652 targets at 2/2")).toBeVisible();
+  const funnel = screen.getByRole("table", { name: "Lead funnel" });
+  for (const label of ["Followers", "Inbound DMs", "Qualified leads", "Private-channel invitations", "Captured contacts", "Human takeovers"]) {
+    expect(within(funnel).getByText(label)).toBeVisible();
+  }
+  expect(within(funnel).getByText("17")).toBeVisible();
+  expect(within(evidence).getByText("USD 125.00")).toBeVisible();
+  expect(within(evidence).getByText("USD 191.72")).toBeVisible();
+  expect(screen.getByRole("table", { name: "Device capacity" })).toBeVisible();
+});
+
+it("keeps invitation and contact evidence visible in a later human stage with labeled timing", async () => {
+  const payload = leadPayload();
+  payload.conversations[0].stage = "human_required";
+  payload.conversations[0].human_required = true;
+  payload.conversations.push({
+    ...payload.conversations[0],
+    conversation_id: "conversation-closed",
+    participant_username: "buyer_closed",
+    stage: "closed",
+    human_required: false,
+  });
+  vi.spyOn(globalThis, "fetch").mockImplementation(() => jsonResponse(payload));
+
+  render(<InboxView />);
+
+  expect(await screen.findAllByText("Invitation seen")).toHaveLength(2);
+  expect(screen.getAllByText("Contact captured")).toHaveLength(2);
+  expect(screen.getAllByText("Reply wait 4s")).toHaveLength(2);
+  expect(screen.getAllByText("Last message 4s ago · inbound")).toHaveLength(2);
+  expect(screen.queryByText(/--/)).not.toBeInTheDocument();
+});
+
+it("shows not recorded only when follower measurement is absent", async () => {
+  const payload = leadPayload();
+  delete (payload.funnel as { followers?: number }).followers;
+  vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+    if (String(input).startsWith("/api/operations")) return jsonResponse(operationsPayload);
+    return jsonResponse(payload);
+  });
+
+  render(<AnalyticsView roundId="round-1" />);
+
+  const followersRow = (await screen.findByText("Followers")).closest("tr");
+  expect(followersRow).not.toBeNull();
+  expect(within(followersRow as HTMLTableRowElement).getByText("Not recorded")).toBeVisible();
 });
 
 it("keeps the newest conversation when an older detail response arrives late", async () => {
@@ -161,8 +216,13 @@ it("keeps the newest conversation when an older detail response arrives late", a
     participant_username: "buyer_02",
     stage: "qualified",
     human_required: false,
+    invitation_seen: false,
+    contact_captured: false,
     last_message_preview: "Second buyer",
     last_message_at_ms: 9_000,
+    last_message_direction: "inbound",
+    reply_wait_ms: 3_000,
+    last_message_age_ms: 3_000,
   });
   vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
     const url = String(input);

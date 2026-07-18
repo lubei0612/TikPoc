@@ -1380,6 +1380,7 @@ def test_lead_funnel_sales_health_and_latency_read_models(tmp_path: Path) -> Non
         occurred_at_ms=2_000,
     )
     assert database.lead_funnel_snapshot() == {
+        "followers": 0,
         "dm_inbound": 1,
         "engaged": 1,
         "qualified": 1,

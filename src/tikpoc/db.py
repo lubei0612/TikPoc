@@ -1823,7 +1823,7 @@ class Database:
         self, *, account_ids: tuple[str, ...] | None = None
     ) -> dict[str, int]:
         if account_ids == ():
-            return {stage: 0 for stage in _FUNNEL_STAGES}
+            return {"followers": 0, **{stage: 0 for stage in _FUNNEL_STAGES}}
         with self._connect() as connection:
             if account_ids is None:
                 rows = connection.execute(
@@ -1832,6 +1832,20 @@ class Database:
                     FROM lead_funnel_events GROUP BY stage
                     """
                 ).fetchall()
+                follower_row = connection.execute(
+                    """
+                    SELECT COUNT(*) AS count FROM (
+                        SELECT account_id, COALESCE(
+                            NULLIF(participant_username, ''),
+                            NULLIF(participant_id, ''),
+                            conversation_id
+                        ) AS participant_key
+                        FROM web_conversations
+                        WHERE is_follower=1
+                        GROUP BY account_id, participant_key
+                    )
+                    """
+                ).fetchone()
             else:
                 bounded_ids = tuple(dict.fromkeys(account_ids))[:100]
                 placeholders = ", ".join("?" for _ in bounded_ids)
@@ -1844,8 +1858,28 @@ class Database:
                     """,
                     bounded_ids,
                 ).fetchall()
+                follower_row = connection.execute(
+                    f"""
+                    SELECT COUNT(*) AS count FROM (
+                        SELECT account_id, COALESCE(
+                            NULLIF(participant_username, ''),
+                            NULLIF(participant_id, ''),
+                            conversation_id
+                        ) AS participant_key
+                        FROM web_conversations
+                        WHERE is_follower=1
+                          AND account_id IN ({placeholders})
+                        GROUP BY account_id, participant_key
+                    )
+                    """,
+                    bounded_ids,
+                ).fetchone()
         counts = {str(row["stage"]): int(row["count"]) for row in rows}
-        return {stage: counts.get(stage, 0) for stage in _FUNNEL_STAGES}
+        followers = 0 if follower_row is None else int(follower_row["count"])
+        return {
+            "followers": followers,
+            **{stage: counts.get(stage, 0) for stage in _FUNNEL_STAGES},
+        }
 
     def recent_leads(self, *, limit: int = 20) -> list[dict[str, object]]:
         bounded_limit = max(1, min(int(limit), 100))
@@ -2110,7 +2144,7 @@ class Database:
             return result
 
     def lead_conversations(
-        self, *, account_ids: tuple[str, ...], limit: int = 20
+        self, *, account_ids: tuple[str, ...], limit: int = 20, now_ms: int
     ) -> list[dict[str, object]]:
         if not account_ids:
             return []
@@ -2121,6 +2155,20 @@ class Database:
                 f"""
                 SELECT c.account_id, c.conversation_id, c.participant_username,
                        c.stage, c.human_required,
+                       (c.last_invited_at_ms > 0 OR EXISTS (
+                           SELECT 1 FROM lead_funnel_events e
+                           WHERE e.account_id=c.account_id AND e.stage='invited'
+                             AND (
+                                 e.conversation_id=c.conversation_id
+                                 OR (
+                                     e.conversation_id=''
+                                     AND e.participant_username=c.participant_username
+                                 )
+                             )
+                       )) AS invitation_seen,
+                       (c.contact_captured_at_ms > 0
+                           OR c.stage IN ('contact_captured', 'closed')
+                       ) AS contact_captured,
                        COALESCE((
                            SELECT SUBSTR(m.text, 1, 160) FROM web_messages m
                            WHERE m.account_id=c.account_id
@@ -2132,7 +2180,13 @@ class Database:
                            WHERE m.account_id=c.account_id
                              AND m.conversation_id=c.conversation_id
                            ORDER BY m.timestamp_ms DESC, m.id DESC LIMIT 1
-                ), 0) AS last_message_at_ms
+                       ), 0) AS last_message_at_ms,
+                       (
+                           SELECT m.direction FROM web_messages m
+                           WHERE m.account_id=c.account_id
+                             AND m.conversation_id=c.conversation_id
+                           ORDER BY m.timestamp_ms DESC, m.id DESC LIMIT 1
+                       ) AS last_message_direction
                 FROM web_conversations c
                 WHERE c.account_id IN ({placeholders})
                 ORDER BY last_message_at_ms DESC, c.account_id, c.conversation_id
@@ -2140,13 +2194,30 @@ class Database:
                 """,
                 (*account_ids, bounded_limit),
             ).fetchall()
-        return [
-            {
-                **dict(row),
-                "human_required": bool(row["human_required"]),
-            }
-            for row in rows
-        ]
+        conversations: list[dict[str, object]] = []
+        for row in rows:
+            last_message_at_ms = int(row["last_message_at_ms"])
+            last_message_direction = row["last_message_direction"]
+            last_message_age_ms = (
+                max(0, int(now_ms) - last_message_at_ms)
+                if last_message_at_ms > 0
+                else None
+            )
+            conversations.append(
+                {
+                    **dict(row),
+                    "human_required": bool(row["human_required"]),
+                    "invitation_seen": bool(row["invitation_seen"]),
+                    "contact_captured": bool(row["contact_captured"]),
+                    "last_message_age_ms": last_message_age_ms,
+                    "reply_wait_ms": (
+                        last_message_age_ms
+                        if last_message_direction == "inbound"
+                        else None
+                    ),
+                }
+            )
+        return conversations
 
     def selected_lead(
         self,

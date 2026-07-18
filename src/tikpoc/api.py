@@ -629,7 +629,9 @@ def create_app(
             else tuple(account.account_id for account in registry.accounts)
         )
         conversations = database.lead_conversations(
-            account_ids=account_ids, limit=limit
+            account_ids=account_ids,
+            limit=limit,
+            now_ms=int(clock() * 1_000),
         )
         conversations = [
             redact_destination(item, str(item["account_id"])) for item in conversations

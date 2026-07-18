@@ -763,6 +763,7 @@ def test_lead_inbox_only_returns_registry_accounts_and_unconfigured_is_empty(
     assert unconfigured["conversations"] == []
     assert unconfigured["selected"] is None
     assert unconfigured["funnel"] == {
+        "followers": 0,
         "dm_inbound": 0,
         "engaged": 0,
         "qualified": 0,
@@ -805,6 +806,115 @@ def test_lead_analytics_only_include_registry_accounts(tmp_path: Path) -> None:
         "confirmed_revenue_minor": {},
         "sales": 0,
     }
+
+
+def test_lead_summaries_include_persistent_flags_and_reply_timing(
+    tmp_path: Path,
+) -> None:
+    app, database = _seeded_app(tmp_path)
+    database.record_lead_funnel_event(
+        "account-01",
+        "buyer_01",
+        "invited",
+        "invitation-evidence",
+        conversation_id="conversation-01",
+        occurred_at_ms=3_500,
+    )
+    with sqlite3.connect(database.path) as connection:
+        connection.execute(
+            """
+            UPDATE web_conversations
+            SET stage='human_required', contact_captured_at_ms=3600
+            WHERE account_id='account-01' AND conversation_id='conversation-01'
+            """
+        )
+    database.append_web_message(
+        "account-01",
+        "conversation-closed",
+        "closed-inbound",
+        direction="inbound",
+        message_type="TEXT",
+        text="closed thread",
+        timestamp_ms=2_500,
+        participant_username="buyer_02",
+    )
+    with sqlite3.connect(database.path) as connection:
+        connection.execute(
+            """
+            UPDATE web_conversations
+            SET stage='closed', last_invited_at_ms=3500
+            WHERE account_id='account-01' AND conversation_id='conversation-closed'
+            """
+        )
+
+    conversations = TestClient(app).get("/api/leads").json()["conversations"]
+    awaiting = next(
+        item for item in conversations if item["conversation_id"] == "conversation-01"
+    )
+    closed = next(
+        item
+        for item in conversations
+        if item["conversation_id"] == "conversation-closed"
+    )
+
+    assert awaiting["invitation_seen"] is True
+    assert awaiting["contact_captured"] is True
+    assert awaiting["last_message_direction"] == "inbound"
+    assert awaiting["reply_wait_ms"] == 2_000
+    assert awaiting["last_message_age_ms"] == 2_000
+    assert closed["invitation_seen"] is True
+    assert closed["contact_captured"] is True
+
+    database.append_web_message(
+        "account-01",
+        "conversation-01",
+        "outbound-after-reply",
+        direction="outbound",
+        message_type="TEXT",
+        text="Synthetic response",
+        timestamp_ms=4_000,
+        participant_username="buyer_01",
+    )
+
+    replied = next(
+        item
+        for item in TestClient(app).get("/api/leads").json()["conversations"]
+        if item["conversation_id"] == "conversation-01"
+    )
+
+    assert replied["last_message_direction"] == "outbound"
+    assert replied["reply_wait_ms"] is None
+    assert replied["last_message_age_ms"] == 1_000
+
+
+def test_follower_measurement_is_distinct_and_registry_scoped(tmp_path: Path) -> None:
+    app, database = _seeded_app(tmp_path)
+    for account_id, conversation_id in (
+        ("account-01", "conversation-01"),
+        ("account-01", "conversation-duplicate"),
+        ("account-02", "conversation-other-account"),
+        ("removed-account", "conversation-removed"),
+    ):
+        database.append_web_message(
+            account_id,
+            conversation_id,
+            f"message-{conversation_id}",
+            direction="inbound",
+            message_type="TEXT",
+            text="hello",
+            timestamp_ms=4_000,
+            participant_username="same_buyer",
+            is_follower=True,
+        )
+
+    payload = TestClient(app).get("/api/leads").json()
+
+    assert payload["funnel"]["followers"] == 2
+
+    empty_registry_payload = (
+        TestClient(create_app(database.path)).get("/api/leads").json()
+    )
+    assert empty_registry_payload["funnel"]["followers"] == 0
 
 
 def test_lead_redaction_handles_case_and_whitespace_variants_without_leaking_destination(
