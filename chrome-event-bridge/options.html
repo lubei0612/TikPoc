@@ -46,10 +46,28 @@
           <h2 id="behavior-heading">运行设置</h2>
           <label class="switch-row">
             <span>
+              <strong>启用浏览器自动化</strong>
+              <small>总开关关闭时，回关和私信处理都会停止。</small>
+            </span>
+            <input id="enabled" name="enabled" type="checkbox" />
+          </label>
+          <label class="switch-row">
+            <span>
               <strong>启用自动回关</strong>
               <small>只点击明确的新关注通知行中的 Follow / 回关按钮。</small>
             </span>
-            <input id="enabled" name="enabled" type="checkbox" />
+            <input
+              id="browser-followback-enabled"
+              name="browserFollowbackEnabled"
+              type="checkbox"
+            />
+          </label>
+          <label class="switch-row">
+            <span>
+              <strong>启用私信回复</strong>
+              <small>处理新私信并发送服务端生成的回复计划。</small>
+            </span>
+            <input id="browser-dm-enabled" name="browserDmEnabled" type="checkbox" />
           </label>
           <label class="switch-row">
             <span>

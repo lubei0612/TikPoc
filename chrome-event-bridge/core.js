@@ -86,8 +86,54 @@
     return "other";
   }
 
-  function buildFollowerDedupKey(accountId, username) {
-    return `follower:${normalizeText(accountId).toLowerCase()}:${normalizeText(username).toLowerCase()}`;
+  function buildFollowerDedupKey(accountId, username, eventId = "") {
+    const base = `follower:${normalizeText(accountId).toLowerCase()}:${normalizeText(username).toLowerCase()}`;
+    const normalizedEventId = normalizeText(eventId).toLowerCase();
+    return normalizedEventId ? `${base}:${normalizedEventId}` : base;
+  }
+
+  function extractFollowerEventId(row) {
+    const stableAttributes = [
+      "data-event-id",
+      "data-notification-id",
+      "data-activity-id",
+      "data-id",
+    ];
+    for (const name of stableAttributes) {
+      const value = row && typeof row.getAttribute === "function"
+        ? normalizeText(row.getAttribute(name))
+        : "";
+      if (value) {
+        return value;
+      }
+    }
+    const nestedIdentity = row && typeof row.querySelector === "function"
+      ? row.querySelector(stableAttributes.map((name) => `[${name}]`).join(", "))
+      : null;
+    for (const name of stableAttributes) {
+      const value = nestedIdentity && typeof nestedIdentity.getAttribute === "function"
+        ? normalizeText(nestedIdentity.getAttribute(name))
+        : "";
+      if (value) {
+        return value;
+      }
+    }
+    const timestamp = row && typeof row.querySelector === "function"
+      ? row.querySelector("time, [data-timestamp], [data-time]")
+      : null;
+    for (const name of ["datetime", "data-timestamp", "data-time"]) {
+      const value = timestamp && typeof timestamp.getAttribute === "function"
+        ? normalizeText(timestamp.getAttribute(name))
+        : "";
+      if (value) {
+        return value;
+      }
+    }
+    return normalizeText(timestamp && timestamp.textContent);
+  }
+
+  function browserFeatureEnabled(settings, featureKey) {
+    return Boolean(settings && settings.enabled && settings[featureKey] !== false);
   }
 
   function shouldAttemptRecord(
@@ -138,8 +184,10 @@
   }
 
   return {
+    browserFeatureEnabled,
     buildFollowerDedupKey,
     classifyCandidate,
+    extractFollowerEventId,
     followButtonState,
     isFollowerNotification,
     normalizeText,

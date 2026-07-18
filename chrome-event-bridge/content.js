@@ -15,6 +15,9 @@
   let scanning = false;
   let activityOpenedByBridge = false;
   let activityOpenedAt = 0;
+  const ownerId = globalThis.crypto && typeof globalThis.crypto.randomUUID === "function"
+    ? globalThis.crypto.randomUUID()
+    : `tab-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const inFlight = new Set();
 
   function storageGet(keys) {
@@ -91,6 +94,7 @@
     }
     return {
       ...candidate,
+      eventId: core.extractFollowerEventId(row),
       row,
       button: candidate.buttonIndex >= 0 ? buttons[candidate.buttonIndex] : null,
     };
@@ -119,7 +123,11 @@
   }
 
   async function handleCandidate(candidate, settings, processed) {
-    const key = core.buildFollowerDedupKey(settings.accountId, candidate.username);
+    const key = core.buildFollowerDedupKey(
+      settings.accountId,
+      candidate.username,
+      candidate.eventId,
+    );
     if (
       inFlight.has(key) ||
       !core.shouldAttemptRecord(
@@ -135,7 +143,10 @@
     const payload = {
       username: candidate.username,
       profile_url: candidate.profileUrl,
+      event_id: candidate.eventId || "",
     };
+    let actionIdentity = null;
+    let actionState = null;
     try {
       if (candidate.state === "completed") {
         await report(settings, "followback_completed", key, {
@@ -160,6 +171,26 @@
       }
 
       await report(settings, "new_follower", key, payload);
+      const claimIdentity = {
+        account_id: settings.accountId,
+        device_id: settings.deviceId,
+        action_type: "followback",
+        action_key: key,
+        owner_id: ownerId,
+      };
+      const claim = await sendMessage({
+        type: "TIKPOC_ACTION_CLAIM",
+        dashboardUrl: settings.dashboardUrl,
+        body: {
+          ...claimIdentity,
+          timestamp_ms: Date.now(),
+          lease_seconds: 30,
+        },
+      });
+      if (!claim.claimed) {
+        return;
+      }
+      actionIdentity = claimIdentity;
       const attempts = Number(processed[key]?.attempts || 0) + 1;
       await saveProcessed(processed, key, {
         status: "attempted",
@@ -172,6 +203,7 @@
         ? core.followButtonState(elementLabel(candidate.button))
         : "completed";
       const completed = state === "completed";
+      actionState = completed ? "completed" : "uncertain";
       await report(
         settings,
         completed ? "followback_completed" : "followback_unresolved",
@@ -184,6 +216,7 @@
         updatedAt: Date.now(),
       });
     } catch (_error) {
+      actionState = actionIdentity ? "uncertain" : null;
       const attempts = Number(processed[key]?.attempts || 0) + 1;
       await saveProcessed(processed, key, {
         status: "unresolved",
@@ -191,6 +224,17 @@
         updatedAt: Date.now(),
       });
     } finally {
+      if (actionIdentity && actionState) {
+        try {
+          await sendMessage({
+            type: "TIKPOC_ACTION_RESULT",
+            dashboardUrl: settings.dashboardUrl,
+            body: { ...actionIdentity, state: actionState },
+          });
+        } catch (_error) {
+          // The server lease remains busy until expiry when result delivery fails.
+        }
+      }
       inFlight.delete(key);
     }
   }
@@ -254,7 +298,11 @@
   async function establishBaseline(settings, candidates, processed, baselines) {
     const now = Date.now();
     for (const candidate of candidates) {
-      const key = core.buildFollowerDedupKey(settings.accountId, candidate.username);
+      const key = core.buildFollowerDedupKey(
+        settings.accountId,
+        candidate.username,
+        candidate.eventId,
+      );
       processed[key] = {
         status: "baseline",
         attempts: 0,
@@ -277,7 +325,7 @@
       const stored = await storageGet([SETTINGS_KEY, PROCESSED_KEY, BASELINE_KEY]);
       const settings = stored[SETTINGS_KEY] || {};
       if (
-        !settings.enabled ||
+        !core.browserFeatureEnabled(settings, "browserFollowbackEnabled") ||
         !settings.accountId ||
         !settings.deviceId ||
         !settings.dashboardUrl

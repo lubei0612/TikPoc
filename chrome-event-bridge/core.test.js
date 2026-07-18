@@ -36,6 +36,61 @@ test("builds stable account-scoped follower keys", () => {
     core.buildFollowerDedupKey("Account-01", "Some.User"),
     "follower:account-01:some.user",
   );
+  assert.equal(
+    core.buildFollowerDedupKey("Account-01", "Some.User", " Activity 42 "),
+    "follower:account-01:some.user:activity 42",
+  );
+});
+
+test("prefers stable follower event attributes over visible timestamps", () => {
+  const nestedIdentity = {
+    getAttribute(name) {
+      return name === "data-event-id" ? "nested-event-17" : "";
+    },
+  };
+  const timestamp = {
+    getAttribute(name) {
+      return name === "datetime" ? "2026-07-18T09:00:00Z" : "";
+    },
+    textContent: "2m",
+  };
+  const row = {
+    getAttribute(name) {
+      return name === "data-notification-id" ? "notification-42" : "";
+    },
+    querySelector(selector) {
+      return selector.includes("data-event-id") ? nestedIdentity : timestamp;
+    },
+  };
+  assert.equal(core.extractFollowerEventId(row), "notification-42");
+
+  row.getAttribute = () => "";
+  assert.equal(core.extractFollowerEventId(row), "nested-event-17");
+
+  nestedIdentity.getAttribute = () => "";
+  assert.equal(core.extractFollowerEventId(row), "2026-07-18T09:00:00Z");
+});
+
+test("gates browser features with master and independent switches", () => {
+  assert.equal(core.browserFeatureEnabled({ enabled: true }, "browserFollowbackEnabled"), true);
+  assert.equal(
+    core.browserFeatureEnabled(
+      { enabled: true, browserFollowbackEnabled: false, browserDmEnabled: true },
+      "browserFollowbackEnabled",
+    ),
+    false,
+  );
+  assert.equal(
+    core.browserFeatureEnabled(
+      { enabled: true, browserFollowbackEnabled: false, browserDmEnabled: true },
+      "browserDmEnabled",
+    ),
+    true,
+  );
+  assert.equal(
+    core.browserFeatureEnabled({ enabled: false, browserDmEnabled: true }, "browserDmEnabled"),
+    false,
+  );
 });
 
 test("rejects rows that lack an explicit follower phrase", () => {

@@ -450,7 +450,13 @@
       return settings;
     }
     function ready(value) {
-      return Boolean(value.enabled && value.accountId && value.deviceId && value.dashboardUrl);
+      return Boolean(
+        value.enabled &&
+        value.browserDmEnabled !== false &&
+        value.accountId &&
+        value.deviceId &&
+        value.dashboardUrl
+      );
     }
     async function health() {
       const current = await loadSettings();
