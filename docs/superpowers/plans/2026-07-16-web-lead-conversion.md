@@ -520,7 +520,7 @@ git commit -m "feat: plan idempotent browser DM replies"
 - Modify: `src/tikpoc/dashboard.py:19-285`
 - Modify: `tests/test_dashboard_api.py`
 
-- [ ] **Step 1: Write failing end-to-end HTTP tests**
+- [x] **Step 1: Write failing end-to-end HTTP tests**
 
 Add a fake `BrowserDmService` and cover these exact routes:
 
@@ -551,27 +551,27 @@ Implement `post_json` in the test with `urllib.request.Request`, reuse the
 existing `_start_server` thread helper, and define `FakeBrowserDmService.plan`
 and `record_result` with the exact `BrowserReply` fields from Task 5.
 
-- [ ] **Step 2: Run the endpoint tests and verify 404 responses**
+- [x] **Step 2: Run the endpoint tests and verify 404 responses**
 
 Run: `uv run pytest tests/test_dashboard_api.py -q`
 
 Expected: FAIL because the new routes return 404.
 
-- [ ] **Step 3: Inject the browser DM service**
+- [x] **Step 3: Inject the browser DM service**
 
 Add `browser_dm_service: BrowserDmService | None` to `DashboardServer` and `create_server`. When a registry exists and no service is injected, construct `BrowserDmService(database, registry, AiReplyClient.from_environment())`.
 
-- [ ] **Step 4: Add strict JSON handlers**
+- [x] **Step 4: Add strict JSON handlers**
 
 Implement private handlers for reply plan/result, lease claim/result, and health. Reuse `_required_text`, validate account/device mapping once, enforce integer plan IDs and timestamps, and return JSON objects with stable keys. Extend `OPTIONS` handling to every browser POST path.
 
-- [ ] **Step 5: Run endpoint and full Python tests**
+- [x] **Step 5: Run endpoint and full Python tests**
 
 Run: `uv run pytest tests/test_dashboard_api.py -q && uv run pytest -q`
 
 Expected: all tests PASS.
 
-- [ ] **Step 6: Commit the endpoints**
+- [x] **Step 6: Commit the endpoints**
 
 ```bash
 git add src/tikpoc/dashboard.py tests/test_dashboard_api.py
