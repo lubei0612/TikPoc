@@ -498,6 +498,29 @@ class Database:
             )
             connection.execute(
                 """
+                CREATE TABLE IF NOT EXISTS operator_lead_commands (
+                    command_type TEXT NOT NULL,
+                    account_id TEXT NOT NULL,
+                    conversation_id TEXT NOT NULL DEFAULT '',
+                    command_id TEXT NOT NULL,
+                    result_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY(command_type, account_id, conversation_id, command_id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS web_account_settings (
+                    account_id TEXT PRIMARY KEY,
+                    ai_enabled INTEGER NOT NULL,
+                    followback_enabled INTEGER NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS lead_funnel_events (
                     event_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     account_id TEXT NOT NULL,
@@ -1679,6 +1702,490 @@ class Database:
             "by_status": by_status,
             "confirmed_revenue_minor": revenue,
             "sales": sales,
+        }
+
+    @staticmethod
+    def _stored_operator_result(
+        connection: sqlite3.Connection,
+        command_type: str,
+        account_id: str,
+        conversation_id: str,
+        command_id: str,
+    ) -> dict[str, object] | None:
+        row = connection.execute(
+            """
+            SELECT result_json FROM operator_lead_commands
+            WHERE command_type=? AND account_id=? AND conversation_id=?
+              AND command_id=?
+            """,
+            (command_type, account_id, conversation_id, command_id),
+        ).fetchone()
+        return None if row is None else json.loads(str(row["result_json"]))
+
+    @staticmethod
+    def _store_operator_result(
+        connection: sqlite3.Connection,
+        command_type: str,
+        account_id: str,
+        conversation_id: str,
+        command_id: str,
+        result: dict[str, object],
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO operator_lead_commands(
+                command_type, account_id, conversation_id, command_id, result_json
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                command_type,
+                account_id,
+                conversation_id,
+                command_id,
+                json.dumps(result, ensure_ascii=False, sort_keys=True),
+            ),
+        )
+
+    def account_operator_settings(
+        self,
+        account_id: str,
+        *,
+        default_ai_enabled: bool,
+        default_followback_enabled: bool,
+    ) -> dict[str, bool]:
+        _require_identity(account_id)
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO web_account_settings(
+                    account_id, ai_enabled, followback_enabled
+                ) VALUES (?, ?, ?)
+                """,
+                (
+                    account_id,
+                    int(default_ai_enabled),
+                    int(default_followback_enabled),
+                ),
+            )
+            row = connection.execute(
+                """
+                SELECT ai_enabled, followback_enabled FROM web_account_settings
+                WHERE account_id=?
+                """,
+                (account_id,),
+            ).fetchone()
+        assert row is not None
+        return {
+            "ai_enabled": bool(row["ai_enabled"]),
+            "followback_enabled": bool(row["followback_enabled"]),
+        }
+
+    def set_account_operator_setting(
+        self,
+        account_id: str,
+        command_id: str,
+        *,
+        setting: str,
+        enabled: bool,
+        default_ai_enabled: bool,
+        default_followback_enabled: bool,
+    ) -> dict[str, object]:
+        _require_identity(account_id, command_id)
+        fields = {"ai": "ai_enabled", "followback": "followback_enabled"}
+        if setting not in fields:
+            raise ValueError("invalid account setting")
+        command_type = f"{setting}_enable"
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            stored = self._stored_operator_result(
+                connection, command_type, account_id, "", command_id
+            )
+            if stored is not None:
+                return stored
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO web_account_settings(
+                    account_id, ai_enabled, followback_enabled
+                ) VALUES (?, ?, ?)
+                """,
+                (
+                    account_id,
+                    int(default_ai_enabled),
+                    int(default_followback_enabled),
+                ),
+            )
+            field = fields[setting]
+            connection.execute(
+                f"""
+                UPDATE web_account_settings SET {field}=?, updated_at=CURRENT_TIMESTAMP
+                WHERE account_id=?
+                """,
+                (int(enabled), account_id),
+            )
+            result: dict[str, object] = {
+                "account_id": account_id,
+                field: bool(enabled),
+            }
+            self._store_operator_result(
+                connection, command_type, account_id, "", command_id, result
+            )
+            return result
+
+    def lead_conversations(self, *, limit: int = 20) -> list[dict[str, object]]:
+        bounded_limit = max(1, min(int(limit), 100))
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT c.account_id, c.conversation_id, c.participant_username,
+                       c.stage, c.human_required,
+                       COALESCE((
+                           SELECT SUBSTR(m.text, 1, 160) FROM web_messages m
+                           WHERE m.account_id=c.account_id
+                             AND m.conversation_id=c.conversation_id
+                           ORDER BY m.timestamp_ms DESC, m.id DESC LIMIT 1
+                       ), '') AS last_message_preview,
+                       COALESCE((
+                           SELECT m.timestamp_ms FROM web_messages m
+                           WHERE m.account_id=c.account_id
+                             AND m.conversation_id=c.conversation_id
+                           ORDER BY m.timestamp_ms DESC, m.id DESC LIMIT 1
+                       ), 0) AS last_message_at_ms
+                FROM web_conversations c
+                ORDER BY last_message_at_ms DESC, c.account_id, c.conversation_id
+                LIMIT ?
+                """,
+                (bounded_limit,),
+            ).fetchall()
+        return [
+            {
+                **dict(row),
+                "human_required": bool(row["human_required"]),
+            }
+            for row in rows
+        ]
+
+    def selected_lead(
+        self,
+        account_id: str,
+        conversation_id: str,
+        *,
+        history_limit: int,
+        inbound_fingerprint: str = "",
+    ) -> dict[str, object]:
+        state = self.browser_conversation_state(account_id, conversation_id)
+        messages = self.recent_web_messages(
+            account_id, conversation_id, limit=history_limit
+        )
+        draft: dict[str, object] | None = None
+        if inbound_fingerprint:
+            plan = self.get_browser_reply_plan(account_id, inbound_fingerprint)
+            if plan is not None and plan.conversation_id == conversation_id:
+                draft = {
+                    "plan_id": plan.id,
+                    "inbound_fingerprint": plan.inbound_fingerprint,
+                    "reply_text": plan.reply_text,
+                    "state": plan.state,
+                }
+        return {
+            "account_id": account_id,
+            "conversation_id": conversation_id,
+            "stage": state.stage,
+            "human_required": state.human_required,
+            "messages": messages,
+            "draft": draft,
+        }
+
+    def takeover_lead(
+        self,
+        account_id: str,
+        conversation_id: str,
+        command_id: str,
+        *,
+        reason: str,
+        occurred_at_ms: int,
+    ) -> dict[str, object]:
+        _require_identity(account_id, conversation_id, command_id, reason)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            stored = self._stored_operator_result(
+                connection, "takeover", account_id, conversation_id, command_id
+            )
+            if stored is not None:
+                return stored
+            row = connection.execute(
+                """
+                SELECT participant_username FROM web_conversations
+                WHERE account_id=? AND conversation_id=?
+                """,
+                (account_id, conversation_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError((account_id, conversation_id))
+            connection.execute(
+                """
+                UPDATE web_conversations
+                SET stage='human_required', human_required=1,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE account_id=? AND conversation_id=?
+                """,
+                (account_id, conversation_id),
+            )
+            connection.execute(
+                """
+                UPDATE browser_reply_plans
+                SET state='superseded', updated_at=CURRENT_TIMESTAMP
+                WHERE account_id=? AND conversation_id=?
+                  AND state IN ('planning', 'planned')
+                """,
+                (account_id, conversation_id),
+            )
+            participant = str(row["participant_username"])
+            if participant:
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO lead_funnel_events(
+                        account_id, participant_username, conversation_id,
+                        stage, source_key, occurred_at_ms
+                    ) VALUES (?, ?, ?, 'human_required', ?, ?)
+                    """,
+                    (
+                        account_id,
+                        participant,
+                        conversation_id,
+                        f"operator:{command_id}",
+                        int(occurred_at_ms),
+                    ),
+                )
+            result: dict[str, object] = {
+                "account_id": account_id,
+                "conversation_id": conversation_id,
+                "stage": "human_required",
+                "human_required": True,
+                "reason": reason,
+            }
+            self._store_operator_result(
+                connection,
+                "takeover",
+                account_id,
+                conversation_id,
+                command_id,
+                result,
+            )
+            return result
+
+    def return_lead_to_ai(
+        self, account_id: str, conversation_id: str, command_id: str
+    ) -> dict[str, object]:
+        _require_identity(account_id, conversation_id, command_id)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            stored = self._stored_operator_result(
+                connection, "return_to_ai", account_id, conversation_id, command_id
+            )
+            if stored is not None:
+                return stored
+            row = connection.execute(
+                """
+                SELECT stage, human_required FROM web_conversations
+                WHERE account_id=? AND conversation_id=?
+                """,
+                (account_id, conversation_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError((account_id, conversation_id))
+            if str(row["stage"]) in {
+                "contact_captured",
+                "human_required",
+                "closed",
+            } or bool(row["human_required"]):
+                raise ValueError("conversation is in a terminal policy state")
+            uncertain = connection.execute(
+                """
+                SELECT 1 FROM browser_reply_plans
+                WHERE account_id=? AND conversation_id=? AND state='uncertain'
+                LIMIT 1
+                """,
+                (account_id, conversation_id),
+            ).fetchone()
+            if uncertain is not None:
+                raise ValueError("conversation has an uncertain browser send")
+            result: dict[str, object] = {
+                "account_id": account_id,
+                "conversation_id": conversation_id,
+                "stage": str(row["stage"]),
+                "ai_enabled": True,
+            }
+            self._store_operator_result(
+                connection,
+                "return_to_ai",
+                account_id,
+                conversation_id,
+                command_id,
+                result,
+            )
+            return result
+
+    def create_manual_reply_plan(
+        self,
+        account_id: str,
+        conversation_id: str,
+        command_id: str,
+        *,
+        inbound_fingerprint: str,
+        reply_text: str,
+        now_ms: int,
+    ) -> dict[str, object]:
+        _require_identity(
+            account_id,
+            conversation_id,
+            command_id,
+            inbound_fingerprint,
+            reply_text,
+        )
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            stored = self._stored_operator_result(
+                connection, "manual_reply", account_id, conversation_id, command_id
+            )
+            if stored is not None:
+                return stored
+            inbound = connection.execute(
+                """
+                SELECT text, timestamp_ms FROM web_messages
+                WHERE account_id=? AND conversation_id=? AND message_id=?
+                  AND direction='inbound'
+                """,
+                (account_id, conversation_id, inbound_fingerprint),
+            ).fetchone()
+            conversation = connection.execute(
+                """
+                SELECT participant_username, stage FROM web_conversations
+                WHERE account_id=? AND conversation_id=?
+                """,
+                (account_id, conversation_id),
+            ).fetchone()
+            if inbound is None or conversation is None:
+                raise KeyError((account_id, conversation_id, inbound_fingerprint))
+            if str(conversation["stage"]) != "human_required":
+                raise ValueError("manual reply requires human takeover")
+            plan_fingerprint = f"operator-manual:{conversation_id}:{command_id}"
+            cursor = connection.execute(
+                """
+                INSERT INTO browser_reply_plans(
+                    account_id, conversation_id, inbound_fingerprint,
+                    participant_username, inbound_text, inbound_timestamp_ms,
+                    reply_text, stage, state, invitation_evidence_known,
+                    created_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'planned', 1, ?)
+                """,
+                (
+                    account_id,
+                    conversation_id,
+                    plan_fingerprint,
+                    str(conversation["participant_username"]),
+                    str(inbound["text"]),
+                    int(inbound["timestamp_ms"]),
+                    reply_text,
+                    str(conversation["stage"]),
+                    int(now_ms),
+                ),
+            )
+            result: dict[str, object] = {
+                "account_id": account_id,
+                "conversation_id": conversation_id,
+                "plan_id": int(cursor.lastrowid),
+                "inbound_fingerprint": inbound_fingerprint,
+                "reply_text": reply_text,
+                "state": "planned",
+            }
+            self._store_operator_result(
+                connection,
+                "manual_reply",
+                account_id,
+                conversation_id,
+                command_id,
+                result,
+            )
+            return result
+
+    def record_lead_sale_command(
+        self,
+        account_id: str,
+        conversation_id: str,
+        command_id: str,
+        *,
+        amount_minor: int,
+        currency: str,
+        status: str,
+        occurred_at_ms: int,
+    ) -> dict[str, object]:
+        _require_identity(account_id, conversation_id, command_id)
+        if int(amount_minor) <= 0:
+            raise ValueError("sale amount must be a positive minor-unit integer")
+        if len(currency) != 3 or not currency.isascii() or not currency.isupper():
+            raise ValueError("sale currency must be three uppercase ASCII letters")
+        if status not in _SALE_STATUSES:
+            raise ValueError(f"invalid sale status: {status}")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            stored = self._stored_operator_result(
+                connection, "sale", account_id, conversation_id, command_id
+            )
+            if stored is not None:
+                return stored
+            row = connection.execute(
+                """
+                SELECT participant_username FROM web_conversations
+                WHERE account_id=? AND conversation_id=?
+                """,
+                (account_id, conversation_id),
+            ).fetchone()
+            if row is None or not str(row["participant_username"]).strip():
+                raise KeyError((account_id, conversation_id))
+            cursor = connection.execute(
+                """
+                INSERT INTO lead_sales(
+                    account_id, participant_username, amount_minor,
+                    currency, status, occurred_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    account_id,
+                    str(row["participant_username"]),
+                    int(amount_minor),
+                    currency,
+                    status,
+                    int(occurred_at_ms),
+                ),
+            )
+            result: dict[str, object] = {
+                "sale_id": int(cursor.lastrowid),
+                "account_id": account_id,
+                "conversation_id": conversation_id,
+                "amount_minor": int(amount_minor),
+                "currency": currency,
+                "status": status,
+                "occurred_at_ms": int(occurred_at_ms),
+            }
+            self._store_operator_result(
+                connection,
+                "sale",
+                account_id,
+                conversation_id,
+                command_id,
+                result,
+            )
+            return result
+
+    def conversation_ai_available(self, account_id: str, conversation_id: str) -> bool:
+        try:
+            state = self.browser_conversation_state(account_id, conversation_id)
+        except KeyError:
+            return True
+        return not state.human_required and state.stage not in {
+            "contact_captured",
+            "human_required",
+            "closed",
         }
 
     def upsert_browser_health(

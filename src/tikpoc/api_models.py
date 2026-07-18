@@ -102,3 +102,30 @@ class RoundCreateRequest(ApiRequest):
     starts_at_ms: int = Field(ge=0)
     min_inter_device_gap_ms: int = Field(default=900_000, ge=0)
     min_repeat_gap_ms: int = Field(default=72_000_000, ge=0)
+
+
+class LeadCommand(ApiRequest):
+    command_id: CommandId
+
+
+class LeadTakeoverCommand(LeadCommand):
+    reason: BoundedText
+
+
+class ManualReplyPlanCommand(LeadCommand):
+    inbound_fingerprint: Identifier
+    reply_text: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=2_000),
+    ]
+
+
+class LeadSaleCommand(LeadCommand):
+    amount_minor: int = Field(gt=0)
+    currency: Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")]
+    status: Literal["pending", "confirmed", "refunded", "cancelled"]
+    occurred_at_ms: int = Field(ge=0)
+
+
+class AccountEnableCommand(LeadCommand):
+    enabled: bool

@@ -17,6 +17,7 @@ from .acquisition_service import (
     AcquisitionService,
 )
 from .api_models import (
+    AccountEnableCommand,
     BrowserActionClaimRequest,
     BrowserActionResultRequest,
     BrowserEventRequest,
@@ -25,6 +26,10 @@ from .api_models import (
     BrowserReplyPlanRequest,
     BrowserReplyResultRequest,
     DeviceEventRequest,
+    LeadCommand,
+    LeadSaleCommand,
+    LeadTakeoverCommand,
+    ManualReplyPlanCommand,
     OperatorCommand,
     PoolImportRequest,
     RetryCommand,
@@ -221,7 +226,18 @@ def create_app(
             return _json({"error": "browser DM service is not configured"}, 503)
         try:
             body = BrowserReplyPlanRequest.model_validate(await _json_object(request))
-            _browser_account(registry, body)
+            account = _browser_account(registry, body)
+            settings = database.account_operator_settings(
+                account.account_id,
+                default_ai_enabled=(account.enabled and account.browser_dm_enabled),
+                default_followback_enabled=(
+                    account.enabled and account.browser_followback_enabled
+                ),
+            )
+            if not settings["ai_enabled"] or not database.conversation_ai_available(
+                body.account_id, body.conversation_id
+            ):
+                return _json({"error": "AI replies are disabled"}, 409)
             reply = await run_in_threadpool(
                 browser_dm_service.plan,
                 BrowserInbound(
@@ -478,6 +494,216 @@ def create_app(
             return _json(acquisition_service.diagnostics(assignment_id, limit=limit))
         except AcquisitionNotFound:
             return _json({"error": "assignment not found"}, 404)
+
+    def operator_account(account_id: str) -> WebAccount:
+        if registry is None:
+            raise KeyError(account_id)
+        return registry.by_account_id(account_id)
+
+    def account_readiness(account: WebAccount) -> dict[str, object]:
+        settings = database.account_operator_settings(
+            account.account_id,
+            default_ai_enabled=(account.enabled and account.browser_dm_enabled),
+            default_followback_enabled=(
+                account.enabled and account.browser_followback_enabled
+            ),
+        )
+        return {
+            "account_id": account.account_id,
+            "device_id": account.device_id,
+            "mode": account.mode,
+            "enabled": account.enabled,
+            "ai_enabled": settings["ai_enabled"],
+            "followback_enabled": settings["followback_enabled"],
+            "private_channel_configured": bool(account.private_channel_hint.strip()),
+            "offer_configured": bool(account.offer_context.strip()),
+            "faq_configured": bool(account.faq_text.strip()),
+            "model_configured": bool(
+                os.getenv("OPENAI_API_KEY")
+                or os.getenv("ANTHROPIC_API_KEY")
+                or os.getenv("TIKPOC_AI_API_KEY")
+            ),
+        }
+
+    def redact_destination(value: object, account_id: str) -> object:
+        try:
+            destination = operator_account(account_id).private_channel_hint.strip()
+        except KeyError:
+            destination = ""
+        if not destination:
+            return value
+        if isinstance(value, str):
+            return value.replace(destination, "[private channel configured]")
+        if isinstance(value, list):
+            return [redact_destination(item, account_id) for item in value]
+        if isinstance(value, dict):
+            return {
+                key: redact_destination(item, account_id) for key, item in value.items()
+            }
+        return value
+
+    @app.get("/api/leads")
+    def lead_inbox(
+        limit: int = Query(default=20, ge=1, le=100),
+        account_id: str | None = Query(default=None, min_length=1, max_length=200),
+        conversation_id: str | None = Query(default=None, min_length=1, max_length=200),
+        history_limit: int = Query(default=20, ge=1, le=100),
+        inbound_fingerprint: str = Query(default="", max_length=200),
+    ) -> JSONResponse:
+        if (account_id is None) != (conversation_id is None):
+            return _json(
+                {"error": "account_id and conversation_id must be selected together"},
+                400,
+            )
+        selected: dict[str, object] | None = None
+        if account_id is not None and conversation_id is not None:
+            try:
+                operator_account(account_id)
+                selected = database.selected_lead(
+                    account_id,
+                    conversation_id,
+                    history_limit=history_limit,
+                    inbound_fingerprint=inbound_fingerprint,
+                )
+            except KeyError:
+                return _json({"error": "lead conversation not found"}, 404)
+        accounts = (
+            []
+            if registry is None
+            else [account_readiness(account) for account in registry.accounts]
+        )
+        conversations = database.lead_conversations(limit=limit)
+        conversations = [
+            redact_destination(item, str(item["account_id"])) for item in conversations
+        ]
+        if selected is not None and account_id is not None:
+            selected = redact_destination(selected, account_id)
+        return _json(
+            {
+                "accounts": accounts,
+                "conversations": conversations,
+                "selected": selected,
+                "funnel": database.lead_funnel_snapshot(),
+                "sales": database.lead_sales_snapshot(),
+            }
+        )
+
+    @app.post("/api/leads/{account_id}/{conversation_id}/takeover")
+    def lead_takeover(
+        account_id: str, conversation_id: str, body: LeadTakeoverCommand
+    ) -> JSONResponse:
+        try:
+            operator_account(account_id)
+            return _json(
+                database.takeover_lead(
+                    account_id,
+                    conversation_id,
+                    body.command_id,
+                    reason=body.reason,
+                    occurred_at_ms=int(clock() * 1_000),
+                )
+            )
+        except KeyError:
+            return _json({"error": "lead conversation not found"}, 404)
+
+    @app.post("/api/leads/{account_id}/{conversation_id}/return-to-ai")
+    def lead_return_to_ai(
+        account_id: str, conversation_id: str, body: LeadCommand
+    ) -> JSONResponse:
+        try:
+            account = operator_account(account_id)
+            settings = database.account_operator_settings(
+                account.account_id,
+                default_ai_enabled=(account.enabled and account.browser_dm_enabled),
+                default_followback_enabled=(
+                    account.enabled and account.browser_followback_enabled
+                ),
+            )
+            if not settings["ai_enabled"]:
+                return _json({"error": "account AI replies are disabled"}, 409)
+            return _json(
+                database.return_lead_to_ai(account_id, conversation_id, body.command_id)
+            )
+        except KeyError:
+            return _json({"error": "lead conversation not found"}, 404)
+        except ValueError as error:
+            return _json({"error": str(error)}, 409)
+
+    @app.post("/api/leads/{account_id}/{conversation_id}/manual-reply-plan")
+    def lead_manual_reply_plan(
+        account_id: str, conversation_id: str, body: ManualReplyPlanCommand
+    ) -> JSONResponse:
+        try:
+            operator_account(account_id)
+            return _json(
+                database.create_manual_reply_plan(
+                    account_id,
+                    conversation_id,
+                    body.command_id,
+                    inbound_fingerprint=body.inbound_fingerprint,
+                    reply_text=body.reply_text,
+                    now_ms=int(clock() * 1_000),
+                )
+            )
+        except KeyError:
+            return _json({"error": "lead or selected inbound not found"}, 404)
+        except ValueError as error:
+            return _json({"error": str(error)}, 409)
+
+    @app.post("/api/leads/{account_id}/{conversation_id}/sale")
+    def lead_sale(
+        account_id: str, conversation_id: str, body: LeadSaleCommand
+    ) -> JSONResponse:
+        try:
+            operator_account(account_id)
+            return _json(
+                database.record_lead_sale_command(
+                    account_id,
+                    conversation_id,
+                    body.command_id,
+                    amount_minor=body.amount_minor,
+                    currency=body.currency,
+                    status=body.status,
+                    occurred_at_ms=body.occurred_at_ms,
+                )
+            )
+        except KeyError:
+            return _json({"error": "lead conversation not found"}, 404)
+        except ValueError as error:
+            return _json({"error": str(error)}, 400)
+
+    def update_account_setting(
+        account_id: str,
+        body: AccountEnableCommand,
+        *,
+        setting: str,
+    ) -> JSONResponse:
+        try:
+            account = operator_account(account_id)
+        except KeyError:
+            return _json({"error": "web account not found"}, 404)
+        return _json(
+            database.set_account_operator_setting(
+                account_id,
+                body.command_id,
+                setting=setting,
+                enabled=body.enabled,
+                default_ai_enabled=(account.enabled and account.browser_dm_enabled),
+                default_followback_enabled=(
+                    account.enabled and account.browser_followback_enabled
+                ),
+            )
+        )
+
+    @app.post("/api/accounts/{account_id}/ai-enable")
+    def account_ai_enable(account_id: str, body: AccountEnableCommand) -> JSONResponse:
+        return update_account_setting(account_id, body, setting="ai")
+
+    @app.post("/api/accounts/{account_id}/followback-enable")
+    def account_followback_enable(
+        account_id: str, body: AccountEnableCommand
+    ) -> JSONResponse:
+        return update_account_setting(account_id, body, setting="followback")
 
     static = Path(__file__).parent / "static"
 
