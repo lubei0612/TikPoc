@@ -98,14 +98,14 @@
     ]);
     const href = link && link.href || "";
     const username = firstAttribute(row, ["data-username", "data-user-name"]);
-    const key = stableId || core.conversationKey(href, username) || href;
+    const key = core.conversationKey(href, username) || stableId || href;
     const messageId = firstAttribute(row, ["data-message-id", "data-last-message-id"]);
     const unread = Boolean(
       row.matches && row.matches("[data-unread='true']") ||
       row.querySelector("[aria-label*='unread' i], [data-e2e*='unread'], [data-unread='true']"),
     );
     const signature = core.normalizeText(
-      [messageId, unread ? "unread" : "read", elementLabel(row)].join("|"),
+      [stableId, messageId, unread ? "unread" : "read", elementLabel(row)].join("|"),
     );
     return { key, signature, unread };
   }

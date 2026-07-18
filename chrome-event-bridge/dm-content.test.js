@@ -103,6 +103,21 @@ test("page adapter exposes semantic role, visibility, and labels", () => {
   assert.equal(dmContent.elementLabel(element), "Send");
 });
 
+test("row identity uses the Messages URL when a DOM data id is also present", () => {
+  const link = { href: "https://www.tiktok.com/messages/thread/one" };
+  const row = {
+    textContent: "Buyer Hello",
+    matches() { return false; },
+    getAttribute(name) {
+      return name === "data-conversation-id" ? "opaque-dom-id" : null;
+    },
+    querySelector(selector) {
+      return selector.includes("a[href") ? link : null;
+    },
+  };
+  assert.equal(dmContent.rowSnapshot(row).key, link.href);
+});
+
 test("startup establishes an account baseline without requesting a plan", async () => {
   const run = harness();
   assert.equal(await run.workflow.scan(SETTINGS), "baseline");
