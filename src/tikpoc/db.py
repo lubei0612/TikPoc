@@ -58,6 +58,18 @@ class BrowserReplyPlan:
     state: str
 
 
+@dataclass(frozen=True)
+class BrowserConversationState:
+    account_id: str
+    conversation_id: str
+    stage: str
+    meaningful_turns: int
+    auto_reply_count: int
+    last_invited_at_ms: int
+    contact_captured_at_ms: int
+    human_required: bool
+
+
 def _row_browser_reply_plan(row: sqlite3.Row) -> BrowserReplyPlan:
     return BrowserReplyPlan(
         id=int(row["id"]),
@@ -73,9 +85,43 @@ def _row_browser_reply_plan(row: sqlite3.Row) -> BrowserReplyPlan:
     )
 
 
+def _row_browser_conversation_state(row: sqlite3.Row) -> BrowserConversationState:
+    return BrowserConversationState(
+        account_id=str(row["account_id"]),
+        conversation_id=str(row["conversation_id"]),
+        stage=str(row["stage"]),
+        meaningful_turns=int(row["meaningful_turns"]),
+        auto_reply_count=int(row["auto_reply_count"]),
+        last_invited_at_ms=int(row["last_invited_at_ms"]),
+        contact_captured_at_ms=int(row["contact_captured_at_ms"]),
+        human_required=bool(row["human_required"]),
+    )
+
+
 def _require_identity(*values: str) -> None:
     if any(not value.strip() for value in values):
         raise ValueError("identity values must be nonempty")
+
+
+_CONVERSATION_STAGE_RANK = {
+    "new": 0,
+    "engaged": 1,
+    "qualified": 2,
+    "invited": 3,
+    "contact_captured": 4,
+    "human_required": 5,
+    "closed": 6,
+}
+
+
+def _later_conversation_stage(current: str, proposed: str) -> str:
+    if current not in _CONVERSATION_STAGE_RANK:
+        raise ValueError(f"invalid stored conversation stage: {current}")
+    if proposed not in _CONVERSATION_STAGE_RANK:
+        raise ValueError(f"invalid conversation stage: {proposed}")
+    if _CONVERSATION_STAGE_RANK[proposed] < _CONVERSATION_STAGE_RANK[current]:
+        return current
+    return proposed
 
 
 def _row_profile_metrics(row: sqlite3.Row) -> ProfileMetrics | None:
@@ -842,6 +888,104 @@ class Database:
             assert row is not None
             return _row_browser_reply_plan(row), cursor.rowcount == 1
 
+    def reserve_browser_inbound_plan(
+        self,
+        account_id: str,
+        conversation_id: str,
+        inbound_fingerprint: str,
+        participant_username: str,
+        inbound_text: str,
+        inbound_timestamp_ms: int,
+    ) -> tuple[BrowserReplyPlan, bool]:
+        _require_identity(
+            account_id,
+            conversation_id,
+            inbound_fingerprint,
+            participant_username,
+            inbound_text,
+        )
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                INSERT OR IGNORE INTO browser_reply_plans(
+                    account_id, conversation_id, inbound_fingerprint,
+                    participant_username, inbound_text, inbound_timestamp_ms
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    account_id,
+                    conversation_id,
+                    inbound_fingerprint,
+                    participant_username,
+                    inbound_text,
+                    int(inbound_timestamp_ms),
+                ),
+            )
+            created = cursor.rowcount == 1
+            row = connection.execute(
+                """
+                SELECT * FROM browser_reply_plans
+                WHERE account_id=? AND inbound_fingerprint=?
+                """,
+                (account_id, inbound_fingerprint),
+            ).fetchone()
+            assert row is not None
+            plan = _row_browser_reply_plan(row)
+            if not created and plan.state != "planning":
+                return plan, False
+
+            connection.execute(
+                """
+                INSERT INTO web_conversations(
+                    account_id, conversation_id, participant_username
+                ) VALUES (?, ?, ?)
+                ON CONFLICT(account_id, conversation_id) DO UPDATE SET
+                    participant_username=CASE
+                        WHEN excluded.participant_username != ''
+                        THEN excluded.participant_username
+                        ELSE web_conversations.participant_username
+                    END,
+                    updated_at=CURRENT_TIMESTAMP
+                """,
+                (plan.account_id, plan.conversation_id, plan.participant_username),
+            )
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO web_messages(
+                    account_id, conversation_id, message_id, direction,
+                    message_type, text, timestamp_ms
+                ) VALUES (?, ?, ?, 'inbound', 'TEXT', ?, ?)
+                """,
+                (
+                    plan.account_id,
+                    plan.conversation_id,
+                    plan.inbound_fingerprint,
+                    plan.inbound_text,
+                    plan.inbound_timestamp_ms,
+                ),
+            )
+            return plan, created
+
+    def browser_conversation_state(
+        self, account_id: str, conversation_id: str
+    ) -> BrowserConversationState:
+        _require_identity(account_id, conversation_id)
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT account_id, conversation_id, stage, meaningful_turns,
+                       auto_reply_count, last_invited_at_ms,
+                       contact_captured_at_ms, human_required
+                FROM web_conversations
+                WHERE account_id=? AND conversation_id=?
+                """,
+                (account_id, conversation_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError((account_id, conversation_id))
+        return _row_browser_conversation_state(row)
+
     def get_browser_reply_plan(
         self, account_id: str, inbound_fingerprint: str
     ) -> BrowserReplyPlan | None:
@@ -891,6 +1035,106 @@ class Database:
                 assert row is not None
             return _row_browser_reply_plan(row)
 
+    def finalize_browser_reply_plan(
+        self,
+        plan_id: int,
+        *,
+        reply_text: str,
+        plan_stage: str,
+        conversation_stage: str,
+        meaningful: bool,
+        now_ms: int,
+    ) -> BrowserReplyPlan:
+        if plan_stage not in _CONVERSATION_STAGE_RANK:
+            raise ValueError(f"invalid browser reply plan stage: {plan_stage}")
+        if not reply_text.strip() and plan_stage not in {"closed", "human_required"}:
+            raise ValueError("reply text must be nonempty for an actionable plan")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM browser_reply_plans WHERE id=?",
+                (plan_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(plan_id)
+            if row["state"] != "planning":
+                return _row_browser_reply_plan(row)
+            conversation = connection.execute(
+                """
+                SELECT stage FROM web_conversations
+                WHERE account_id=? AND conversation_id=?
+                """,
+                (row["account_id"], row["conversation_id"]),
+            ).fetchone()
+            if conversation is None:
+                raise KeyError((row["account_id"], row["conversation_id"]))
+            next_stage = _later_conversation_stage(
+                str(conversation["stage"]), conversation_stage
+            )
+            connection.execute(
+                """
+                UPDATE browser_reply_plans
+                SET reply_text=?, stage=?, state='planned',
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE id=? AND state='planning'
+                """,
+                (reply_text, plan_stage, plan_id),
+            )
+            connection.execute(
+                """
+                UPDATE web_conversations
+                SET stage=?,
+                    meaningful_turns=meaningful_turns + ?,
+                    contact_captured_at_ms=CASE
+                        WHEN ?='contact_captured' AND contact_captured_at_ms=0
+                        THEN ? ELSE contact_captured_at_ms
+                    END,
+                    human_required=CASE
+                        WHEN ?='human_required' THEN 1 ELSE human_required
+                    END,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE account_id=? AND conversation_id=?
+                """,
+                (
+                    next_stage,
+                    int(bool(meaningful)),
+                    next_stage,
+                    int(now_ms),
+                    next_stage,
+                    row["account_id"],
+                    row["conversation_id"],
+                ),
+            )
+            completed = connection.execute(
+                "SELECT * FROM browser_reply_plans WHERE id=?", (plan_id,)
+            ).fetchone()
+            assert completed is not None
+            return _row_browser_reply_plan(completed)
+
+    def record_browser_diagnostic_event(
+        self,
+        account_id: str,
+        event_type: str,
+        dedup_key: str,
+        payload: dict[str, object],
+    ) -> bool:
+        _require_identity(account_id, event_type, dedup_key)
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT OR IGNORE INTO web_events(
+                    account_id, event_type, dedup_key, payload_json, state
+                ) VALUES (?, ?, ?, ?, 'completed')
+                """,
+                (
+                    account_id,
+                    event_type,
+                    dedup_key,
+                    json.dumps(payload, ensure_ascii=False),
+                ),
+            )
+            return cursor.rowcount == 1
+
     def set_browser_reply_plan_state(self, plan_id: int, state: str) -> None:
         if state not in {"sent", "uncertain", "superseded"}:
             raise ValueError(f"invalid browser reply plan state: {state}")
@@ -910,6 +1154,108 @@ class Database:
                 """,
                 (state, plan_id, *sources),
             )
+
+    def record_browser_reply_result(
+        self,
+        account_id: str,
+        plan_id: int,
+        state: str,
+        *,
+        now_ms: int,
+        invitation_sent: bool = False,
+    ) -> bool:
+        _require_identity(account_id)
+        allowed_sources = {
+            "sent": {"planned", "uncertain", "sent"},
+            "uncertain": {"planned", "uncertain"},
+            "superseded": {"planned", "uncertain", "superseded"},
+        }
+        if state not in allowed_sources:
+            raise ValueError(f"invalid browser reply result state: {state}")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM browser_reply_plans WHERE id=?", (int(plan_id),)
+            ).fetchone()
+            if row is None:
+                raise KeyError(plan_id)
+            if row["account_id"] != account_id:
+                raise ValueError("browser reply plan belongs to a different account")
+            current_state = str(row["state"])
+            if current_state not in allowed_sources[state]:
+                return False
+            if current_state == state:
+                return True
+            if state != "sent":
+                cursor = connection.execute(
+                    """
+                    UPDATE browser_reply_plans
+                    SET state=?, updated_at=CURRENT_TIMESTAMP
+                    WHERE id=? AND state=?
+                    """,
+                    (state, int(plan_id), current_state),
+                )
+                return cursor.rowcount == 1
+
+            reply_text = str(row["reply_text"])
+            if not reply_text.strip():
+                return False
+            connection.execute(
+                """
+                UPDATE browser_reply_plans
+                SET state='sent', updated_at=CURRENT_TIMESTAMP
+                WHERE id=? AND state=?
+                """,
+                (int(plan_id), current_state),
+            )
+            message_timestamp_ms = max(int(now_ms), int(row["inbound_timestamp_ms"]))
+            connection.execute(
+                """
+                INSERT INTO web_messages(
+                    account_id, conversation_id, message_id, direction,
+                    message_type, text, timestamp_ms, in_reply_to_message_id
+                ) VALUES (?, ?, ?, 'outbound', 'TEXT', ?, ?, ?)
+                """,
+                (
+                    account_id,
+                    row["conversation_id"],
+                    f"browser-reply-plan:{int(plan_id)}",
+                    reply_text,
+                    message_timestamp_ms,
+                    row["inbound_fingerprint"],
+                ),
+            )
+            conversation = connection.execute(
+                """
+                SELECT stage FROM web_conversations
+                WHERE account_id=? AND conversation_id=?
+                """,
+                (account_id, row["conversation_id"]),
+            ).fetchone()
+            if conversation is None:
+                raise KeyError((account_id, row["conversation_id"]))
+            next_stage = _later_conversation_stage(
+                str(conversation["stage"]), str(row["stage"])
+            )
+            connection.execute(
+                """
+                UPDATE web_conversations
+                SET stage=?, auto_reply_count=auto_reply_count + 1,
+                    last_invited_at_ms=CASE
+                        WHEN ? THEN ? ELSE last_invited_at_ms
+                    END,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE account_id=? AND conversation_id=?
+                """,
+                (
+                    next_stage,
+                    int(bool(invitation_sent)),
+                    int(now_ms),
+                    account_id,
+                    row["conversation_id"],
+                ),
+            )
+            return True
 
     def claim_browser_action(
         self,
