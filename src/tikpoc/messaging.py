@@ -8,10 +8,19 @@ _PROMPT_CONTEXT_LIMIT = 3_000
 _PROMPT_DESTINATION_LIMIT = 500
 _PROMPT_STAGE_LIMIT = 32
 _SYSTEM_PROMPT_LIMIT = 8_000
+_DEFAULT_FALLBACK = "Thanks for your message. How can I help?"
 
 
 def _bounded_prompt_fragment(value: str, limit: int) -> str:
     return " ".join(str(value or "").split())[:limit]
+
+
+def _normalize_fallback(per_call: str | None, client: str) -> str:
+    for candidate in (per_call, client):
+        normalized = str(candidate or "").strip()
+        if normalized:
+            return normalized
+    return _DEFAULT_FALLBACK
 
 
 def _build_system_prompt(
@@ -56,7 +65,7 @@ class AiReplyClient:
         api_key: str,
         model: str,
         opener: Callable = urlopen,
-        fallback: str = "Thanks for your message. How can I help?",
+        fallback: str = _DEFAULT_FALLBACK,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -104,51 +113,67 @@ class AiReplyClient:
         max_history_messages: int = 12,
         max_characters: int = 300,
     ) -> str:
-        effective_fallback = self.fallback if fallback is None else fallback
-        reply_text = effective_fallback
+        effective_fallback = _normalize_fallback(fallback, self.fallback)
         reply_limit = max(1, int(max_characters))
-        if self.base_url and self.api_key and self.model:
-            selected = history[-max(1, int(max_history_messages)) :]
-            conversation: list[dict[str, str]] = []
-            for item in selected:
-                text = str(item.get("text") or "").strip()
-                if not text:
-                    continue
-                role = "assistant" if item.get("direction") == "outbound" else "user"
-                conversation.append({"role": role, "content": text[:1000]})
-            payload = {
-                "model": self.model,
-                "temperature": 0.4,
-                "max_tokens": 220,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": _build_system_prompt(
-                            offer_context=offer_context,
-                            faq_context=faq_context,
-                            conversation_stage=conversation_stage,
-                            should_invite=should_invite,
-                            private_channel_hint=private_channel_hint,
-                        ),
-                    },
-                    *conversation,
-                ],
-            }
-            try:
-                request = Request(
-                    f"{self.base_url}/chat/completions",
-                    data=json.dumps(payload).encode("utf-8"),
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    method="POST",
-                )
-                with self.opener(request, timeout=30) as response:
-                    data = json.loads(response.read())
-                content = data["choices"][0]["message"]["content"]
-                if isinstance(content, str) and content.strip():
-                    reply_text = content.strip()
-            except (KeyError, IndexError, TypeError, ValueError, OSError):
-                reply_text = effective_fallback
-        return reply_text[:reply_limit]
+        bounded_fallback = effective_fallback[:reply_limit]
+        if not (self.base_url and self.api_key and self.model):
+            return bounded_fallback
+
+        selected = history[-max(1, int(max_history_messages)) :]
+        conversation: list[dict[str, str]] = []
+        for item in selected:
+            text = str(item.get("text") or "").strip()
+            if not text:
+                continue
+            role = "assistant" if item.get("direction") == "outbound" else "user"
+            conversation.append({"role": role, "content": text[:1000]})
+        payload = {
+            "model": self.model,
+            "temperature": 0.4,
+            "max_tokens": 220,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": _build_system_prompt(
+                        offer_context=offer_context,
+                        faq_context=faq_context,
+                        conversation_stage=conversation_stage,
+                        should_invite=should_invite,
+                        private_channel_hint=private_channel_hint,
+                    ),
+                },
+                *conversation,
+            ],
+        }
+        try:
+            request = Request(
+                f"{self.base_url}/chat/completions",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+        except (TypeError, ValueError):
+            return bounded_fallback
+
+        try:
+            response_context = self.opener(request, timeout=30)
+        except OSError:
+            return bounded_fallback
+
+        try:
+            with response_context as response:
+                body = response.read()
+        except OSError:
+            return bounded_fallback
+
+        try:
+            data = json.loads(body)
+            content = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError, ValueError):
+            return bounded_fallback
+        if isinstance(content, str) and content.strip():
+            return content.strip()[:reply_limit]
+        return bounded_fallback

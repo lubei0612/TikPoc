@@ -35,6 +35,17 @@ class RawResponse:
         return self.body
 
 
+class ReadErrorResponse:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args) -> None:
+        return None
+
+    def read(self) -> bytes:
+        raise OSError("response interrupted")
+
+
 def test_ai_reply_uses_openai_compatible_chat_endpoint() -> None:
     requests = []
 
@@ -146,6 +157,26 @@ def test_reply_conversation_uses_per_call_fallback_when_not_configured() -> None
     assert reply == "Account"
 
 
+@pytest.mark.parametrize("fallback", ["", "   "])
+def test_reply_conversation_uses_client_fallback_for_blank_per_call_value_when_not_configured(
+    fallback: str,
+) -> None:
+    client = AiReplyClient(
+        base_url="",
+        api_key="",
+        model="",
+        fallback="Client fallback",
+    )
+
+    reply = client.reply_conversation(
+        [{"direction": "inbound", "text": "Hello"}],
+        fallback=fallback,
+        max_characters=6,
+    )
+
+    assert reply == "Client"
+
+
 def test_reply_conversation_uses_per_call_fallback_for_provider_error() -> None:
     def opener(request, timeout):
         raise OSError("provider unavailable")
@@ -156,6 +187,84 @@ def test_reply_conversation_uses_per_call_fallback_for_provider_error() -> None:
         model="reply-model",
         opener=opener,
         fallback="Client fallback",
+    )
+
+    reply = client.reply_conversation(
+        [{"direction": "inbound", "text": "Hello"}],
+        fallback="Account fallback",
+        max_characters=7,
+    )
+
+    assert reply == "Account"
+
+
+@pytest.mark.parametrize("fallback", ["", "   "])
+def test_reply_conversation_uses_client_fallback_for_blank_per_call_value_after_provider_error(
+    fallback: str,
+) -> None:
+    def opener(request, timeout):
+        raise OSError("provider unavailable")
+
+    client = AiReplyClient(
+        base_url="https://llm.example/v1",
+        api_key="secret",
+        model="reply-model",
+        opener=opener,
+        fallback="Client fallback",
+    )
+
+    reply = client.reply_conversation(
+        [{"direction": "inbound", "text": "Hello"}],
+        fallback=fallback,
+        max_characters=6,
+    )
+
+    assert reply == "Client"
+
+
+def test_reply_conversation_uses_builtin_fallback_for_blank_values() -> None:
+    client = AiReplyClient(
+        base_url="",
+        api_key="",
+        model="",
+        fallback="   ",
+    )
+
+    reply = client.reply_conversation(
+        [{"direction": "inbound", "text": "Hello"}],
+        fallback="",
+        max_characters=10,
+    )
+
+    assert reply == "Thanks for"
+
+
+@pytest.mark.parametrize("exception_type", [TypeError, ValueError])
+def test_reply_conversation_propagates_opener_programming_errors(
+    exception_type: type[Exception],
+) -> None:
+    def opener(request, timeout):
+        raise exception_type("broken opener")
+
+    client = AiReplyClient(
+        base_url="https://llm.example/v1",
+        api_key="secret",
+        model="reply-model",
+        opener=opener,
+    )
+
+    with pytest.raises(exception_type, match="broken opener"):
+        client.reply_conversation(
+            [{"direction": "inbound", "text": "Hello"}],
+        )
+
+
+def test_reply_conversation_uses_fallback_for_response_read_error() -> None:
+    client = AiReplyClient(
+        base_url="https://llm.example/v1",
+        api_key="secret",
+        model="reply-model",
+        opener=lambda request, timeout: ReadErrorResponse(),
     )
 
     reply = client.reply_conversation(
@@ -209,6 +318,7 @@ def test_reply_conversation_uses_fallback_for_malformed_provider_url() -> None:
     "body",
     [
         b"{malformed-json",
+        b"\xff",
         json.dumps({}).encode(),
         json.dumps({"choices": [{}]}).encode(),
         json.dumps({"choices": [{"message": {}}]}).encode(),
