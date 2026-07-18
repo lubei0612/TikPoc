@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -76,6 +77,31 @@ def test_capacity_migration_indexes_assignment_phase_history(tmp_path: Path) -> 
         }
 
     assert "assignment_phase_history_capacity_idx" in indexes
+
+
+def test_capacity_migration_indexes_quota_plan_lookup(tmp_path: Path) -> None:
+    repository = AcquisitionRepository(tmp_path / "tikpoc.db")
+    repository.migrate()
+
+    with sqlite3.connect(repository.path) as connection:
+        indexes = {
+            str(row[1])
+            for row in connection.execute("PRAGMA index_list(device_action_plans)")
+        }
+        columns = tuple(
+            str(row[2])
+            for row in connection.execute(
+                "PRAGMA index_info(device_action_plans_capacity_quota_idx)"
+            )
+        )
+
+    assert "device_action_plans_capacity_quota_idx" in indexes
+    assert columns == (
+        "device_id",
+        "effective_outcome",
+        "quota_window_start_ms",
+        "state",
+    )
 
 
 def seed_completed_round(repository: AcquisitionRepository, round_id: str) -> None:
@@ -322,6 +348,36 @@ def test_capacity_passes_only_with_exact_fast_complete_coverage() -> None:
     assert report.measured_seconds == 12.8
 
 
+def test_capacity_rejects_projection_below_target_despite_fast_complete_data() -> None:
+    report = evaluate_capacity(
+        synthetic_completed_timings(
+            {"phone-01": [3_600] * 10, "phone-02": [3_600] * 10}
+        ),
+        expected_devices=2,
+        target_count=10,
+        effective_hours=0.009,
+    )
+
+    assert report.projected_unique_per_day == 9
+    assert report.passed is False
+    assert "projected capacity below target" in report.reasons
+
+
+def test_capacity_allows_projection_exactly_equal_to_target() -> None:
+    report = evaluate_capacity(
+        synthetic_completed_timings(
+            {"phone-01": [3_600] * 10, "phone-02": [3_600] * 10}
+        ),
+        expected_devices=2,
+        target_count=10,
+        effective_hours=0.01,
+    )
+
+    assert report.projected_unique_per_day == 10
+    assert "projected capacity below target" not in report.reasons
+    assert report.passed is True
+
+
 def test_capacity_thresholds_are_strict_and_use_nearest_rank_p90() -> None:
     rows = synthetic_completed_timings(
         {
@@ -404,6 +460,45 @@ def test_round_capacity_uses_only_structurally_completed_assignment_timings(
     assert audit.fully_covered_targets == 2
     assert audit.total_assignment_count == 4
     assert report.passed is True
+
+
+def test_round_capacity_audit_uses_one_explicit_read_transaction(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository, round_id = repository_with_round(tmp_path, target_count=1)
+    seed_completed_round(repository, round_id)
+    statements: list[tuple[str, bool]] = []
+    original_connect_read_only = repository._connect_read_only
+
+    class TrackingConnection:
+        def __init__(self, connection: sqlite3.Connection) -> None:
+            self.connection = connection
+
+        def execute(self, statement: str, parameters=()):
+            cursor = self.connection.execute(statement, parameters)
+            statements.append(
+                (
+                    statement.strip().split(None, 1)[0].upper(),
+                    self.connection.in_transaction,
+                )
+            )
+            return cursor
+
+    @contextmanager
+    def connect_read_only():
+        with original_connect_read_only() as connection:
+            yield TrackingConnection(connection)
+
+    monkeypatch.setattr(repository, "_connect_read_only", connect_read_only)
+
+    audit = repository.capacity_audit(round_id, expected_devices=2)
+
+    assert len(audit.timings) == 2
+    assert statements
+    assert statements[0] == ("BEGIN", True)
+    assert all(
+        in_transaction for keyword, in_transaction in statements if keyword == "SELECT"
+    )
 
 
 def test_round_capacity_rejects_completed_assignments_without_snapshot(

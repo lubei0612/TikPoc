@@ -315,6 +315,10 @@ def _terminate_process(process: WorkerProcess, join_timeout: float) -> bool:
     return not process.is_alive()
 
 
+def _error_after_release(released: bool, default_error_code: str | None) -> str | None:
+    return default_error_code if released else "worker_lease_release_failed"
+
+
 def _default_owner_id(device: FleetDevice) -> str:
     return f"fleet-{os.getpid()}-{device.device_id}-{uuid.uuid4().hex}"
 
@@ -471,23 +475,25 @@ class FleetSupervisor:
                 )
             except Exception as error:
                 lease_guard.stop()
-                self._release(device, owner_id, fence_token)
+                released = self._release(device, owner_id, fence_token)
                 self._record_with_fallback(
                     device,
                     FleetWorkerState.UNHEALTHY,
                     now_ms=self.clock_ms(),
-                    error_code=f"health_{type(error).__name__}",
+                    error_code=_error_after_release(
+                        released, f"health_{type(error).__name__}"
+                    ),
                     persist=False,
                 )
                 continue
             if not starting_recorded:
                 lease_guard.stop()
-                self._release(device, owner_id, fence_token)
+                released = self._release(device, owner_id, fence_token)
                 self._record(
                     device,
                     FleetWorkerState.UNHEALTHY,
                     now_ms=self.clock_ms(),
-                    error_code="worker_lease_lost",
+                    error_code=_error_after_release(released, "worker_lease_lost"),
                     persist=False,
                 )
                 continue
@@ -495,14 +501,16 @@ class FleetSupervisor:
                 process = self.launcher(device, owner_id, worker_fence)
             except Exception as error:
                 lease_guard.stop()
-                self._release(device, owner_id, fence_token)
+                released = self._release(device, owner_id, fence_token)
                 self._record_with_fallback(
                     device,
                     FleetWorkerState.UNHEALTHY,
                     now_ms=self.clock_ms(),
                     owner_id=owner_id,
                     fence_token=fence_token,
-                    error_code=f"launch_{type(error).__name__}",
+                    error_code=_error_after_release(
+                        released, f"launch_{type(error).__name__}"
+                    ),
                     expected_owner_id=owner_id,
                     expected_fence_token=fence_token,
                 )
@@ -544,7 +552,7 @@ class FleetSupervisor:
                     )
                     continue
                 lease_guard.stop()
-                self._release(device, owner_id, fence_token)
+                released = self._release(device, owner_id, fence_token)
                 self._record_with_fallback(
                     device,
                     FleetWorkerState.UNHEALTHY,
@@ -552,7 +560,7 @@ class FleetSupervisor:
                     owner_id=owner_id,
                     fence_token=fence_token,
                     process_id=process.pid,
-                    error_code="worker_lease_lost",
+                    error_code=_error_after_release(released, "worker_lease_lost"),
                     expected_owner_id=owner_id,
                     expected_fence_token=fence_token,
                 )
@@ -560,12 +568,13 @@ class FleetSupervisor:
             if not process.is_alive():
                 process.join(timeout=self.join_timeout)
                 lease_guard.stop()
-                self._release(device, owner_id, fence_token)
+                released = self._release(device, owner_id, fence_token)
                 self._record_child_exit(
                     device,
                     owner_id,
                     process,
                     now_ms=self.clock_ms(),
+                    released=released,
                     fence_token=fence_token,
                 )
                 continue
@@ -607,6 +616,10 @@ class FleetSupervisor:
                     ):
                         break
                     terminated = _terminate_process(process, self.join_timeout)
+                    released = True
+                    if terminated:
+                        lease_guard.stop()
+                        released = self._release(device, owner_id, fence_token)
                     try:
                         self._record(
                             device,
@@ -614,7 +627,9 @@ class FleetSupervisor:
                             now_ms=self.clock_ms(),
                             owner_id=owner_id,
                             process_id=process.pid,
-                            error_code="worker_lease_lost",
+                            error_code=_error_after_release(
+                                released, "worker_lease_lost"
+                            ),
                             expected_owner_id=owner_id,
                             persist=not health_write_failed,
                         )
@@ -625,12 +640,12 @@ class FleetSupervisor:
                             now_ms=self.clock_ms(),
                             owner_id=owner_id,
                             process_id=process.pid,
-                            error_code="worker_lease_lost",
+                            error_code=_error_after_release(
+                                released, "worker_lease_lost"
+                            ),
                             persist=False,
                         )
                     if terminated:
-                        lease_guard.stop()
-                        self._release(device, owner_id, fence_token)
                         if self._workers.get(device.device_id) is running:
                             del self._workers[device.device_id]
                     else:
@@ -662,11 +677,11 @@ class FleetSupervisor:
             if terminated and released
             else FleetWorkerState.UNHEALTHY
         )
-        error_code = None
-        if not terminated:
-            error_code = "child_termination_timeout"
-        elif not released:
-            error_code = "worker_lease_release_failed"
+        error_code = (
+            "child_termination_timeout"
+            if not terminated
+            else _error_after_release(released, None)
+        )
         try:
             self._record(
                 device,
@@ -723,7 +738,7 @@ class FleetSupervisor:
                         )
                         continue
                     running.lease_guard.stop()
-                    self._release(
+                    released = self._release(
                         running.device,
                         running.owner_id,
                         running.lease_guard.fence_token,
@@ -734,7 +749,7 @@ class FleetSupervisor:
                         now_ms=observed_at_ms,
                         owner_id=running.owner_id,
                         process_id=running.process.pid,
-                        error_code="worker_lease_lost",
+                        error_code=_error_after_release(released, "worker_lease_lost"),
                         expected_owner_id=running.owner_id,
                     )
                     del self._workers[device_id]
@@ -742,7 +757,7 @@ class FleetSupervisor:
                 if not running.process.is_alive():
                     running.process.join(timeout=self.join_timeout)
                     running.lease_guard.stop()
-                    self._release(
+                    released = self._release(
                         running.device,
                         running.owner_id,
                         running.lease_guard.fence_token,
@@ -752,6 +767,7 @@ class FleetSupervisor:
                         running.owner_id,
                         running.process,
                         now_ms=observed_at_ms,
+                        released=released,
                     )
                     del self._workers[device_id]
                     continue
@@ -792,7 +808,7 @@ class FleetSupervisor:
             running.lease_guard.fence_token,
         )
         state = FleetWorkerState.STOPPED if released else FleetWorkerState.UNHEALTHY
-        error_code = None if released else "worker_lease_release_failed"
+        error_code = _error_after_release(released, None)
         try:
             self._record(
                 running.device,
@@ -843,10 +859,11 @@ class FleetSupervisor:
         process: WorkerProcess,
         *,
         now_ms: int,
+        released: bool,
         fence_token: int | None = None,
     ) -> None:
         exit_code = process.exitcode
-        error_code = (
+        child_error_code = (
             "child_exit_unknown" if exit_code is None else f"child_exit_{exit_code}"
         )
         self._record_with_fallback(
@@ -856,7 +873,7 @@ class FleetSupervisor:
             owner_id=owner_id,
             fence_token=fence_token,
             process_id=process.pid,
-            error_code=error_code,
+            error_code=_error_after_release(released, child_error_code),
             expected_owner_id=owner_id,
             expected_fence_token=fence_token,
         )

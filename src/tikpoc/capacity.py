@@ -204,6 +204,8 @@ def evaluate_capacity(
         projected_unique_per_day = devices[
             slowest_device_id
         ].projected_per_effective_day
+    if projected_unique_per_day < target_count:
+        reasons.append("projected capacity below target")
 
     return CapacityReport(
         measured_seconds=measured_seconds,

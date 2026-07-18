@@ -138,6 +138,18 @@ def _active_device_ids(health) -> set[str]:
     }
 
 
+def _cleanup_pending(health) -> bool:
+    cleanup_errors = {
+        "child_termination_timeout",
+        "worker_lease_release_failed",
+    }
+    return any(
+        item.state in {FleetWorkerState.STARTING, FleetWorkerState.HEALTHY}
+        or item.error_code in cleanup_errors
+        for item in health
+    )
+
+
 def run_acquisition_fleet(
     repository: AcquisitionRepository,
     round_id: str,
@@ -152,11 +164,17 @@ def run_acquisition_fleet(
     sleeper: Callable[[float], None] = time.sleep,
     restart_backoff_seconds: float = 1.0,
     max_device_restart_attempts: int = 3,
+    cleanup_poll_interval_seconds: float = 0.1,
+    cleanup_max_attempts: int = 3,
 ) -> int:
     if restart_backoff_seconds < 0:
         raise ValueError("fleet restart backoff must be nonnegative")
     if max_device_restart_attempts < 0:
         raise ValueError("fleet restart attempt count must be nonnegative")
+    if cleanup_poll_interval_seconds < 0:
+        raise ValueError("fleet cleanup poll interval must be nonnegative")
+    if cleanup_max_attempts <= 0:
+        raise ValueError("fleet cleanup attempt count must be positive")
     completion = repository.round_completion(round_id)
     if _round_completed(completion):
         return 0
@@ -187,6 +205,16 @@ def run_acquisition_fleet(
     configured_device_ids = tuple(device.device_id for device in config.devices)
     restart_attempts = {device_id: 0 for device_id in configured_device_ids}
     next_restart_at_ms: dict[str, int] = {}
+    release_failed_device_ids: set[str] = set()
+
+    def observe_health(health):
+        observed = tuple(health)
+        release_failed_device_ids.update(
+            item.device_id
+            for item in observed
+            if item.error_code == "worker_lease_release_failed"
+        )
+        return observed
 
     def schedule_inactive(health, *, now_ms: int) -> tuple[str, ...] | None:
         active_device_ids = _active_device_ids(health)
@@ -194,10 +222,13 @@ def run_acquisition_fleet(
             device_id
             for device_id in configured_device_ids
             if device_id not in active_device_ids
+            and device_id not in release_failed_device_ids
         )
         for device_id in configured_device_ids:
-            if device_id in active_device_ids:
+            if device_id in active_device_ids or device_id in release_failed_device_ids:
                 next_restart_at_ms.pop(device_id, None)
+        if release_failed_device_ids:
+            return None
         if any(
             restart_attempts[device_id] >= max_device_restart_attempts
             for device_id in inactive_device_ids
@@ -214,35 +245,46 @@ def run_acquisition_fleet(
             if now_ms >= next_restart_at_ms[device_id]
         )
 
-    try:
-        with relay:
-            health = supervisor.start()
+    result = 1
+    with relay:
+        try:
+            health = observe_health(supervisor.start())
             now_ms = clock_ms()
             due_device_ids = schedule_inactive(health, now_ms=now_ms)
-            if due_device_ids is None:
-                return 1
-            while True:
-                completion = repository.round_completion(round_id)
-                if _round_completed(completion):
-                    return 0
-                sleeper(poll_interval_seconds)
-                now_ms = clock_ms()
-                repository.recover_expired_assignment_leases(now_ms=now_ms)
-                health = supervisor.poll()
-                due_device_ids = schedule_inactive(health, now_ms=now_ms)
-                if due_device_ids is None:
-                    return 1
-                if not due_device_ids:
-                    continue
-                for device_id in due_device_ids:
-                    restart_attempts[device_id] += 1
-                    next_restart_at_ms.pop(device_id, None)
-                health = supervisor.restart_devices(due_device_ids)
-                due_device_ids = schedule_inactive(health, now_ms=now_ms)
-                if due_device_ids is None:
-                    return 1
-    except KeyboardInterrupt:
-        return 130
-    finally:
-        stop_event.set()
-        supervisor.stop()
+            if due_device_ids is not None:
+                while True:
+                    completion = repository.round_completion(round_id)
+                    if _round_completed(completion):
+                        result = 0
+                        break
+                    sleeper(poll_interval_seconds)
+                    now_ms = clock_ms()
+                    repository.recover_expired_assignment_leases(now_ms=now_ms)
+                    health = observe_health(supervisor.poll())
+                    due_device_ids = schedule_inactive(health, now_ms=now_ms)
+                    if due_device_ids is None:
+                        break
+                    if not due_device_ids:
+                        continue
+                    for device_id in due_device_ids:
+                        restart_attempts[device_id] += 1
+                        next_restart_at_ms.pop(device_id, None)
+                    health = observe_health(supervisor.restart_devices(due_device_ids))
+                    due_device_ids = schedule_inactive(health, now_ms=now_ms)
+                    if due_device_ids is None:
+                        break
+        except KeyboardInterrupt:
+            result = 130
+        finally:
+            stop_event.set()
+            cleanup_health = observe_health(supervisor.stop())
+            for _ in range(cleanup_max_attempts):
+                if not _cleanup_pending(cleanup_health):
+                    break
+                sleeper(cleanup_poll_interval_seconds)
+                cleanup_health = observe_health(supervisor.poll())
+            if result == 0 and (
+                release_failed_device_ids or _cleanup_pending(cleanup_health)
+            ):
+                result = 1
+    return result

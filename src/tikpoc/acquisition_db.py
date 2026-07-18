@@ -281,6 +281,14 @@ class AcquisitionRepository:
             )
             connection.execute(
                 """
+                CREATE INDEX IF NOT EXISTS device_action_plans_capacity_quota_idx
+                ON device_action_plans(
+                    device_id, effective_outcome, quota_window_start_ms, state
+                )
+                """
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS acquisition_quota_windows (
                     device_id TEXT NOT NULL,
                     outcome TEXT NOT NULL,
@@ -1396,7 +1404,8 @@ class AcquisitionRepository:
     ) -> RoundCapacityAudit:
         if expected_devices <= 0:
             raise ValueError("expected device count must be positive")
-        with self._connect() as connection:
+        with self._connect_read_only() as connection:
+            connection.execute("BEGIN")
             existing = connection.execute(
                 "SELECT 1 FROM exposure_rounds WHERE round_id = ?", (round_id,)
             ).fetchone()

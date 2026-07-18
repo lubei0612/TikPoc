@@ -492,6 +492,115 @@ def test_fleet_marks_only_exited_child_unhealthy(tmp_path: Path) -> None:
     supervisor.stop()
 
 
+def test_start_preserves_release_failure_for_immediately_exited_child(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = AcquisitionRepository(tmp_path / "tikpoc.db")
+    repository.migrate()
+    children: dict[str, FakeChild] = {}
+    original_release = repository.release_device_worker_lease
+
+    def launch(device, owner_id: str, fence: DeviceWorkerFence) -> FakeChild:
+        child = FakeChild(pid=100 + device.myt_slot)
+        if device.device_id == "phone-01":
+            child.alive = False
+            child.exitcode = 17
+        children[device.device_id] = child
+        return child
+
+    def fail_phone_01_release(device_id: str, *args, **kwargs) -> None:
+        if device_id == "phone-01":
+            raise sqlite3.OperationalError("database unavailable")
+        original_release(device_id, *args, **kwargs)
+
+    monkeypatch.setattr(
+        repository, "release_device_worker_lease", fail_phone_01_release
+    )
+    supervisor = FleetSupervisor(
+        repository,
+        _two_device_config(tmp_path),
+        launcher=launch,
+        clock_ms=lambda: 1_000,
+        owner_factory=lambda device: f"worker-{device.device_id}",
+        lease_ttl_ms=100,
+    )
+
+    health = {item.device_id: item for item in supervisor.start()}
+    stored_health = repository.fleet_device_health("phone-01")
+    stale_lease = repository.device_worker_lease("phone-01")
+
+    assert health["phone-01"].state is FleetWorkerState.UNHEALTHY
+    assert health["phone-01"].error_code == "worker_lease_release_failed"
+    assert stored_health is not None
+    assert stored_health["error_code"] == "worker_lease_release_failed"
+    assert stale_lease is not None
+    assert children["phone-02"].is_alive() is True
+
+    monkeypatch.setattr(repository, "release_device_worker_lease", original_release)
+    supervisor.stop()
+    original_release(
+        "phone-01",
+        "account-01",
+        "worker-phone-01",
+        fence_token=int(stale_lease["fence_token"]),
+    )
+
+
+def test_poll_preserves_release_failure_for_exited_child(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = AcquisitionRepository(tmp_path / "tikpoc.db")
+    repository.migrate()
+    children: dict[str, FakeChild] = {}
+
+    def launch(device, owner_id: str, fence: DeviceWorkerFence) -> FakeChild:
+        child = FakeChild(pid=100 + device.myt_slot)
+        children[device.device_id] = child
+        return child
+
+    supervisor = FleetSupervisor(
+        repository,
+        _two_device_config(tmp_path),
+        launcher=launch,
+        clock_ms=lambda: 1_000,
+        owner_factory=lambda device: f"worker-{device.device_id}",
+        lease_ttl_ms=100,
+    )
+    supervisor.start()
+    children["phone-01"].alive = False
+    children["phone-01"].exitcode = 23
+    original_release = repository.release_device_worker_lease
+
+    def fail_phone_01_release(device_id: str, *args, **kwargs) -> None:
+        if device_id == "phone-01":
+            raise sqlite3.OperationalError("database unavailable")
+        original_release(device_id, *args, **kwargs)
+
+    monkeypatch.setattr(
+        repository, "release_device_worker_lease", fail_phone_01_release
+    )
+
+    health = {item.device_id: item for item in supervisor.poll(now_ms=1_050)}
+    stored_health = repository.fleet_device_health("phone-01")
+    stale_lease = repository.device_worker_lease("phone-01")
+
+    assert health["phone-01"].state is FleetWorkerState.UNHEALTHY
+    assert health["phone-01"].error_code == "worker_lease_release_failed"
+    assert stored_health is not None
+    assert stored_health["error_code"] == "worker_lease_release_failed"
+    assert stale_lease is not None
+    assert children["phone-02"].is_alive() is True
+
+    monkeypatch.setattr(repository, "release_device_worker_lease", original_release)
+    supervisor.stop()
+    original_release(
+        "phone-01",
+        "account-01",
+        "worker-phone-01",
+        fence_token=int(stale_lease["fence_token"]),
+    )
+
+
 def test_fleet_does_not_release_lease_for_a_child_that_ignores_terminate(
     tmp_path: Path,
 ) -> None:
