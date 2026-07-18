@@ -1,3 +1,4 @@
+import base64
 import json
 import sqlite3
 from pathlib import Path
@@ -425,7 +426,11 @@ def test_diagnostic_screenshot_serves_only_bounded_image_evidence(
     screenshots = tmp_path / "screenshots"
     screenshots.mkdir()
     evidence = screenshots / "assignment.png"
-    evidence.write_bytes(b"\x89PNG\r\n\x1a\nsynthetic-evidence")
+    evidence.write_bytes(
+        base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
+    )
     with sqlite3.connect(tmp_path / "tikpoc.db") as connection:
         connection.execute(
             "UPDATE action_attempts SET diagnostics_json=?",
@@ -479,6 +484,11 @@ def test_diagnostic_screenshot_rejects_non_image_and_oversize_files(
 
     invalid_id = set_screenshot(invalid)
     assert client.get(f"/api/diagnostic-screenshots/{invalid_id}").status_code == 404
+
+    disguised = screenshots / "not-an-image.png"
+    disguised.write_bytes(b"plain text with an image extension")
+    disguised_id = set_screenshot(disguised)
+    assert client.get(f"/api/diagnostic-screenshots/{disguised_id}").status_code == 404
 
     oversize = screenshots / "oversize.png"
     with oversize.open("wb") as output:

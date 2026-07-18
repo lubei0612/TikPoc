@@ -21,6 +21,37 @@ _SCREENSHOT_MEDIA_TYPES = {
     ".png": "image/png",
     ".webp": "image/webp",
 }
+
+
+def _is_supported_image(path: Path, suffix: str) -> bool:
+    try:
+        content = path.read_bytes()
+    except OSError:
+        return False
+    if suffix == ".png":
+        return (
+            len(content) >= 45
+            and content.startswith(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")
+            and content[-12:-8] == b"\x00\x00\x00\x00"
+            and content[-8:-4] == b"IEND"
+        )
+    if suffix in {".jpeg", ".jpg"}:
+        return (
+            len(content) >= 4
+            and content.startswith(b"\xff\xd8\xff")
+            and content.endswith(b"\xff\xd9")
+        )
+    if suffix == ".webp":
+        return (
+            len(content) >= 20
+            and content.startswith(b"RIFF")
+            and content[8:12] == b"WEBP"
+            and content[12:16] in {b"VP8 ", b"VP8L", b"VP8X"}
+            and int.from_bytes(content[4:8], "little") + 8 == len(content)
+        )
+    return False
+
+
 _KNOWN_COMMAND_CONFLICTS = {
     "assignment has an active lease",
     "assignment is not retryable",
@@ -487,6 +518,7 @@ class AcquisitionService:
                 or not candidate.is_file()
                 or media_type is None
                 or stat.st_size > _MAX_DIAGNOSTIC_SCREENSHOT_BYTES
+                or not _is_supported_image(candidate, candidate.suffix.lower())
             ):
                 raise AcquisitionNotFound(screenshot_id)
             return candidate, media_type
