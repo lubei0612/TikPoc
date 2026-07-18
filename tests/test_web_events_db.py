@@ -1053,6 +1053,17 @@ def test_lead_funnel_sales_health_and_latency_read_models(tmp_path: Path) -> Non
         "conversation_id": "conversation-01",
         "stage": "human_required",
     }.items() <= recent.items()
+    assert database.record_lead_funnel_event(
+        "account-01",
+        "buyer",
+        "engaged",
+        "fp-later",
+        conversation_id="conversation-01",
+        occurred_at_ms=2_500,
+    )
+    recent = database.recent_leads(limit=1)[0]
+    assert recent["stage"] == "human_required"
+    assert recent["occurred_at_ms"] == 2_500
 
     sale_id = database.record_lead_sale(
         "account-01",

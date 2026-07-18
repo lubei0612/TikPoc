@@ -1591,14 +1591,24 @@ class Database:
                 WITH ranked AS (
                     SELECT account_id, participant_username, conversation_id,
                            stage, occurred_at_ms,
+                           MAX(occurred_at_ms) OVER (
+                               PARTITION BY account_id, participant_username
+                           ) AS last_activity_at_ms,
                            ROW_NUMBER() OVER (
                                PARTITION BY account_id, participant_username
-                               ORDER BY occurred_at_ms DESC, event_id DESC
+                               ORDER BY CASE stage
+                                   WHEN 'human_required' THEN 5
+                                   WHEN 'contact_captured' THEN 4
+                                   WHEN 'invited' THEN 3
+                                   WHEN 'qualified' THEN 2
+                                   WHEN 'engaged' THEN 1
+                                   ELSE 0
+                               END DESC, occurred_at_ms DESC, event_id DESC
                            ) AS rank
                     FROM lead_funnel_events
                 )
                 SELECT account_id, participant_username, conversation_id,
-                       stage, occurred_at_ms
+                       stage, last_activity_at_ms AS occurred_at_ms
                 FROM ranked WHERE rank=1
                 ORDER BY occurred_at_ms DESC, account_id, participant_username
                 LIMIT ?
