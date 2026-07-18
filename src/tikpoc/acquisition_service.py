@@ -926,16 +926,30 @@ class AcquisitionService:
         self, connection: sqlite3.Connection, round_id: str
     ) -> list[dict[str, object]]:
         now_ms = self.clock_ms()
-        window_start_ms = now_ms - now_ms % 3_600_000
+        window_start_ms = now_ms - 3_600_000
         windows = {
             (str(row["device_id"]), str(row["outcome"])): row
             for row in connection.execute(
                 """
-                SELECT device_id, outcome, reserved_count, confirmed_count,
-                       uncertain_count
-                FROM acquisition_quota_windows WHERE window_start_ms = ?
+                SELECT device_id, effective_outcome AS outcome,
+                       COUNT(*) AS reserved_count,
+                       SUM(state = 'confirmed') AS confirmed_count,
+                       SUM(state = 'uncertain') AS uncertain_count
+                FROM device_action_plans
+                WHERE effective_outcome <> 'trace'
+                  AND created_at_ms > ? AND created_at_ms <= ?
+                GROUP BY device_id, effective_outcome
                 """,
-                (window_start_ms,),
+                (window_start_ms, now_ms),
+            )
+        }
+        pacing = {
+            (str(row["device_id"]), str(row["outcome"])): row
+            for row in connection.execute(
+                """
+                SELECT device_id, outcome, tokens, updated_at_ms
+                FROM action_pacing_state
+                """
             )
         }
         device_ids = [
@@ -952,6 +966,20 @@ class AcquisitionService:
                 reserved = 0 if row is None else int(row["reserved_count"])
                 confirmed = 0 if row is None else int(row["confirmed_count"])
                 uncertain = 0 if row is None else int(row["uncertain_count"])
+                pacing_row = pacing.get((device_id, outcome))
+                if pacing_row is None:
+                    digest = hashlib.sha256(f"{device_id}\0{outcome}".encode()).digest()
+                    tokens = int.from_bytes(digest[:8], "big") / 2**64
+                else:
+                    elapsed_ms = max(0, now_ms - int(pacing_row["updated_at_ms"]))
+                    tokens = min(
+                        2.0,
+                        float(pacing_row["tokens"]) + elapsed_ms * limit / 3_600_000,
+                    )
+                token_ready = tokens >= 1 and reserved < limit
+                wait_ms = (
+                    0 if tokens >= 1 else math.ceil((1 - tokens) * 3_600_000 / limit)
+                )
                 results.append(
                     {
                         "device_id": device_id,
@@ -961,7 +989,10 @@ class AcquisitionService:
                         "confirmed": confirmed,
                         "uncertain": uncertain,
                         "remaining": max(0, limit - reserved),
-                        "resets_at_ms": window_start_ms + 3_600_000,
+                        "rolling_window_started_at_ms": window_start_ms,
+                        "token_ready": token_ready,
+                        "next_due_at_ms": now_ms + wait_ms,
+                        "candidate_weight": limit if token_ready else 0,
                     }
                 )
         return results

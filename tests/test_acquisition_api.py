@@ -276,9 +276,15 @@ def test_operations_snapshot_contains_dynamic_round_devices_and_traces(
         "limit",
         "reserved",
         "confirmed",
+        "uncertain",
         "remaining",
-        "resets_at_ms",
+        "rolling_window_started_at_ms",
+        "token_ready",
+        "next_due_at_ms",
+        "candidate_weight",
     }
+    assert sum(row["reserved"] for row in payload["quotas"]) == 1
+    assert sum(row["uncertain"] for row in payload["quotas"]) == 1
     assert payload["recent_mobile_traces"][0]["username"] == "buyer_1"
     assert payload["browser_health"][0]["account_id"] == "account-01"
     assert payload["devices"][-1]["latest_diagnostic"]["ui_summary"] == (
