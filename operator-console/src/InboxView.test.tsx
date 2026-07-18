@@ -100,13 +100,13 @@ it("takes over a conversation before enabling the manual composer", async () => 
   render(<InboxView />);
   fireEvent.click(await screen.findByRole("button", { name: /buyer_01/ }));
 
-  const composer = await screen.findByRole("textbox", { name: "Manual reply" });
+  const composer = await screen.findByRole("textbox", { name: "人工回复" });
   expect(composer).toBeDisabled();
-  expect(screen.getByText("Private channel configured")).toBeVisible();
+  expect(screen.getByText("私域渠道已配置")).toBeVisible();
   expect(screen.queryByText(/WhatsApp/i)).not.toBeInTheDocument();
 
-  fireEvent.click(screen.getByRole("button", { name: "Take over" }));
-  expect(await screen.findByRole("textbox", { name: "Manual reply" })).toBeEnabled();
+  fireEvent.click(screen.getByRole("button", { name: "人工接管" }));
+  expect(await screen.findByRole("textbox", { name: "人工回复" })).toBeEnabled();
   expect(globalThis.fetch).toHaveBeenCalledWith(
     expect.stringContaining("inbound_fingerprint=inbound-2"),
     expect.objectContaining({ signal: expect.any(AbortSignal) }),
@@ -128,13 +128,13 @@ it("creates an immutable manual plan and records sale amounts in minor units", a
 
   render(<InboxView />);
   fireEvent.click(await screen.findByRole("button", { name: /buyer_01/ }));
-  const composer = await screen.findByRole("textbox", { name: "Manual reply" });
+  const composer = await screen.findByRole("textbox", { name: "人工回复" });
   fireEvent.change(composer, { target: { value: "Personal follow-up" } });
-  fireEvent.click(screen.getByRole("button", { name: "Create send plan" }));
-  expect(await screen.findByText("Immutable send plan created; delivery is pending.")) .toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "创建发送计划" }));
+  expect(await screen.findByText("不可变发送计划已创建，等待浏览器发送。")) .toBeVisible();
 
-  fireEvent.change(screen.getByRole("spinbutton", { name: "Sale amount" }), { target: { value: "123.45" } });
-  fireEvent.click(screen.getByRole("button", { name: "Record sale" }));
+  fireEvent.change(screen.getByRole("spinbutton", { name: "成交金额" }), { target: { value: "123.45" } });
+  fireEvent.click(screen.getByRole("button", { name: "记录成交" }));
   await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
     "/api/leads/account-01/conversation-01/sale",
     expect.objectContaining({ body: expect.stringContaining('"amount_minor":12345') }),
@@ -149,24 +149,24 @@ it("labels measured capacity separately from projection and uses dynamic coverag
 
   render(<AnalyticsView roundId="round-1" />);
 
-  const evidence = await screen.findByRole("table", { name: "Acquisition evidence" });
-  expect(within(evidence).getByText("Measured completions")).toBeVisible();
-  expect(within(evidence).getByText("Exact coverage")).toBeVisible();
-  expect(within(evidence).getByText("Measured confirmed visits")).toBeVisible();
-  expect(within(evidence).getByText("Projected daily capacity")).toBeVisible();
-  expect(within(evidence).getByText("Sales")).toBeVisible();
-  expect(within(evidence).getByText("Confirmed revenue")).toBeVisible();
-  expect(within(evidence).getByText("Revenue per 1,000 fully covered targets")).toBeVisible();
-  expect(screen.getByText("Not promoted")).toBeVisible();
-  expect(within(evidence).getByText("652 targets at 2/2")).toBeVisible();
-  const funnel = screen.getByRole("table", { name: "Lead funnel" });
-  for (const label of ["Followers", "Inbound DMs", "Qualified leads", "Private-channel invitations", "Captured contacts", "Human takeovers"]) {
+  const evidence = await screen.findByRole("table", { name: "获客证据" });
+  expect(within(evidence).getByText("实测完成数")).toBeVisible();
+  expect(within(evidence).getByText("完整覆盖率")).toBeVisible();
+  expect(within(evidence).getByText("实测确认访问数")).toBeVisible();
+  expect(within(evidence).getByText("预计日容量")).toBeVisible();
+  expect(within(evidence).getByText("成交数")).toBeVisible();
+  expect(within(evidence).getByText("确认收入")).toBeVisible();
+  expect(within(evidence).getByText("每千个完整覆盖目标收入")).toBeVisible();
+  expect(screen.getByText("未达推广门槛")).toBeVisible();
+  expect(within(evidence).getByText("652 个目标达到 2/2")).toBeVisible();
+  const funnel = screen.getByRole("table", { name: "线索漏斗" });
+  for (const label of ["新增关注", "收到私信", "合格线索", "私域邀请", "已留联系方式", "人工接管"]) {
     expect(within(funnel).getByText(label)).toBeVisible();
   }
   expect(within(funnel).getByText("17")).toBeVisible();
   expect(within(evidence).getByText("USD 125.00")).toBeVisible();
   expect(within(evidence).getByText("USD 191.72")).toBeVisible();
-  expect(screen.getByRole("table", { name: "Device capacity" })).toBeVisible();
+  expect(screen.getByRole("table", { name: "设备容量" })).toBeVisible();
 });
 
 it("keeps invitation and contact evidence visible in a later human stage with labeled timing", async () => {
@@ -184,10 +184,10 @@ it("keeps invitation and contact evidence visible in a later human stage with la
 
   render(<InboxView />);
 
-  expect(await screen.findAllByText("Invitation seen")).toHaveLength(2);
-  expect(screen.getAllByText("Contact captured")).toHaveLength(2);
-  expect(screen.getAllByText("Reply wait 4s")).toHaveLength(2);
-  expect(screen.getAllByText("Last message 4s ago · inbound")).toHaveLength(2);
+  expect(await screen.findAllByText("已发送私域邀请")).toHaveLength(2);
+  expect(screen.getAllByText("已获取联系方式")).toHaveLength(2);
+  expect(screen.getAllByText("等待回复 4秒")).toHaveLength(2);
+  expect(screen.getAllByText("最后消息 4秒前 · 收到")).toHaveLength(2);
   expect(screen.queryByText(/--/)).not.toBeInTheDocument();
 });
 
@@ -201,9 +201,9 @@ it("shows not recorded only when follower measurement is absent", async () => {
 
   render(<AnalyticsView roundId="round-1" />);
 
-  const followersRow = (await screen.findByText("Followers")).closest("tr");
+  const followersRow = (await screen.findByText("新增关注")).closest("tr");
   expect(followersRow).not.toBeNull();
-  expect(within(followersRow as HTMLTableRowElement).getByText("Not recorded")).toBeVisible();
+  expect(within(followersRow as HTMLTableRowElement).getByText("暂无记录")).toBeVisible();
 });
 
 it("keeps the newest conversation when an older detail response arrives late", async () => {
@@ -250,17 +250,17 @@ it("does not create a manual plan when bounded history has no inbound message", 
 
   render(<InboxView />);
   fireEvent.click(await screen.findByRole("button", { name: /buyer_01/ }));
-  const composer = await screen.findByRole("textbox", { name: "Manual reply" });
+  const composer = await screen.findByRole("textbox", { name: "人工回复" });
   fireEvent.change(composer, { target: { value: "Do not plan this" } });
-  expect(screen.getByRole("button", { name: "Create send plan" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "创建发送计划" })).toBeDisabled();
 });
 
 it("does not promote zero timing samples or incomplete coverage", () => {
   const zeroSamples = { ...operationsPayload, devices: operationsPayload.devices.map((device) => ({ ...device, mean_ms: 0, p90_ms: 0 })) };
-  expect(evaluatePromotion(zeroSamples)).toEqual({ promoted: false, reason: "Insufficient timing evidence" });
+  expect(evaluatePromotion(zeroSamples)).toEqual({ promoted: false, reason: "时延数据不足" });
 
   const incomplete = { ...operationsPayload, coverage: { ...operationsPayload.coverage, fully_covered: 999, fully_completed: 999 } };
-  expect(evaluatePromotion(incomplete)).toEqual({ promoted: false, reason: "Coverage gate failed" });
+  expect(evaluatePromotion(incomplete)).toEqual({ promoted: false, reason: "覆盖门槛未通过" });
 });
 
 it("keeps pending lead actions and late notices scoped to their conversation", async () => {
@@ -278,15 +278,15 @@ it("keeps pending lead actions and late notices scoped to their conversation", a
 
   render(<InboxView />);
   fireEvent.click(await screen.findByRole("button", { name: /buyer_01/ }));
-  const firstComposer = await screen.findByRole("textbox", { name: "Manual reply" });
+  const firstComposer = await screen.findByRole("textbox", { name: "人工回复" });
   fireEvent.change(firstComposer, { target: { value: "Pending on first" } });
-  fireEvent.click(screen.getByRole("button", { name: "Create send plan" }));
+  fireEvent.click(screen.getByRole("button", { name: "创建发送计划" }));
   fireEvent.click(screen.getByRole("button", { name: /buyer_02/ }));
 
-  expect(await screen.findByRole("textbox", { name: "Manual reply" })).toBeEnabled();
+  expect(await screen.findByRole("textbox", { name: "人工回复" })).toBeEnabled();
   await act(async () => {
     resolveManual(await jsonResponse({ plan_id: 91, inbound_fingerprint: "inbound-2", reply_text: "Pending on first", state: "planned" }));
     await pendingManual;
   });
-  expect(screen.queryByText("Immutable send plan created; delivery is pending.")).not.toBeInTheDocument();
+  expect(screen.queryByText("不可变发送计划已创建，等待浏览器发送。")).not.toBeInTheDocument();
 });

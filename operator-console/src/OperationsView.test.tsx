@@ -166,11 +166,11 @@ it("confirms fleet and round commands before dispatch", () => {
   const onCommand = vi.fn();
   render(<CommandBar errors={{}} onCommand={onCommand} pendingKeys={new Set()} roundState="running" />);
 
-  fireEvent.click(screen.getByRole("button", { name: "Stop fleet" }));
+  fireEvent.click(screen.getByRole("button", { name: "停止设备组" }));
 
   expect(onCommand).not.toHaveBeenCalled();
-  expect(screen.getByRole("dialog", { name: "Confirm stop fleet" })).toBeVisible();
-  fireEvent.click(screen.getByRole("button", { name: "Confirm stop fleet" }));
+  expect(screen.getByRole("dialog", { name: "确认停止设备组" })).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "确认停止设备组" }));
   expect(onCommand).toHaveBeenCalledWith("stop", "fleet");
 });
 
@@ -178,10 +178,10 @@ it("confirms a device stop before dispatch", () => {
   const onCommand = vi.fn();
   render(<DeviceTable devices={[operationSnapshot().devices[0]]} errors={{}} onCommand={onCommand} pendingKeys={new Set()} />);
 
-  fireEvent.click(screen.getByRole("button", { name: "Stop phone-01" }));
+  fireEvent.click(screen.getByRole("button", { name: "停止 phone-01" }));
 
   expect(onCommand).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "Confirm stop phone-01" }));
+  fireEvent.click(screen.getByRole("button", { name: "确认停止 phone-01" }));
   expect(onCommand).toHaveBeenCalledWith("stop", "phone-01");
 });
 
@@ -216,9 +216,9 @@ it("clears the previous round while the selected round loads", async () => {
 
   view.rerender(<OperationsView roundId="round-2" />);
 
-  expect(await screen.findByText("Loading operations")).toBeVisible();
+  expect(await screen.findByText("正在加载运营数据")).toBeVisible();
   expect(screen.queryByText("phone-01")).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Pause round" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "暂停轮次" })).not.toBeInTheDocument();
 
   const roundTwo = operationSnapshot();
   roundTwo.round.round_id = "round-2";
@@ -276,7 +276,7 @@ it("applies only the newest overlapping refresh", async () => {
   });
 
   render(<OperationsView roundId="round-1" />);
-  const refresh = await screen.findByRole("button", { name: "Refresh operations" });
+  const refresh = await screen.findByRole("button", { name: "刷新运营数据" });
   fireEvent.click(refresh);
   fireEvent.click(refresh);
 
@@ -321,7 +321,7 @@ it("shows a round-scoped error when the initial load fails", async () => {
   render(<OperationsView roundId="round-1" />);
 
   expect(await screen.findByRole("alert")).toHaveTextContent("operations unavailable");
-  expect(screen.queryByRole("button", { name: "Pause round" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "暂停轮次" })).not.toBeInTheDocument();
 });
 
 it("pauses the round only after server confirmation", async () => {
@@ -343,9 +343,9 @@ it("pauses the round only after server confirmation", async () => {
   });
 
   render(<OperationsView roundId="round-1" />);
-  fireEvent.click(await screen.findByRole("button", { name: "Pause round" }));
+  fireEvent.click(await screen.findByRole("button", { name: "暂停轮次" }));
 
-  expect((await screen.findAllByText("Paused"))[0]).toBeVisible();
+  expect((await screen.findAllByText("已暂停"))[0]).toBeVisible();
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/commands/pause",
     expect.objectContaining({ method: "POST" }),
@@ -375,14 +375,14 @@ it("pauses phone-01 with device scope and refreshes after success", async () => 
   });
 
   render(<OperationsView roundId="round-1" />);
-  const pausePhoneOne = await screen.findByRole("button", { name: "Pause phone-01" });
+  const pausePhoneOne = await screen.findByRole("button", { name: "暂停 phone-01" });
   fireEvent.click(pausePhoneOne);
 
   expect(pausePhoneOne).toBeDisabled();
-  expect(screen.getByRole("button", { name: "Start phone-01" })).toBeEnabled();
-  expect(screen.getByRole("button", { name: "Pause phone-02" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "启动 phone-01" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "暂停 phone-02" })).toBeEnabled();
   pending.resolve(await jsonResponse({ state: "paused" }));
-  expect(await screen.findByText("Paused")).toBeVisible();
+  expect(await screen.findByText("已暂停")).toBeVisible();
   expect(operationsCalls).toBe(2);
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/commands/pause",
@@ -400,12 +400,12 @@ it("disables only the fleet or round command that is pending", async () => {
   });
 
   render(<OperationsView roundId="round-1" />);
-  const pauseRound = await screen.findByRole("button", { name: "Pause round" });
+  const pauseRound = await screen.findByRole("button", { name: "暂停轮次" });
   fireEvent.click(pauseRound);
 
   expect(pauseRound).toBeDisabled();
-  expect(screen.getByRole("button", { name: "Start round" })).toBeEnabled();
-  expect(screen.getByRole("button", { name: "Pause fleet" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "启动轮次" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "暂停设备组" })).toBeEnabled();
   pending.resolve(await jsonResponse({ state: "paused" }));
 });
 
@@ -414,7 +414,7 @@ it("retries a deferred assignment and refreshes confirmed data", async () => {
   render(<OperationsView roundId="round-1" />);
 
   const coverage = await screen.findByTestId("coverage-matrix");
-  fireEvent.click(within(coverage).getByRole("button", { name: "Retry phone-02 for buyer_1" }));
+  fireEvent.click(within(coverage).getByRole("button", { name: "重试 phone-02 对 buyer_1 的任务" }));
 
   await waitFor(() =>
     expect(fetchMock).toHaveBeenCalledWith(
@@ -454,11 +454,11 @@ it("disables only the matching coverage retry while it is pending", async () => 
   });
 
   render(<OperationsView roundId="round-1" />);
-  const firstRetry = await screen.findByRole("button", { name: "Retry phone-02 for buyer_1" });
+  const firstRetry = await screen.findByRole("button", { name: "重试 phone-02 对 buyer_1 的任务" });
   fireEvent.click(firstRetry);
 
   expect(firstRetry).toBeDisabled();
-  expect(screen.getByRole("button", { name: "Retry phone-02 for buyer_2" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "重试 phone-02 对 buyer_2 的任务" })).toBeEnabled();
   pending.resolve(await jsonResponse({ state: "pending" }));
 });
 
@@ -467,10 +467,10 @@ it("shows screenshot evidence as an accessible Lucide icon control", async () =>
   mockInitialLoad();
   render(<OperationsView roundId="round-1" />);
 
-  fireEvent.click(await screen.findByRole("button", { name: "Diagnostics for phone-02" }));
+  fireEvent.click(await screen.findByRole("button", { name: "查看 phone-02 诊断信息" }));
 
-  const screenshot = screen.getByRole("button", { name: "Screenshot evidence shot-1" });
-  expect(screenshot).toHaveAttribute("title", "Screenshot evidence shot-1");
+  const screenshot = screen.getByRole("button", { name: "截图证据 shot-1" });
+  expect(screenshot).toHaveAttribute("title", "截图证据 shot-1");
   expect(screenshot.querySelector("svg")).toHaveClass("lucide-image");
   expect(screen.queryByText("capture shot-1")).not.toBeInTheDocument();
   fireEvent.click(screenshot);
@@ -503,7 +503,7 @@ it("derives topbar fleet health from operations device and browser data", async 
 
   render(<App />);
 
-  expect(await screen.findByLabelText("Fleet health: 1 of 2 devices healthy; 1 of 1 browser observers healthy")).toHaveTextContent("1/2 devices · 1/1 browser");
+  expect(await screen.findByLabelText("设备组健康：2 台设备中 1 台健康；1 个浏览器观察器中 1 个健康")).toHaveTextContent("设备 1/2 · 浏览器 1/1");
 });
 
 it("keeps global health degraded without browser heartbeat evidence", async () => {
@@ -531,7 +531,7 @@ it("keeps global health degraded without browser heartbeat evidence", async () =
 
   render(<App />);
 
-  const health = await screen.findByLabelText("Fleet health: 2 of 2 devices healthy; 0 of 0 browser observers healthy");
+  const health = await screen.findByLabelText("设备组健康：2 台设备中 2 台健康；0 个浏览器观察器中 0 个健康");
   expect(health).toHaveClass("state-degraded");
 });
 
@@ -563,8 +563,8 @@ it("labels empty device and browser health as not connected", async () => {
 
   render(<App />);
 
-  const health = await screen.findByLabelText("Fleet health: not connected");
-  expect(health).toHaveTextContent("Not connected");
+  const health = await screen.findByLabelText("设备组健康：未连接");
+  expect(health).toHaveTextContent("未连接");
   expect(health).toHaveClass("state-degraded");
 });
 
@@ -579,11 +579,11 @@ it("retains the last confirmed snapshot when a command fails", async () => {
   });
 
   render(<OperationsView roundId="round-1" />);
-  fireEvent.click(await screen.findByRole("button", { name: "Pause round" }));
+  fireEvent.click(await screen.findByRole("button", { name: "暂停轮次" }));
 
   expect(await screen.findByRole("alert")).toHaveTextContent("round is busy");
   expect(screen.getAllByText("phone-01")[0]).toBeVisible();
-  expect(screen.getAllByText("Running")[0]).toBeVisible();
+  expect(screen.getAllByText("运行中")[0]).toBeVisible();
 });
 
 it("marks device bands and the coverage scroller for responsive layouts", async () => {

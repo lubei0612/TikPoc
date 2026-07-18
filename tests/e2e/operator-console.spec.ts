@@ -79,11 +79,11 @@ async function expectPageControlsDoNotOverlap(page: Page) {
 test("operations shows mobile traces and sticky horizontal coverage", async ({ page }, testInfo) => {
   const errors = rejectConsoleErrors(page);
   await page.goto("/operations");
-  await expect(page.getByRole("heading", { name: "Device runtime" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "设备运行状态" })).toBeVisible();
   await expect(page.getByTestId("coverage-matrix").getByText("long_target_identity_for_mobile_layout_verification")).toBeVisible();
-  await expect(page.getByRole("button", { name: /Retry phone-03/ })).toBeVisible();
-  await page.getByRole("button", { name: "Stop round" }).click();
-  const dialog = page.getByRole("dialog", { name: "Confirm stop round" });
+  await expect(page.getByRole("button", { name: /重试 phone-03/ })).toBeVisible();
+  await page.getByRole("button", { name: "停止轮次" }).click();
+  const dialog = page.getByRole("dialog", { name: "确认停止轮次" });
   await expect(dialog).toBeVisible();
   const dialogBox = await dialog.boundingBox();
   expect(dialogBox).not.toBeNull();
@@ -91,10 +91,10 @@ test("operations shows mobile traces and sticky horizontal coverage", async ({ p
   expect(dialogBox!.y).toBeGreaterThanOrEqual(0);
   expect(dialogBox!.x + dialogBox!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
   expect(dialogBox!.y + dialogBox!.height).toBeLessThanOrEqual(page.viewportSize()!.height);
-  await page.getByRole("button", { name: "Cancel" }).click();
-  await page.getByRole("button", { name: "Stop phone-01-long-identity" }).click();
-  await expect(page.getByRole("dialog", { name: "Confirm stop phone-01-long-identity" })).toBeVisible();
-  await page.getByRole("button", { name: "Cancel" }).click();
+  await page.getByRole("button", { name: "取消" }).click();
+  await page.getByRole("button", { name: "停止 phone-01-long-identity" }).click();
+  await expect(page.getByRole("dialog", { name: "确认停止 phone-01-long-identity" })).toBeVisible();
+  await page.getByRole("button", { name: "取消" }).click();
 
   const scroller = page.getByTestId("coverage-scroller");
   await expect(scroller).toBeVisible();
@@ -121,11 +121,11 @@ test("operations shows mobile traces and sticky horizontal coverage", async ({ p
 test("inbox exposes readiness and operator controls in a bounded drawer", async ({ page }, testInfo) => {
   const errors = rejectConsoleErrors(page);
   await page.goto("/inbox");
-  await expect(page.getByRole("heading", { name: "Lead conversion" })).toBeVisible();
-  await page.getByRole("button", { name: /Open buyer_with_a_very_long/ }).click();
-  await expect(page.getByText("Private channel configured")).toBeVisible();
-  await expect(page.getByRole("button", { name: /Take over/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Create send plan" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "线索转化" })).toBeVisible();
+  await page.getByRole("button", { name: /打开 buyer_with_a_very_long/ }).click();
+  await expect(page.getByText("私域渠道已配置")).toBeVisible();
+  await expect(page.getByRole("button", { name: /人工接管/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "创建发送计划" })).toBeVisible();
   await expectNoViewportOverflow(page);
   await expectPageControlsDoNotOverlap(page);
   expect(errors).toEqual([]);
@@ -135,9 +135,9 @@ test("inbox exposes readiness and operator controls in a bounded drawer", async 
 test("analytics separates measured evidence from projection", async ({ page }, testInfo) => {
   const errors = rejectConsoleErrors(page);
   await page.goto("/analytics");
-  await expect(page.getByRole("heading", { name: "Acquisition economics" })).toBeVisible();
-  await expect(page.getByText("Measured completions")).toBeVisible();
-  await expect(page.getByText("Projected daily capacity")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "获客经营分析" })).toBeVisible();
+  await expect(page.getByText("实测完成数")).toBeVisible();
+  await expect(page.getByText("预计日容量")).toBeVisible();
   await expectNoViewportOverflow(page);
   await expectPageControlsDoNotOverlap(page);
   expect(errors).toEqual([]);
@@ -147,16 +147,16 @@ test("analytics separates measured evidence from projection", async ({ page }, t
 test("navigation preserves direct routes and browser history", async ({ page }) => {
   const errors = rejectConsoleErrors(page);
   await page.goto("/operations");
-  await page.getByRole("button", { name: "Inbox" }).click();
+  await page.getByRole("button", { name: "线索收件箱" }).click();
   await expect(page).toHaveURL(/\/inbox$/);
-  await expect(page.getByRole("heading", { name: "Lead conversion" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "线索转化" })).toBeVisible();
   await page.goBack();
   await expect(page).toHaveURL(/\/operations$/);
-  await expect(page.getByRole("heading", { name: "Device runtime" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "设备运行状态" })).toBeVisible();
   await page.goForward();
   await expect(page).toHaveURL(/\/inbox$/);
-  await expect(page.getByRole("heading", { name: "Lead conversion" })).toBeVisible();
-  await page.getByRole("button", { name: "Analytics" }).click();
+  await expect(page.getByRole("heading", { name: "线索转化" })).toBeVisible();
+  await page.getByRole("button", { name: "经营分析" }).click();
   await expect(page).toHaveURL(/\/analytics$/);
   expect(errors).toEqual([]);
 });

@@ -5,6 +5,7 @@ import { getRounds, type RoundListItem } from "./api";
 import { OperationsView, type FleetHealthSummary } from "./views/OperationsView";
 import { AnalyticsView } from "./views/AnalyticsView";
 import { InboxView } from "./views/InboxView";
+import { localizeError } from "./localization";
 
 type Tab = "operations" | "inbox" | "analytics";
 
@@ -27,7 +28,7 @@ export default function App() {
         setRounds(items);
         setRoundId((current) => current || items[0]?.round_id || "");
       })
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Rounds unavailable"));
+      .catch((reason: unknown) => setError(localizeError(reason, "轮次列表加载失败")));
     return () => controller.abort();
   }, []);
 
@@ -46,36 +47,36 @@ export default function App() {
     && fleetHealth.totalDevices === 0
     && fleetHealth.totalBrowserObservers === 0;
   const healthLabel = notConnected
-    ? "Fleet health: not connected"
+    ? "设备组健康：未连接"
     : fleetHealth
-      ? `Fleet health: ${fleetHealth.healthyDevices} of ${fleetHealth.totalDevices} devices healthy; ${fleetHealth.healthyBrowserObservers} of ${fleetHealth.totalBrowserObservers} browser observers healthy`
-      : "Fleet health unavailable";
+      ? `设备组健康：${fleetHealth.totalDevices} 台设备中 ${fleetHealth.healthyDevices} 台健康；${fleetHealth.totalBrowserObservers} 个浏览器观察器中 ${fleetHealth.healthyBrowserObservers} 个健康`
+      : "设备组健康：等待数据";
   const healthState = fleetHealth && fleetHealth.totalDevices > 0 && fleetHealth.totalBrowserObservers > 0
     && fleetHealth.healthyDevices === fleetHealth.totalDevices
     && fleetHealth.healthyBrowserObservers === fleetHealth.totalBrowserObservers ? "healthy" : "degraded";
   return (
     <div className="app-shell">
       <header className="topbar">
-        <div className="brand-lockup"><span><Network size={19} /></span><strong>TikPoc Ops</strong></div>
+        <div className="brand-lockup"><span><Network size={19} /></span><strong>TikPoc 运营台</strong></div>
         <div className="topbar-context">
-          <label htmlFor="round-select">Round</label>
+          <label htmlFor="round-select">轮次</label>
           <select id="round-select" onChange={(event) => { setFleetHealth(null); setRoundId(event.target.value); }} value={roundId}>
-            {rounds.map((round) => <option key={round.round_id} value={round.round_id}>{round.round_id} · {round.device_count} accounts</option>)}
+            {rounds.map((round) => <option key={round.round_id} value={round.round_id}>{round.round_id} · {round.device_count} 个账号</option>)}
           </select>
-          <span aria-label={healthLabel} className={`global-health state-${healthState}`}><RadioTower size={14} />{notConnected ? "Not connected" : fleetHealth ? `${fleetHealth.healthyDevices}/${fleetHealth.totalDevices} devices · ${fleetHealth.healthyBrowserObservers}/${fleetHealth.totalBrowserObservers} browser` : "Health pending"}</span>
+          <span aria-label={healthLabel} className={`global-health state-${healthState}`}><RadioTower size={14} />{notConnected ? "未连接" : fleetHealth ? `设备 ${fleetHealth.healthyDevices}/${fleetHealth.totalDevices} · 浏览器 ${fleetHealth.healthyBrowserObservers}/${fleetHealth.totalBrowserObservers}` : "等待健康数据"}</span>
         </div>
       </header>
-      <nav className="primary-nav" aria-label="Console views">
-        <button aria-current={tab === "operations" ? "page" : undefined} onClick={() => selectTab("operations")}><Activity size={16} />Operations</button>
-        <button aria-current={tab === "inbox" ? "page" : undefined} onClick={() => selectTab("inbox")}><Inbox size={16} />Inbox</button>
-        <button aria-current={tab === "analytics" ? "page" : undefined} onClick={() => selectTab("analytics")}><BarChart3 size={16} />Analytics</button>
+      <nav className="primary-nav" aria-label="管理后台视图">
+        <button aria-current={tab === "operations" ? "page" : undefined} onClick={() => selectTab("operations")}><Activity size={16} />运营监控</button>
+        <button aria-current={tab === "inbox" ? "page" : undefined} onClick={() => selectTab("inbox")}><Inbox size={16} />线索收件箱</button>
+        <button aria-current={tab === "analytics" ? "page" : undefined} onClick={() => selectTab("analytics")}><BarChart3 size={16} />经营分析</button>
       </nav>
       {error && <div className="shell-error" role="alert">{error}</div>}
       {tab === "operations" && roundId && <OperationsView onHealthChange={setFleetHealth} roundId={roundId} />}
-      {tab === "operations" && !roundId && !error && <div className="workspace-state">No acquisition rounds recorded.</div>}
+      {tab === "operations" && !roundId && !error && <div className="workspace-state">暂无获客轮次。</div>}
       {tab === "inbox" && <InboxView />}
       {tab === "analytics" && roundId && <AnalyticsView roundId={roundId} />}
-      {tab === "analytics" && !roundId && !error && <div className="workspace-state">No acquisition rounds recorded.</div>}
+      {tab === "analytics" && !roundId && !error && <div className="workspace-state">暂无获客轮次。</div>}
     </div>
   );
 }

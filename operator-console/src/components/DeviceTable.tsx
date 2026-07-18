@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import type { CommandAction, Device } from "../api";
 import { ConfirmCommandDialog } from "./ConfirmCommandDialog";
+import { localizeValue } from "../localization";
 
 interface DeviceTableProps {
   devices: Device[];
@@ -23,12 +24,7 @@ export function DeviceTable({ devices, pendingKeys, errors, onCommand }: DeviceT
       <table className="operations-table device-table">
         <thead>
           <tr>
-            <th>Device / account</th>
-            <th>Health</th>
-            <th>Current assignment</th>
-            <th>Timing</th>
-            <th>Controls</th>
-            <th className="align-right">Inspect</th>
+            <th>设备 / 账号</th><th>健康状态</th><th>当前任务</th><th>耗时</th><th>控制</th><th className="align-right">检查</th>
           </tr>
         </thead>
         <tbody>
@@ -54,7 +50,7 @@ export function DeviceTable({ devices, pendingKeys, errors, onCommand }: DeviceT
       </table>
       {stopDeviceId && (
         <ConfirmCommandDialog
-          label={`stop ${stopDeviceId}`}
+          label={`停止 ${stopDeviceId}`}
           onCancel={() => setStopDeviceId(null)}
           onConfirm={() => {
             onCommand("stop", stopDeviceId);
@@ -87,42 +83,40 @@ function DeviceRows({
   return (
     <>
       <tr className="device-row">
-        <td data-label="Device / account">
+        <td data-label="设备 / 账号">
           <div className="identity-cell">
             <span className="device-mark"><MonitorCog size={16} aria-hidden="true" /></span>
-            <div><strong>{device.device_id}</strong><small>{device.account_id || "Unbound account"}</small></div>
+            <div><strong>{device.device_id}</strong><small>{device.account_id || "未绑定账号"}</small></div>
           </div>
         </td>
-        <td data-label="Health">
+        <td data-label="健康状态">
           <span className={`status-label status-${device.health}`}>
-            <span aria-hidden="true" />{device.health}
+            <span aria-hidden="true" />{localizeValue(device.health)}
           </span>
           <small className={`control-state state-${device.control_state}`}>
-            {device.control_state[0].toUpperCase() + device.control_state.slice(1)}
+            {localizeValue(device.control_state)}
           </small>
           {device.health_error_code && <small className="cell-note">{device.health_error_code}</small>}
         </td>
-        <td data-label="Current assignment">
+        <td data-label="当前任务">
           {assignment ? (
             <div className="assignment-cell">
               <strong>#{assignment.assignment_id}</strong>
-              <span>{assignment.phase.replaceAll("_", " ")}</span>
+              <span>{localizeValue(assignment.phase)}</span>
               <small>{assignment.identity_key}</small>
             </div>
-          ) : <span className="muted">Idle</span>}
+          ) : <span className="muted">空闲</span>}
         </td>
-        <td data-label="Timing">
+        <td data-label="耗时">
           <div className="timing-pair">
-            <span><Activity size={13} aria-hidden="true" />mean {duration(device.mean_ms)}</span>
+            <span><Activity size={13} aria-hidden="true" />平均 {duration(device.mean_ms)}</span>
             <span><Gauge size={13} aria-hidden="true" />p90 {duration(device.p90_ms)}</span>
           </div>
         </td>
-        <td data-label="Controls">
+        <td data-label="控制">
           <div className="device-controls">
             {([
-              ["start", "Start", CirclePlay],
-              ["pause", "Pause", CirclePause],
-              ["stop", "Stop", Octagon],
+              ["start", "启动", CirclePlay], ["pause", "暂停", CirclePause], ["stop", "停止", Octagon],
             ] as const).map(([action, label, Icon]) => {
               const key = `device:${device.device_id}:${action}`;
               return (
@@ -143,14 +137,14 @@ function DeviceRows({
             })}
           </div>
         </td>
-        <td className="align-right" data-label="Inspect">
+        <td className="align-right" data-label="检查">
           <button
             aria-expanded={active}
-            aria-label={`Diagnostics for ${device.device_id}`}
+            aria-label={`查看 ${device.device_id} 诊断信息`}
             className="icon-only"
             disabled={!diagnostic}
             onClick={onToggle}
-            title={`Diagnostics for ${device.device_id}`}
+            title={`查看 ${device.device_id} 诊断信息`}
             type="button"
           >
             {active ? <ChevronUp size={17} /> : <ChevronDown size={17} />}
@@ -161,11 +155,11 @@ function DeviceRows({
         <tr className="diagnostic-row">
           <td colSpan={6}>
             <div className="diagnostic-strip">
-              <span className={`status-label status-${diagnostic.result}`}><span aria-hidden="true" />{diagnostic.result}</span>
-              <p>{diagnostic.ui_summary || "No visible UI summary recorded."}</p>
+              <span className={`status-label status-${diagnostic.result}`}><span aria-hidden="true" />{localizeValue(diagnostic.result)}</span>
+              <p>{diagnostic.ui_summary || "暂无可见界面摘要。"}</p>
               {diagnostic.screenshot_id ? (
                 <button
-                  aria-label={`Screenshot evidence ${diagnostic.screenshot_id}`}
+                  aria-label={`截图证据 ${diagnostic.screenshot_id}`}
                   className="icon-only"
                   data-screenshot-id={diagnostic.screenshot_id}
                   onClick={() => window.open(
@@ -173,12 +167,12 @@ function DeviceRows({
                     "_blank",
                     "noopener,noreferrer",
                   )}
-                  title={`Screenshot evidence ${diagnostic.screenshot_id}`}
+                  title={`截图证据 ${diagnostic.screenshot_id}`}
                   type="button"
                 >
                   <Image size={16} aria-hidden="true" />
                 </button>
-              ) : <span className="muted">No screenshot</span>}
+              ) : <span className="muted">暂无截图</span>}
             </div>
           </td>
         </tr>

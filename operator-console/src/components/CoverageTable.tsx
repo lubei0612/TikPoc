@@ -1,6 +1,7 @@
 import { Check, Clock3, RotateCcw, TriangleAlert } from "lucide-react";
 
 import type { CoverageAssignment, CoverageSnapshot } from "../api";
+import { localizeValue } from "../localization";
 
 interface CoverageTableProps {
   coverage: CoverageSnapshot;
@@ -20,32 +21,32 @@ export function CoverageTable({ coverage, pendingKeys, rowErrors, onRetry }: Cov
   return (
     <div className="coverage-scroll" data-testid="coverage-scroller">
       <table className="operations-table coverage-table" data-testid="coverage-matrix">
-        <thead><tr><th className="sticky-target" data-testid="coverage-target-header">Target</th>{deviceIds.map((id) => <th key={id}>{id}</th>)}</tr></thead>
+        <thead><tr><th className="sticky-target" data-testid="coverage-target-header">目标</th>{deviceIds.map((id) => <th key={id}>{id}</th>)}</tr></thead>
         <tbody>
           {coverage.items.map((target) => (
             <tr key={target.identity_key}>
               <td className="sticky-target"><strong>{target.username}</strong><small>{target.identity_key}</small></td>
               {deviceIds.map((deviceId) => {
                 const assignment = target.devices.find((item) => item.device_id === deviceId);
-                if (!assignment) return <td key={deviceId}><span className="muted">Missing</span></td>;
+                if (!assignment) return <td key={deviceId}><span className="muted">缺失</span></td>;
                 const retryable = assignment.phase === "deferred";
                 const pending = pendingKeys.has(`retry:${assignment.assignment_id}`);
                 return (
                   <td key={deviceId}>
                     <div className={`coverage-state coverage-${assignment.phase}`}>
-                      <span>{statusIcon(assignment)}{assignment.phase.replaceAll("_", " ")}</span>
+                      <span>{statusIcon(assignment)}{localizeValue(assignment.phase)}</span>
                       {assignment.last_error_code && <small>{assignment.last_error_code}</small>}
                       {retryable && (
                         <button
-                          aria-label={`Retry ${deviceId} for ${target.username}`}
+                          aria-label={`重试 ${deviceId} 对 ${target.username} 的任务`}
                           className="retry-button"
                           disabled={pending}
                           onClick={() => onRetry(assignment.assignment_id)}
-                          title={`Retry ${deviceId} for ${target.username}`}
+                          title={`重试 ${deviceId} 对 ${target.username} 的任务`}
                           type="button"
                         >
                           <RotateCcw size={14} aria-hidden="true" />
-                          {pending ? "Retrying" : "Retry"}
+                          {pending ? "重试中" : "重试"}
                         </button>
                       )}
                       {rowErrors[assignment.assignment_id] && <small className="cell-error" role="alert">{rowErrors[assignment.assignment_id]}</small>}

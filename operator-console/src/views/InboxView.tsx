@@ -13,8 +13,9 @@ import {
 } from "../api";
 import { ConversationDrawer } from "../components/ConversationDrawer";
 import { ConversationList } from "../components/ConversationList";
+import { localizeError } from "../localization";
 
-const errorText = (reason: unknown) => reason instanceof Error ? reason.message : "Lead operation failed";
+const errorText = (reason: unknown) => localizeError(reason, "线索操作失败");
 type ScopedText = { key: string; text: string };
 type ScopedAction = { key: string; name: string };
 
@@ -118,8 +119,8 @@ export function InboxView() {
     }
   };
 
-  if (loading) return <div className="workspace-state"><span className="loading-line" />Loading inbox</div>;
-  if (!snapshot) return <div className="workspace-state error-state" role="alert">{error?.text || "Inbox unavailable"}</div>;
+  if (loading) return <div className="workspace-state"><span className="loading-line" />正在加载线索收件箱</div>;
+  if (!snapshot) return <div className="workspace-state error-state" role="alert">{error?.text || "线索收件箱暂不可用"}</div>;
 
   const account = selectedConversation ? snapshot.accounts.find((item) => item.account_id === selectedConversation.account_id) : undefined;
   const selectedKey = selectedConversation ? `${selectedConversation.account_id}:${selectedConversation.conversation_id}` : "";
@@ -130,18 +131,18 @@ export function InboxView() {
     <main className="inbox-workspace">
       <section className="inbox-main">
         <header className="workspace-title">
-          <div><span className="section-index">INBOX</span><h1>Lead conversion</h1><p>Private-channel readiness, takeover and closing state.</p></div>
-          <button className="icon-only" aria-label="Refresh inbox" title="Refresh inbox" disabled={action !== null} onClick={() => loadList().catch((reason) => setError({ key: "", text: errorText(reason) }))}><RefreshCw size={15} /></button>
+          <div><span className="section-index">线索</span><h1>线索转化</h1><p>私域就绪、人工接管与成交状态。</p></div>
+          <button className="icon-only" aria-label="刷新线索收件箱" title="刷新线索收件箱" disabled={action !== null} onClick={() => loadList().catch((reason) => setError({ key: "", text: errorText(reason) }))}><RefreshCw size={15} /></button>
         </header>
         <div className="account-control-strip">
-          <span><SlidersHorizontal size={14} />Account AI</span>
-          {snapshot.accounts.map((item) => <label key={item.account_id}><span>{item.account_id}<small>{item.private_channel_configured ? "Private ready" : "Private missing"}</small></span><input type="checkbox" checked={item.ai_enabled} disabled={!item.enabled || action !== null} onChange={(event) => toggleAccount(item.account_id, event.target.checked)} /></label>)}
+          <span><SlidersHorizontal size={14} />账号 AI</span>
+          {snapshot.accounts.map((item) => <label key={item.account_id}><span>{item.account_id}<small>{item.private_channel_configured ? "私域已就绪" : "私域未配置"}</small></span><input aria-label={`${item.account_id} AI 自动处理`} type="checkbox" checked={item.ai_enabled} disabled={!item.enabled || action !== null} onChange={(event) => toggleAccount(item.account_id, event.target.checked)} /></label>)}
         </div>
         {error?.key === "" && !selectedConversation && <div className="action-error" role="alert">{error.text}</div>}
         <ConversationList conversations={snapshot.conversations} selectedId={selectedConversation?.conversation_id ?? null} onSelect={choose} />
       </section>
-      {selectedConversation && !selected && <aside className="conversation-drawer drawer-loading"><span className="loading-line" />Loading conversation</aside>}
-      {selectedConversation && selected && <ConversationDrawer account={account} conversation={selectedConversation} lead={selected} action={selectedAction} error={selectedError} notice={selectedNotice} canCreatePlan={Boolean(fingerprint)} onClose={() => { currentSelectionKey.current = ""; selectionGeneration.current += 1; selectionController.current?.abort(); setSelectedConversation(null); setSelected(null); }} onTakeover={() => runAction("takeover", () => takeOverLead(selectedConversation.account_id, selectedConversation.conversation_id, crypto.randomUUID()), "Human takeover confirmed.")} onManualPlan={(text) => { if (!fingerprint) { setError({ key: selectedKey, text: "No inbound message is available in bounded history." }); return; } void runAction("manual", () => createManualReplyPlan(selectedConversation.account_id, selectedConversation.conversation_id, crypto.randomUUID(), fingerprint, text), "Immutable send plan created; delivery is pending."); }} onSale={(amount, currency, status) => runAction("sale", () => recordSale(selectedConversation.account_id, selectedConversation.conversation_id, { commandId: crypto.randomUUID(), amountMinor: Math.round(Number(amount) * 100), currency, status, occurredAtMs: Date.now() }), "Sale recorded by the server.")} />}
+      {selectedConversation && !selected && <aside className="conversation-drawer drawer-loading"><span className="loading-line" />正在加载会话</aside>}
+      {selectedConversation && selected && <ConversationDrawer account={account} conversation={selectedConversation} lead={selected} action={selectedAction} error={selectedError} notice={selectedNotice} canCreatePlan={Boolean(fingerprint)} onClose={() => { currentSelectionKey.current = ""; selectionGeneration.current += 1; selectionController.current?.abort(); setSelectedConversation(null); setSelected(null); }} onTakeover={() => runAction("takeover", () => takeOverLead(selectedConversation.account_id, selectedConversation.conversation_id, crypto.randomUUID()), "已确认人工接管。")} onManualPlan={(text) => { if (!fingerprint) { setError({ key: selectedKey, text: "有限消息记录中没有收到的消息。" }); return; } void runAction("manual", () => createManualReplyPlan(selectedConversation.account_id, selectedConversation.conversation_id, crypto.randomUUID(), fingerprint, text), "不可变发送计划已创建，等待浏览器发送。"); }} onSale={(amount, currency, status) => runAction("sale", () => recordSale(selectedConversation.account_id, selectedConversation.conversation_id, { commandId: crypto.randomUUID(), amountMinor: Math.round(Number(amount) * 100), currency, status, occurredAtMs: Date.now() }), "服务端已记录成交。")} />}
     </main>
   );
 }
