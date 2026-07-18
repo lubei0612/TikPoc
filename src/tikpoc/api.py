@@ -102,7 +102,6 @@ def create_app(
         acquisition,
         clock_ms=lambda: int(clock() * 1000),
         import_roots=tuple(import_roots or (database_path.parent,)),
-        database=database,
     )
     acquisition_service.migrate()
     if browser_dm_service is None and registry is not None:

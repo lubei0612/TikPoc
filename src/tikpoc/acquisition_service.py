@@ -6,12 +6,22 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from .acquisition_db import AcquisitionRepository
-from .db import Database
 from .importer import read_targets
 from .rounds import create_exposure_round
 
 
 _QUOTA_LIMITS = {"like": 100, "favorite": 14, "repost": 25}
+_COMMAND_FAILURE_KEY = "failure"
+_KNOWN_COMMAND_CONFLICTS = {
+    "assignment has an active lease",
+    "assignment is not retryable",
+    "assignment state does not allow command",
+    "command id has different content",
+    "completed assignment does not allow command",
+    "device state does not allow command",
+    "fleet contains a stopped round",
+    "round state does not allow command",
+}
 
 
 class AcquisitionNotFound(KeyError):
@@ -29,13 +39,11 @@ class AcquisitionService:
         *,
         clock_ms: Callable[[], int],
         import_roots: Sequence[Path],
-        database: Database | None = None,
     ) -> None:
         self.repository = repository
         self.path = repository.path
         self.clock_ms = clock_ms
         self.import_roots = tuple(root.resolve() for root in import_roots)
-        self.database = database or Database(repository.path)
 
     def migrate(self) -> None:
         with self._connect() as connection:
@@ -165,9 +173,9 @@ class AcquisitionService:
             quotas = self._quota_rows(connection, round_id)
             recent_traces = self._recent_traces(connection, round_id, limit=100)
             diagnostics = self._latest_diagnostics(connection, round_id)
+            browser_health = self._browser_health_rows(connection)
         for device in device_rows:
             device["latest_diagnostic"] = diagnostics.get(str(device["device_id"]))
-        browser_health = self.database.browser_health_snapshot()
         return {
             "round": dict(round_row),
             "devices": device_rows,
@@ -197,7 +205,8 @@ class AcquisitionService:
                        assignment.attempt_count, assignment.next_attempt_at_ms,
                        assignment.visit_confirmed_at_ms,
                        assignment.completed_at_ms, assignment.last_error_code,
-                       plan.effective_outcome
+                       plan.effective_outcome,
+                       COALESCE(control.state, 'running') AS control_state
                 FROM round_assignments AS assignment
                 JOIN exposure_rounds AS round ON round.round_id = assignment.round_id
                 JOIN pool_targets AS target
@@ -207,6 +216,9 @@ class AcquisitionService:
                   ON plan.round_id = assignment.round_id
                  AND plan.identity_key = assignment.identity_key
                  AND plan.device_id = assignment.device_id
+                LEFT JOIN operator_control_states AS control
+                  ON control.scope = 'assignment'
+                 AND control.scope_id = CAST(assignment.assignment_id AS TEXT)
                 WHERE assignment.round_id = ?
                   AND assignment.identity_key IN (
                       SELECT identity_key FROM pool_targets WHERE pool_id = ?
@@ -246,6 +258,7 @@ class AcquisitionService:
                     "attempt_count": int(row["attempt_count"]),
                     "next_attempt_at_ms": int(row["next_attempt_at_ms"]),
                     "last_error_code": row["last_error_code"],
+                    "control_state": str(row["control_state"]),
                 }
             )
         return {
@@ -367,6 +380,8 @@ class AcquisitionService:
         apply: Callable[[sqlite3.Connection], dict[str, object]],
     ) -> dict[str, object]:
         payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        failure: dict[str, str] | None = None
+        result: dict[str, object] | None = None
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
@@ -379,18 +394,72 @@ class AcquisitionService:
                     or str(existing["payload_json"]) != payload_json
                 ):
                     raise AcquisitionConflict("command id has different content")
-                return json.loads(str(existing["result_json"]))
-            result = apply(connection)
-            result_json = json.dumps(result, sort_keys=True, separators=(",", ":"))
+                stored = json.loads(str(existing["result_json"]))
+                self._raise_stored_failure(stored)
+                return stored
+            pending_json = json.dumps(
+                {"pending": True}, sort_keys=True, separators=(",", ":")
+            )
             connection.execute(
                 """
                 INSERT INTO operator_commands(
                     command_id, command_type, payload_json, result_json, created_at_ms
                 ) VALUES (?, ?, ?, ?, ?)
                 """,
-                (command_id, command_type, payload_json, result_json, self.clock_ms()),
+                (command_id, command_type, payload_json, pending_json, self.clock_ms()),
             )
-            return result
+            try:
+                result = apply(connection)
+            except AcquisitionNotFound:
+                failure = {
+                    "kind": "not_found",
+                    "message": (
+                        "assignment not found"
+                        if command_type == "retry"
+                        else "command target not found"
+                    ),
+                }
+            except AcquisitionConflict as error:
+                message = str(error)
+                failure = {
+                    "kind": "conflict",
+                    "message": (
+                        message
+                        if message in _KNOWN_COMMAND_CONFLICTS
+                        else "command conflicts with current state"
+                    ),
+                }
+            stored_result: dict[str, object] = (
+                {_COMMAND_FAILURE_KEY: failure} if failure is not None else result or {}
+            )
+            connection.execute(
+                """
+                UPDATE operator_commands SET result_json = ? WHERE command_id = ?
+                """,
+                (
+                    json.dumps(stored_result, sort_keys=True, separators=(",", ":")),
+                    command_id,
+                ),
+            )
+        if failure is not None:
+            self._raise_stored_failure({_COMMAND_FAILURE_KEY: failure})
+        assert result is not None
+        return result
+
+    @staticmethod
+    def _raise_stored_failure(stored: dict[str, object]) -> None:
+        raw_failure = stored.get(_COMMAND_FAILURE_KEY)
+        if not isinstance(raw_failure, dict):
+            return
+        kind = raw_failure.get("kind")
+        message = raw_failure.get("message")
+        if not isinstance(message, str) or len(message) > 200:
+            raise AcquisitionConflict("stored command failure is invalid")
+        if kind == "not_found":
+            raise AcquisitionNotFound(message)
+        if kind == "conflict":
+            raise AcquisitionConflict(message)
+        raise AcquisitionConflict("stored command failure is invalid")
 
     def _apply_control(
         self,
@@ -415,6 +484,8 @@ class AcquisitionService:
                 (state, scope_id),
             )
         elif scope == "fleet":
+            if scope_id != "all":
+                raise AcquisitionNotFound(scope_id)
             rows = connection.execute(
                 "SELECT round_id, state FROM exposure_rounds"
             ).fetchall()
@@ -429,6 +500,69 @@ class AcquisitionService:
                    OR (state = 'stopped' AND ? = 'stopped')
                 """,
                 (state, state),
+            )
+        elif scope in {"device", "assignment"}:
+            control_scope_id = scope_id.strip()
+            if scope == "device":
+                exists = connection.execute(
+                    """
+                    SELECT 1 FROM round_device_seeds WHERE device_id = ? LIMIT 1
+                    """,
+                    (control_scope_id,),
+                ).fetchone()
+                if exists is None:
+                    raise AcquisitionNotFound(control_scope_id)
+            else:
+                try:
+                    assignment_id = int(control_scope_id)
+                except ValueError as error:
+                    raise AcquisitionNotFound(control_scope_id) from error
+                assignment = connection.execute(
+                    """
+                    SELECT assignment.phase, assignment.lease_owner,
+                           assignment.lease_expires_at_ms
+                    FROM round_assignments AS assignment
+                    JOIN round_device_seeds AS seed
+                      ON seed.round_id = assignment.round_id
+                     AND seed.device_id = assignment.device_id
+                    WHERE assignment.assignment_id = ?
+                    """,
+                    (assignment_id,),
+                ).fetchone()
+                if assignment is None:
+                    raise AcquisitionNotFound(control_scope_id)
+                control_scope_id = str(assignment_id)
+                if str(assignment["phase"]) == "completed":
+                    raise AcquisitionConflict(
+                        "completed assignment does not allow command"
+                    )
+                if (
+                    command_type in {"pause", "stop"}
+                    and assignment["lease_owner"] is not None
+                    and int(assignment["lease_expires_at_ms"]) > self.clock_ms()
+                ):
+                    raise AcquisitionConflict("assignment has an active lease")
+            control = connection.execute(
+                """
+                SELECT state FROM operator_control_states
+                WHERE scope = ? AND scope_id = ?
+                """,
+                (scope, control_scope_id),
+            ).fetchone()
+            current = "running" if control is None else str(control["state"])
+            if current == "stopped" and state != "stopped":
+                raise AcquisitionConflict(f"{scope} state does not allow command")
+            connection.execute(
+                """
+                INSERT INTO operator_control_states(
+                    scope, scope_id, state, updated_at_ms, command_id
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(scope, scope_id) DO UPDATE SET
+                    state=excluded.state,
+                    updated_at_ms=excluded.updated_at_ms,
+                    command_id=excluded.command_id
+                """,
+                (scope, control_scope_id, state, self.clock_ms(), command_id),
             )
         else:
             raise AcquisitionConflict("control scope is not supported")
@@ -447,12 +581,18 @@ class AcquisitionService:
             """
             SELECT seed.device_id, health.account_id, health.state AS health,
                    health.error_code, health.updated_at_ms,
+                   COALESCE(device_control.state, 'running') AS control_state,
                    assignment.assignment_id, assignment.identity_key,
                    assignment.phase, assignment.attempt_count,
                    assignment.last_error_code, assignment.visit_confirmed_at_ms,
-                   assignment.completed_at_ms
+                   assignment.completed_at_ms,
+                   COALESCE(assignment_control.state, 'running')
+                       AS assignment_control_state
             FROM round_device_seeds AS seed
             LEFT JOIN fleet_device_health AS health ON health.device_id = seed.device_id
+            LEFT JOIN operator_control_states AS device_control
+              ON device_control.scope = 'device'
+             AND device_control.scope_id = seed.device_id
             LEFT JOIN round_assignments AS assignment
               ON assignment.assignment_id = (
                   SELECT candidate.assignment_id FROM round_assignments AS candidate
@@ -465,6 +605,9 @@ class AcquisitionService:
                     )
                   ORDER BY candidate.assignment_id LIMIT 1
               )
+            LEFT JOIN operator_control_states AS assignment_control
+              ON assignment_control.scope = 'assignment'
+             AND assignment_control.scope_id = CAST(assignment.assignment_id AS TEXT)
             WHERE seed.round_id = ? ORDER BY seed.device_id
             """,
             (round_id,),
@@ -514,6 +657,7 @@ class AcquisitionService:
                     "phase": str(row["phase"]),
                     "attempt_count": int(row["attempt_count"]),
                     "last_error_code": row["last_error_code"],
+                    "control_state": str(row["assignment_control_state"]),
                 }
             devices.append(
                 {
@@ -522,12 +666,27 @@ class AcquisitionService:
                     "health": str(row["health"] or "unknown"),
                     "health_error_code": row["error_code"],
                     "health_updated_at_ms": row["updated_at_ms"],
+                    "control_state": str(row["control_state"]),
                     "current_assignment": assignment,
                     "mean_ms": mean_ms,
                     "p90_ms": p90_ms,
                 }
             )
         return devices
+
+    @staticmethod
+    def _browser_health_rows(
+        connection: sqlite3.Connection,
+    ) -> list[dict[str, object]]:
+        rows = connection.execute(
+            """
+            SELECT account_id, page_role, device_id, status,
+                   observed_at_ms, detail
+            FROM browser_account_health
+            ORDER BY account_id, page_role
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def _latest_diagnostics(
         self, connection: sqlite3.Connection, round_id: str

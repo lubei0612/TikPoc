@@ -6,6 +6,7 @@ import pytest
 
 from tikpoc.acquisition_db import AcquisitionRepository
 from tikpoc.importer import Target
+from tikpoc.rounds import create_exposure_round
 
 
 def _target(identity: str, *, lines: tuple[int, ...] = (2,)) -> Target:
@@ -57,6 +58,80 @@ def test_repository_recomputes_identity_precedence(tmp_path: Path) -> None:
     imported = repository.import_pool("comments.csv", "b" * 64, (claimed,))
 
     assert repository.pool_targets(imported.pool_id)[0].identity_key == "sec:s1"
+
+
+def test_claim_honors_durable_device_and_assignment_control_states(
+    tmp_path: Path,
+) -> None:
+    repository = AcquisitionRepository(tmp_path / "tikpoc.db", clock_ms=lambda: 1_000)
+    repository.migrate()
+    imported = repository.import_pool("comments.csv", "d" * 64, (_target("sec:s1"),))
+    round_id = create_exposure_round(
+        repository,
+        pool_id=imported.pool_id,
+        device_seeds={"phone-01": "seed-01"},
+        starts_at_ms=1_000,
+        min_inter_device_gap_ms=0,
+        min_repeat_gap_ms=0,
+    )
+    with sqlite3.connect(repository.path) as connection:
+        assignment_id = int(
+            connection.execute(
+                "SELECT assignment_id FROM round_assignments WHERE round_id=?",
+                (round_id,),
+            ).fetchone()[0]
+        )
+
+    with sqlite3.connect(repository.path) as connection:
+        connection.execute(
+            """
+            INSERT INTO operator_control_states(
+                scope, scope_id, state, updated_at_ms, command_id
+            ) VALUES ('device', 'phone-01', 'paused', 1000, 'pause-device')
+            """
+        )
+    assert (
+        repository.claim_next_assignment(
+            round_id, "phone-01", "worker-01", now_ms=1_000
+        )
+        is None
+    )
+
+    with sqlite3.connect(repository.path) as connection:
+        connection.execute(
+            """
+            UPDATE operator_control_states SET state='running'
+            WHERE scope='device' AND scope_id='phone-01'
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO operator_control_states(
+                scope, scope_id, state, updated_at_ms, command_id
+            ) VALUES ('assignment', ?, 'paused', 1001, 'pause-assignment')
+            """,
+            (str(assignment_id),),
+        )
+    assert (
+        repository.claim_next_assignment(
+            round_id, "phone-01", "worker-01", now_ms=1_001
+        )
+        is None
+    )
+
+    with sqlite3.connect(repository.path) as connection:
+        connection.execute(
+            """
+            UPDATE operator_control_states SET state='running'
+            WHERE scope='assignment' AND scope_id=?
+            """,
+            (str(assignment_id),),
+        )
+    claimed = repository.claim_next_assignment(
+        round_id, "phone-01", "worker-01", now_ms=1_002
+    )
+    assert claimed is not None
+    assert claimed.assignment_id == assignment_id
 
 
 def test_round_coverage_and_mobile_trace_use_confirmed_assignment_evidence(

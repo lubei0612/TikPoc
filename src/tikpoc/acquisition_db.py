@@ -229,6 +229,18 @@ class AcquisitionRepository:
             )
             connection.execute(
                 """
+                CREATE TABLE IF NOT EXISTS operator_control_states (
+                    scope TEXT NOT NULL CHECK(scope IN ('device', 'assignment')),
+                    scope_id TEXT NOT NULL,
+                    state TEXT NOT NULL CHECK(state IN ('running', 'paused', 'stopped')),
+                    updated_at_ms INTEGER NOT NULL,
+                    command_id TEXT NOT NULL,
+                    PRIMARY KEY(scope, scope_id)
+                )
+                """
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS profile_snapshot_leases (
                     round_id TEXT NOT NULL,
                     identity_key TEXT NOT NULL,
@@ -990,6 +1002,20 @@ class AcquisitionRepository:
                   AND assignment.next_attempt_at_ms <= ?
                   AND round.state IN ('pending', 'running')
                   AND round.starts_at_ms <= ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM operator_control_states AS device_control
+                      WHERE device_control.scope = 'device'
+                        AND device_control.scope_id = assignment.device_id
+                        AND device_control.state IN ('paused', 'stopped')
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM operator_control_states AS assignment_control
+                      WHERE assignment_control.scope = 'assignment'
+                        AND assignment_control.scope_id = CAST(
+                            assignment.assignment_id AS TEXT
+                        )
+                        AND assignment_control.state IN ('paused', 'stopped')
+                  )
                   AND NOT EXISTS (
                       SELECT 1
                       FROM round_assignments AS blocker

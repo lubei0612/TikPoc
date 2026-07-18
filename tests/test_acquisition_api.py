@@ -1,9 +1,11 @@
+import json
 import sqlite3
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from tikpoc.acquisition_db import AcquisitionRepository
+from tikpoc.acquisition_models import DeviceDiagnostics
 from tikpoc.api import create_app
 from tikpoc.db import Database
 from tikpoc.importer import Target
@@ -171,6 +173,35 @@ def test_operations_snapshot_contains_dynamic_round_devices_and_traces(
     )
 
 
+def test_operations_snapshot_reads_browser_health_in_acquisition_transaction(
+    tmp_path: Path, monkeypatch
+) -> None:
+    app, round_id, _ = _seeded_operations_app(tmp_path)
+
+    def reject_secondary_snapshot(self) -> None:
+        raise AssertionError("browser health used a second database connection")
+
+    monkeypatch.setattr(
+        Database,
+        "browser_health_snapshot",
+        reject_secondary_snapshot,
+    )
+
+    response = TestClient(app).get(f"/api/operations?round_id={round_id}")
+
+    assert response.status_code == 200
+    assert response.json()["browser_health"] == [
+        {
+            "account_id": "account-01",
+            "page_role": "messages",
+            "device_id": "phone-01",
+            "status": "healthy",
+            "observed_at_ms": 11_500,
+            "detail": "ready",
+        }
+    ]
+
+
 def test_pool_round_lists_and_paginated_coverage_are_bounded(tmp_path: Path) -> None:
     app, round_id, _ = _seeded_operations_app(tmp_path)
     client = TestClient(app)
@@ -290,14 +321,18 @@ def test_operator_command_models_reject_unknown_scope_and_extra_fields(
     assert oversized.status_code == 422
 
 
-def test_controls_reject_fake_device_scope_and_do_not_revive_stopped_rounds(
+def test_controls_reject_missing_device_and_do_not_revive_stopped_rounds(
     tmp_path: Path,
 ) -> None:
     app, round_id, _ = _seeded_operations_app(tmp_path)
     client = TestClient(app)
-    unsupported = client.post(
+    missing_device = client.post(
         "/api/commands/pause",
-        json={"command_id": "device-1", "scope": "device", "scope_id": "phone-01"},
+        json={
+            "command_id": "device-1",
+            "scope": "device",
+            "scope_id": "missing-phone",
+        },
     )
     stopped = client.post(
         "/api/commands/stop",
@@ -308,10 +343,264 @@ def test_controls_reject_fake_device_scope_and_do_not_revive_stopped_rounds(
         json={"command_id": "restart-all", "scope": "fleet", "scope_id": "all"},
     )
 
-    assert unsupported.status_code == 422
+    assert missing_device.status_code == 404
     assert stopped.status_code == 200
     assert restarted.status_code == 409
     rounds = client.get("/api/rounds").json()["items"]
     assert next(item for item in rounds if item["round_id"] == round_id)["state"] == (
         "stopped"
     )
+
+
+def test_device_controls_pause_resume_and_stop_future_claims(tmp_path: Path) -> None:
+    app, round_id, _ = _seeded_operations_app(tmp_path)
+    client = TestClient(app)
+    repository = app.state.acquisition
+
+    paused = client.post(
+        "/api/commands/pause",
+        json={
+            "command_id": "pause-phone",
+            "scope": "device",
+            "scope_id": "phone-02",
+        },
+    )
+
+    assert paused.status_code == 200
+    assert paused.json()["state"] == "paused"
+    assert (
+        repository.claim_next_assignment(
+            round_id, "phone-02", "worker-02", now_ms=12_000
+        )
+        is None
+    )
+    devices = client.get(f"/api/operations?round_id={round_id}").json()["devices"]
+    assert (
+        next(row for row in devices if row["device_id"] == "phone-02")["control_state"]
+        == "paused"
+    )
+
+    resumed = client.post(
+        "/api/commands/start",
+        json={
+            "command_id": "resume-phone",
+            "scope": "device",
+            "scope_id": "phone-02",
+        },
+    )
+    assert resumed.status_code == 200
+    claimed = repository.claim_next_assignment(
+        round_id, "phone-02", "worker-02", now_ms=12_001
+    )
+    assert claimed is not None
+
+    stopped = client.post(
+        "/api/commands/stop",
+        json={
+            "command_id": "stop-phone",
+            "scope": "device",
+            "scope_id": "phone-03",
+        },
+    )
+    restarted = client.post(
+        "/api/commands/start",
+        json={
+            "command_id": "restart-phone",
+            "scope": "device",
+            "scope_id": "phone-03",
+        },
+    )
+    assert stopped.status_code == 200
+    assert restarted.status_code == 409
+    assert (
+        repository.claim_next_assignment(
+            round_id, "phone-03", "worker-03", now_ms=12_001
+        )
+        is None
+    )
+
+
+def test_assignment_controls_are_durable_and_protect_active_leases(
+    tmp_path: Path,
+) -> None:
+    app, round_id, _ = _seeded_operations_app(tmp_path)
+    client = TestClient(app)
+    repository = app.state.acquisition
+    with sqlite3.connect(repository.path) as connection:
+        row = connection.execute(
+            """
+            SELECT assignment_id FROM round_assignments
+            WHERE round_id=? AND device_id='phone-02' AND phase='pending'
+            ORDER BY assignment_id LIMIT 1
+            """,
+            (round_id,),
+        ).fetchone()
+        assert row is not None
+        assignment_id = int(row[0])
+        connection.execute(
+            """
+            UPDATE round_assignments SET phase='completed', completed_at_ms=11_000
+            WHERE round_id=? AND device_id='phone-02' AND assignment_id<>?
+            """,
+            (round_id, assignment_id),
+        )
+
+    paused = client.post(
+        "/api/commands/pause",
+        json={
+            "command_id": "pause-assignment",
+            "scope": "assignment",
+            "scope_id": str(assignment_id),
+        },
+    )
+    assert paused.status_code == 200
+    assert (
+        repository.claim_next_assignment(
+            round_id, "phone-02", "worker-assignment", now_ms=12_000
+        )
+        is None
+    )
+    coverage = client.get(f"/api/coverage?round_id={round_id}").json()["items"]
+    assignment_row = next(
+        device
+        for target in coverage
+        for device in target["devices"]
+        if device["assignment_id"] == assignment_id
+    )
+    assert assignment_row["control_state"] == "paused"
+
+    resumed = client.post(
+        "/api/commands/start",
+        json={
+            "command_id": "resume-assignment",
+            "scope": "assignment",
+            "scope_id": str(assignment_id),
+        },
+    )
+    assert resumed.status_code == 200
+    claimed = repository.claim_next_assignment(
+        round_id, "phone-02", "worker-assignment", now_ms=12_001
+    )
+    assert claimed is not None and claimed.assignment_id == assignment_id
+
+    active_pause = client.post(
+        "/api/commands/pause",
+        json={
+            "command_id": "pause-active-assignment",
+            "scope": "assignment",
+            "scope_id": str(assignment_id),
+        },
+    )
+    assert active_pause.status_code == 409
+
+    repository.defer_assignment(
+        assignment_id,
+        "worker-assignment",
+        now_ms=12_002,
+        retry_delay_ms=0,
+        error_code="operator_test",
+        diagnostics=DeviceDiagnostics(),
+    )
+    stopped = client.post(
+        "/api/commands/stop",
+        json={
+            "command_id": "stop-assignment",
+            "scope": "assignment",
+            "scope_id": str(assignment_id),
+        },
+    )
+    restarted = client.post(
+        "/api/commands/start",
+        json={
+            "command_id": "restart-assignment",
+            "scope": "assignment",
+            "scope_id": str(assignment_id),
+        },
+    )
+    assert stopped.status_code == 200
+    assert restarted.status_code == 409
+    assert (
+        repository.claim_next_assignment(
+            round_id, "phone-02", "worker-after-stop", now_ms=12_003
+        )
+        is None
+    )
+
+
+def test_failed_commands_are_persisted_and_bound_to_original_content(
+    tmp_path: Path,
+) -> None:
+    app, round_id, _ = _seeded_operations_app(tmp_path)
+    client = TestClient(app)
+    missing = {
+        "command_id": "missing-round-command",
+        "scope": "round",
+        "scope_id": "missing-round",
+    }
+
+    first = client.post("/api/commands/start", json=missing)
+    replay = client.post("/api/commands/start", json=missing)
+    conflicting = client.post(
+        "/api/commands/start", json={**missing, "scope_id": round_id}
+    )
+
+    assert first.status_code == replay.status_code == 404
+    assert replay.json() == first.json() == {"error": "command target not found"}
+    assert conflicting.status_code == 409
+    assert conflicting.json() == {"error": "command id has different content"}
+    assert client.get("/api/rounds").json()["items"][0]["state"] == "pending"
+    with sqlite3.connect(app.state.acquisition.path) as connection:
+        row = connection.execute(
+            """
+            SELECT command_type, payload_json, result_json
+            FROM operator_commands WHERE command_id='missing-round-command'
+            """
+        ).fetchone()
+    assert row is not None
+    assert row[0] == "start"
+    assert json.loads(row[1]) == {"scope": "round", "scope_id": "missing-round"}
+    assert json.loads(row[2])["failure"] == {
+        "kind": "not_found",
+        "message": "command target not found",
+    }
+
+
+def test_conflicting_retry_failure_is_replayed_after_assignment_changes(
+    tmp_path: Path,
+) -> None:
+    app, _, deferred_id = _seeded_operations_app(tmp_path)
+    client = TestClient(app)
+    with sqlite3.connect(app.state.acquisition.path) as connection:
+        pending_id = int(
+            connection.execute(
+                "SELECT assignment_id FROM round_assignments WHERE phase='pending' LIMIT 1"
+            ).fetchone()[0]
+        )
+    body = {"command_id": "failed-retry", "assignment_id": pending_id}
+
+    first = client.post("/api/commands/retry", json=body)
+    with sqlite3.connect(app.state.acquisition.path) as connection:
+        connection.execute(
+            """
+            UPDATE round_assignments SET phase='deferred', next_attempt_at_ms=13000
+            WHERE assignment_id=?
+            """,
+            (pending_id,),
+        )
+    replay = client.post("/api/commands/retry", json=body)
+    conflicting = client.post(
+        "/api/commands/retry",
+        json={"command_id": "failed-retry", "assignment_id": deferred_id},
+    )
+
+    assert first.status_code == replay.status_code == 409
+    assert replay.json() == first.json() == {"error": "assignment is not retryable"}
+    assert conflicting.status_code == 409
+    with sqlite3.connect(app.state.acquisition.path) as connection:
+        assert (
+            connection.execute(
+                "SELECT next_attempt_at_ms FROM round_assignments WHERE assignment_id=?",
+                (pending_id,),
+            ).fetchone()[0]
+            == 13_000
+        )
