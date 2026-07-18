@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -851,6 +852,57 @@ def test_fastapi_status_recent_control_and_device_event_compatibility(
     assert database.worker_control() == "paused"
     assert first_event.json() == {"accepted": True}
     assert duplicate_event.json() == {"accepted": False}
+
+
+def test_fastapi_status_remains_available_while_reply_planner_is_blocked(
+    tmp_path: Path,
+) -> None:
+    class BlockingBrowserDmService(FakeBrowserDmService):
+        def __init__(self) -> None:
+            super().__init__()
+            self.entered = threading.Event()
+            self.release = threading.Event()
+
+        def plan(self, inbound: BrowserInbound) -> BrowserReply:
+            self.entered.set()
+            if not self.release.wait(timeout=5):
+                raise AssertionError("blocked planner was not released")
+            return super().plan(inbound)
+
+    service = BlockingBrowserDmService()
+    app = create_app(
+        tmp_path / "fastapi.db",
+        registry=_registry(tmp_path),
+        browser_dm_service=service,
+    )
+    headers = {"Origin": "https://www.tiktok.com"}
+    status_finished = threading.Event()
+
+    def request_status(client: TestClient):
+        response = client.get("/api/status")
+        status_finished.set()
+        return response
+
+    with TestClient(app) as client, ThreadPoolExecutor(max_workers=2) as executor:
+        planned_future = executor.submit(
+            client.post,
+            "/api/browser-dm/reply-plan",
+            json=_browser_inbound_body(),
+            headers=headers,
+        )
+        try:
+            assert service.entered.wait(timeout=2)
+            status_future = executor.submit(request_status, client)
+            status_completed_while_planner_blocked = status_finished.wait(timeout=0.5)
+        finally:
+            service.release.set()
+
+        planned = planned_future.result(timeout=2)
+        status = status_future.result(timeout=2)
+
+    assert status_completed_while_planner_blocked
+    assert planned.status_code == 200
+    assert status.status_code == 200
 
 
 def test_fastapi_browser_routes_preserve_responses_and_exact_cors(

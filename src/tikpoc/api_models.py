@@ -73,3 +73,32 @@ class DeviceEventRequest(ApiRequest):
     event_type: Identifier
     dedup_key: Identifier
     payload: dict[str, object] = Field(default_factory=dict)
+
+
+CommandId = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
+]
+
+
+class OperatorCommand(ApiRequest):
+    command_id: CommandId
+    scope: Literal["fleet", "round", "device", "assignment"]
+    scope_id: Identifier
+
+
+class RetryCommand(ApiRequest):
+    command_id: CommandId
+    assignment_id: int = Field(gt=0)
+
+
+class PoolImportRequest(ApiRequest):
+    local_path: BoundedText
+
+
+class RoundCreateRequest(ApiRequest):
+    pool_id: Identifier
+    device_seeds: dict[Identifier, Identifier] = Field(min_length=1, max_length=100)
+    starts_at_ms: int = Field(ge=0)
+    min_inter_device_gap_ms: int = Field(default=900_000, ge=0)
+    min_repeat_gap_ms: int = Field(default=72_000_000, ge=0)

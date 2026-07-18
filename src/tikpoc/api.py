@@ -5,11 +5,17 @@ import time
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import ValidationError
+from starlette.concurrency import run_in_threadpool
 
 from .acquisition_db import AcquisitionRepository
+from .acquisition_service import (
+    AcquisitionConflict,
+    AcquisitionNotFound,
+    AcquisitionService,
+)
 from .api_models import (
     BrowserActionClaimRequest,
     BrowserActionResultRequest,
@@ -19,6 +25,10 @@ from .api_models import (
     BrowserReplyPlanRequest,
     BrowserReplyResultRequest,
     DeviceEventRequest,
+    OperatorCommand,
+    PoolImportRequest,
+    RetryCommand,
+    RoundCreateRequest,
 )
 from .browser_dm import BrowserConversationBusy, BrowserDmService, BrowserInbound
 from .db import Database
@@ -77,11 +87,18 @@ def create_app(
     tiktok_app_secret: str = "",
     webhook_max_age_seconds: int = 300,
     clock: Callable[[], float] = time.time,
+    import_roots: Iterable[Path] | None = None,
 ) -> FastAPI:
     database = Database(database_path)
     database.migrate()
     acquisition = AcquisitionRepository(database_path)
     acquisition.migrate()
+    acquisition_service = AcquisitionService(
+        acquisition,
+        clock_ms=lambda: int(clock() * 1000),
+        import_roots=tuple(import_roots or (database_path.parent,)),
+    )
+    acquisition_service.migrate()
     if browser_dm_service is None and registry is not None:
         browser_dm_service = BrowserDmService(
             database,
@@ -105,6 +122,7 @@ def create_app(
     app = FastAPI(title="TikPoc Operator API", docs_url=None, redoc_url=None)
     app.state.database = database
     app.state.acquisition = acquisition
+    app.state.acquisition_service = acquisition_service
     app.state.registry = registry
     app.state.browser_dm_service = browser_dm_service
     app.state.browser_origins = browser_origins
@@ -203,7 +221,8 @@ def create_app(
         try:
             body = BrowserReplyPlanRequest.model_validate(await _json_object(request))
             _browser_account(registry, body)
-            reply = browser_dm_service.plan(
+            reply = await run_in_threadpool(
+                browser_dm_service.plan,
                 BrowserInbound(
                     account_id=body.account_id,
                     device_id=body.device_id,
@@ -346,6 +365,118 @@ def create_app(
             payload,
         )
         return _json({"accepted": accepted})
+
+    @app.get("/api/pools")
+    def acquisition_pools(
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> JSONResponse:
+        return _json(acquisition_service.pools(offset=offset, limit=limit))
+
+    @app.post("/api/pools/import")
+    def acquisition_pool_import(body: PoolImportRequest) -> JSONResponse:
+        try:
+            return _json(acquisition_service.import_pool(body.local_path))
+        except AcquisitionConflict as error:
+            return _json({"error": str(error)}, 409)
+        except (OSError, UnicodeError, ValueError) as error:
+            return _json({"error": str(error)}, 400)
+
+    @app.get("/api/rounds")
+    def acquisition_rounds(
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> JSONResponse:
+        return _json(acquisition_service.rounds(offset=offset, limit=limit))
+
+    @app.post("/api/rounds")
+    def acquisition_round_create(body: RoundCreateRequest) -> JSONResponse:
+        try:
+            return _json(
+                acquisition_service.create_round(
+                    pool_id=body.pool_id,
+                    device_seeds=body.device_seeds,
+                    starts_at_ms=body.starts_at_ms,
+                    min_inter_device_gap_ms=body.min_inter_device_gap_ms,
+                    min_repeat_gap_ms=body.min_repeat_gap_ms,
+                )
+            )
+        except AcquisitionNotFound:
+            return _json({"error": "target pool not found"}, 404)
+        except ValueError as error:
+            return _json({"error": str(error)}, 409)
+
+    @app.get("/api/operations")
+    def acquisition_operations(
+        round_id: str = Query(min_length=1, max_length=200),
+    ) -> JSONResponse:
+        try:
+            return _json(acquisition_service.operations(round_id))
+        except AcquisitionNotFound:
+            return _json({"error": "round not found"}, 404)
+
+    @app.get("/api/coverage")
+    def acquisition_coverage(
+        round_id: str = Query(min_length=1, max_length=200),
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> JSONResponse:
+        try:
+            return _json(
+                acquisition_service.coverage(round_id, offset=offset, limit=limit)
+            )
+        except AcquisitionNotFound:
+            return _json({"error": "round not found"}, 404)
+
+    def apply_operator_command(
+        command_type: str, body: OperatorCommand
+    ) -> JSONResponse:
+        try:
+            return _json(
+                acquisition_service.apply_command(
+                    command_type,
+                    body.command_id,
+                    body.scope,
+                    body.scope_id,
+                )
+            )
+        except AcquisitionNotFound:
+            return _json({"error": "command target not found"}, 404)
+        except AcquisitionConflict as error:
+            return _json({"error": str(error)}, 409)
+
+    @app.post("/api/commands/start")
+    def acquisition_start(body: OperatorCommand) -> JSONResponse:
+        return apply_operator_command("start", body)
+
+    @app.post("/api/commands/pause")
+    def acquisition_pause(body: OperatorCommand) -> JSONResponse:
+        return apply_operator_command("pause", body)
+
+    @app.post("/api/commands/stop")
+    def acquisition_stop(body: OperatorCommand) -> JSONResponse:
+        return apply_operator_command("stop", body)
+
+    @app.post("/api/commands/retry")
+    def acquisition_retry(body: RetryCommand) -> JSONResponse:
+        try:
+            return _json(acquisition_service.retry(body.command_id, body.assignment_id))
+        except AcquisitionNotFound:
+            return _json({"error": "assignment not found"}, 404)
+        except AcquisitionConflict as error:
+            return _json({"error": str(error)}, 409)
+
+    @app.get("/api/diagnostics/{assignment_id}")
+    def acquisition_diagnostics(
+        assignment_id: int,
+        limit: int = Query(default=20, ge=1, le=100),
+    ) -> JSONResponse:
+        if assignment_id <= 0:
+            return _json({"error": "assignment not found"}, 404)
+        try:
+            return _json(acquisition_service.diagnostics(assignment_id, limit=limit))
+        except AcquisitionNotFound:
+            return _json({"error": "assignment not found"}, 404)
 
     static = Path(__file__).parent / "static"
 
