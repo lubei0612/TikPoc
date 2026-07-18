@@ -294,6 +294,7 @@ def test_browser_post_routes_accept_verified_chrome_extension_origin(
         tmp_path / "db.sqlite",
         web_account_registry=_registry(tmp_path),
         browser_dm_service=service,
+        browser_extension_origins=(extension_origin,),
     )
     try:
         event_response = _post_browser_request(
@@ -315,6 +316,36 @@ def test_browser_post_routes_accept_verified_chrome_extension_origin(
             extension_origin
         )
         assert service.inbounds[0].fingerprint == "fp-01"
+    finally:
+        server.shutdown()
+
+
+def test_browser_post_routes_reject_unconfigured_valid_extension_origin(
+    tmp_path: Path,
+) -> None:
+    configured_origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+    unconfigured_origin = "chrome-extension://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    service = FakeBrowserDmService()
+    database_path = tmp_path / "db.sqlite"
+    server, base_url = _start_server(
+        database_path,
+        web_account_registry=_registry(tmp_path),
+        browser_dm_service=service,
+        browser_extension_origins=(configured_origin,),
+    )
+    try:
+        with pytest.raises(HTTPError) as raised:
+            _post_browser_request(
+                base_url,
+                "/api/browser-dm/reply-plan",
+                _browser_inbound_body(),
+                origin=unconfigured_origin,
+            )
+
+        assert raised.value.code == 403
+        assert json.load(raised.value) == {"error": "browser origin is not allowed"}
+        assert service.inbounds == []
+        assert Database(database_path).latest_runtime_event() is None
     finally:
         server.shutdown()
 

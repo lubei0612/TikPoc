@@ -476,11 +476,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def _allowed_origin(self) -> str | None:
         origin = self.headers.get("Origin")
-        if origin in self.server.browser_origins:
-            return origin
-        if origin and re.fullmatch(r"chrome-extension://[a-p]{32}", origin):
-            return origin
-        return None
+        return origin if origin in self.server.browser_origins else None
 
     def _send_cors_headers(self) -> None:
         origin = self._allowed_origin()
