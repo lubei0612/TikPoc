@@ -1,5 +1,6 @@
 import hashlib
 import json
+import math
 import re
 import sqlite3
 import time
@@ -9,6 +10,7 @@ from pathlib import Path
 
 from .acquisition_models import (
     ActionPlan,
+    ActionPacingState,
     ActionPlanState,
     ActionResult,
     AssignmentPhase,
@@ -309,6 +311,17 @@ class AcquisitionRepository:
                     confirmed_count INTEGER NOT NULL DEFAULT 0,
                     uncertain_count INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY(device_id, outcome, window_start_ms)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS action_pacing_state (
+                    device_id TEXT NOT NULL,
+                    outcome TEXT NOT NULL,
+                    tokens REAL NOT NULL,
+                    updated_at_ms INTEGER NOT NULL,
+                    PRIMARY KEY(device_id, outcome)
                 )
                 """
             )
@@ -2307,6 +2320,162 @@ class AcquisitionRepository:
     ) -> ActionPlan | None:
         with self._connect() as connection:
             return self._action_plan(connection, round_id, identity_key, device_id)
+
+    def action_pacing_state(
+        self,
+        device_id: str,
+        outcome: OutcomeKind | str,
+        *,
+        now_ms: int,
+        limit: int,
+    ) -> ActionPacingState:
+        normalized_device = str(device_id).strip()
+        normalized_outcome = OutcomeKind(outcome)
+        if (
+            not normalized_device
+            or normalized_outcome is OutcomeKind.TRACE
+            or now_ms < 0
+            or limit <= 0
+        ):
+            raise ValueError("action pacing inputs are invalid")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            return self._action_pacing_state(
+                connection,
+                normalized_device,
+                normalized_outcome,
+                now_ms=now_ms,
+                limit=limit,
+            )
+
+    def consume_action_token(
+        self,
+        device_id: str,
+        outcome: OutcomeKind | str,
+        *,
+        now_ms: int,
+        limit: int,
+    ) -> bool:
+        normalized_device = str(device_id).strip()
+        normalized_outcome = OutcomeKind(outcome)
+        if (
+            not normalized_device
+            or normalized_outcome is OutcomeKind.TRACE
+            or now_ms < 0
+            or limit <= 0
+        ):
+            raise ValueError("action pacing inputs are invalid")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            state = self._action_pacing_state(
+                connection,
+                normalized_device,
+                normalized_outcome,
+                now_ms=now_ms,
+                limit=limit,
+            )
+            if not state.ready:
+                return False
+            connection.execute(
+                """
+                UPDATE action_pacing_state SET tokens = tokens - 1
+                WHERE device_id = ? AND outcome = ?
+                """,
+                (normalized_device, normalized_outcome.value),
+            )
+            return True
+
+    def rolling_action_usage(
+        self,
+        device_id: str,
+        outcome: OutcomeKind | str,
+        *,
+        now_ms: int,
+    ) -> int:
+        normalized_outcome = OutcomeKind(outcome)
+        if normalized_outcome is OutcomeKind.TRACE:
+            return 0
+        with self._connect() as connection:
+            return self._rolling_action_usage(
+                connection, str(device_id).strip(), normalized_outcome, now_ms
+            )
+
+    def _action_pacing_state(
+        self,
+        connection: sqlite3.Connection,
+        device_id: str,
+        outcome: OutcomeKind,
+        *,
+        now_ms: int,
+        limit: int,
+    ) -> ActionPacingState:
+        row = connection.execute(
+            """
+            SELECT tokens, updated_at_ms FROM action_pacing_state
+            WHERE device_id = ? AND outcome = ?
+            """,
+            (device_id, outcome.value),
+        ).fetchone()
+        if row is None:
+            digest = hashlib.sha256(f"{device_id}\0{outcome.value}".encode()).digest()
+            tokens = int.from_bytes(digest[:8], "big") / 2**64
+            updated_at_ms = now_ms
+            connection.execute(
+                """
+                INSERT INTO action_pacing_state(device_id, outcome, tokens, updated_at_ms)
+                VALUES (?, ?, ?, ?)
+                """,
+                (device_id, outcome.value, tokens, now_ms),
+            )
+        else:
+            updated_at_ms = int(row["updated_at_ms"])
+            if now_ms < updated_at_ms:
+                raise ValueError("action pacing time cannot move backward")
+            tokens = min(
+                1.0,
+                float(row["tokens"]) + (now_ms - updated_at_ms) * limit / 3_600_000,
+            )
+            connection.execute(
+                """
+                UPDATE action_pacing_state SET tokens = ?, updated_at_ms = ?
+                WHERE device_id = ? AND outcome = ?
+                """,
+                (tokens, now_ms, device_id, outcome.value),
+            )
+        rolling_used = self._rolling_action_usage(
+            connection, device_id, outcome, now_ms
+        )
+        ready = tokens >= 1.0 and rolling_used < limit
+        wait_ms = 0 if tokens >= 1.0 else math.ceil((1.0 - tokens) * 3_600_000 / limit)
+        return ActionPacingState(
+            device_id=device_id,
+            outcome=outcome,
+            tokens=tokens,
+            updated_at_ms=now_ms,
+            next_due_at_ms=now_ms + wait_ms,
+            rolling_used=rolling_used,
+            limit=limit,
+            ready=ready,
+        )
+
+    @staticmethod
+    def _rolling_action_usage(
+        connection: sqlite3.Connection,
+        device_id: str,
+        outcome: OutcomeKind,
+        now_ms: int,
+    ) -> int:
+        if now_ms < 0:
+            raise ValueError("rolling quota timestamp must be nonnegative")
+        row = connection.execute(
+            """
+            SELECT COUNT(*) AS count FROM device_action_plans
+            WHERE device_id = ? AND effective_outcome = ?
+              AND created_at_ms > ? AND created_at_ms <= ?
+            """,
+            (device_id, outcome.value, now_ms - 3_600_000, now_ms),
+        ).fetchone()
+        return int(row["count"])
 
     def quota_window(
         self,

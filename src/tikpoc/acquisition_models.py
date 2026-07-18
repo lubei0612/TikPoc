@@ -148,6 +148,18 @@ class QuotaWindow:
 
 
 @dataclass(frozen=True)
+class ActionPacingState:
+    device_id: str
+    outcome: OutcomeKind
+    tokens: float
+    updated_at_ms: int
+    next_due_at_ms: int
+    rolling_used: int
+    limit: int
+    ready: bool
+
+
+@dataclass(frozen=True)
 class ProfileObservation:
     observed_username: str
     metrics: ProfileMetrics | None
