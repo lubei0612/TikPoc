@@ -99,6 +99,14 @@ class BrowserDmService:
         account = self._account(inbound.account_id, inbound.device_id)
         lock = self._account_locks[account.account_id]
         with lock:
+            self.database.record_lead_funnel_event(
+                account.account_id,
+                inbound.participant_username,
+                "dm_inbound",
+                inbound.fingerprint,
+                conversation_id=inbound.conversation_id,
+                occurred_at_ms=inbound.timestamp_ms,
+            )
             existing = self.database.get_browser_reply_plan(
                 account.account_id, inbound.fingerprint
             )
@@ -128,6 +136,36 @@ class BrowserDmService:
                 state.last_invited_at_ms,
                 now_ms,
             )
+            if assessment.meaningful:
+                self.database.record_lead_funnel_event(
+                    account.account_id,
+                    plan.participant_username,
+                    "engaged",
+                    plan.inbound_fingerprint,
+                    conversation_id=plan.conversation_id,
+                    occurred_at_ms=now_ms,
+                )
+            if assessment.stage == ConversationStage.QUALIFIED:
+                self.database.record_lead_funnel_event(
+                    account.account_id,
+                    plan.participant_username,
+                    "qualified",
+                    plan.inbound_fingerprint,
+                    conversation_id=plan.conversation_id,
+                    occurred_at_ms=now_ms,
+                )
+            if assessment.stage in {
+                ConversationStage.CONTACT_CAPTURED,
+                ConversationStage.HUMAN_REQUIRED,
+            }:
+                self.database.record_lead_funnel_event(
+                    account.account_id,
+                    plan.participant_username,
+                    assessment.stage.value,
+                    plan.inbound_fingerprint,
+                    conversation_id=plan.conversation_id,
+                    occurred_at_ms=now_ms,
+                )
             if assessment.stage in {
                 ConversationStage.CLOSED,
                 ConversationStage.HUMAN_REQUIRED,
@@ -235,16 +273,32 @@ class BrowserDmService:
                 raise KeyError(plan_id)
             if plan.account_id != account.account_id:
                 raise ValueError("browser reply plan belongs to a different account")
-            self.database.reconcile_browser_reply_invitation_evidence(
+            reconciled = self.database.reconcile_browser_reply_invitation_evidence(
                 account.account_id,
                 plan.id,
                 private_channel_hint=_normalize_whitespace(
                     account.private_channel_hint
                 ),
             )
-            return self.database.record_browser_reply_result(
+            now_ms = int(self.clock() * 1_000)
+            recorded = self.database.record_browser_reply_result(
                 account.account_id,
                 plan.id,
                 state,
-                now_ms=int(self.clock() * 1_000),
+                now_ms=now_ms,
             )
+            if (
+                recorded
+                and state == "sent"
+                and reconciled.invitation_included
+                and reconciled.participant_username.strip()
+            ):
+                self.database.record_lead_funnel_event(
+                    account.account_id,
+                    reconciled.participant_username,
+                    "invited",
+                    reconciled.inbound_fingerprint,
+                    conversation_id=reconciled.conversation_id,
+                    occurred_at_ms=now_ms,
+                )
+            return recorded

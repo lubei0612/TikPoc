@@ -1372,6 +1372,102 @@ class AcquisitionRepository:
                 deferred=int(row["deferred"] or 0),
             )
 
+    def round_coverage(self, round_id: str) -> dict[str, object]:
+        normalized_round_id = str(round_id).strip()
+        if not normalized_round_id:
+            raise ValueError("round id must be nonempty")
+        with self._connect_read_only() as connection:
+            if not self._table_exists(connection, "round_assignments"):
+                raise KeyError(normalized_round_id)
+            existing = connection.execute(
+                "SELECT 1 FROM exposure_rounds WHERE round_id = ?",
+                (normalized_round_id,),
+            ).fetchone()
+            if existing is None:
+                raise KeyError(normalized_round_id)
+            required_devices = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM round_device_seeds WHERE round_id = ?",
+                    (normalized_round_id,),
+                ).fetchone()[0]
+            )
+            rows = connection.execute(
+                """
+                SELECT identity_key,
+                       SUM(visit_confirmed_at_ms IS NOT NULL) AS confirmed_devices
+                FROM round_assignments
+                WHERE round_id = ?
+                GROUP BY identity_key
+                """,
+                (normalized_round_id,),
+            ).fetchall()
+        targets = len(rows)
+        confirmed_visits = sum(int(row["confirmed_devices"]) for row in rows)
+        fully_covered = sum(
+            int(row["confirmed_devices"]) == required_devices for row in rows
+        )
+        return {
+            "round_id": normalized_round_id,
+            "targets": targets,
+            "required_devices": required_devices,
+            "confirmed_visits": confirmed_visits,
+            "fully_covered": fully_covered,
+            "coverage_rate": 0.0 if targets == 0 else fully_covered / targets,
+        }
+
+    def recent_mobile_traces(
+        self, round_id: str, *, limit: int = 100
+    ) -> list[dict[str, object]]:
+        normalized_round_id = str(round_id).strip()
+        if not normalized_round_id:
+            raise ValueError("round id must be nonempty")
+        bounded_limit = max(1, min(int(limit), 500))
+        with self._connect_read_only() as connection:
+            existing = connection.execute(
+                "SELECT 1 FROM exposure_rounds WHERE round_id = ?",
+                (normalized_round_id,),
+            ).fetchone()
+            if existing is None:
+                raise KeyError(normalized_round_id)
+            required_devices = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM round_device_seeds WHERE round_id = ?",
+                    (normalized_round_id,),
+                ).fetchone()[0]
+            )
+            rows = connection.execute(
+                """
+                SELECT assignment.identity_key, target.username,
+                       SUM(assignment.visit_confirmed_at_ms IS NOT NULL)
+                           AS confirmed_devices,
+                       MAX(assignment.visit_confirmed_at_ms)
+                           AS last_visit_confirmed_at_ms
+                FROM round_assignments AS assignment
+                JOIN exposure_rounds AS round
+                  ON round.round_id = assignment.round_id
+                JOIN pool_targets AS target
+                  ON target.pool_id = round.pool_id
+                 AND target.identity_key = assignment.identity_key
+                WHERE assignment.round_id = ?
+                GROUP BY assignment.identity_key, target.username
+                HAVING confirmed_devices > 0
+                ORDER BY last_visit_confirmed_at_ms DESC, assignment.identity_key
+                LIMIT ?
+                """,
+                (normalized_round_id, bounded_limit),
+            ).fetchall()
+        return [
+            {
+                "identity_key": str(row["identity_key"]),
+                "username": str(row["username"]),
+                "confirmed_devices": int(row["confirmed_devices"]),
+                "required_devices": required_devices,
+                "fully_covered": int(row["confirmed_devices"]) == required_devices,
+                "last_visit_confirmed_at_ms": int(row["last_visit_confirmed_at_ms"]),
+            }
+            for row in rows
+        ]
+
     def retry_assignment(self, assignment_id: int) -> RoundAssignment:
         if assignment_id <= 0:
             raise ValueError("assignment id must be positive")

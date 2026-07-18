@@ -1311,3 +1311,75 @@ def test_invitation_evidence_survives_normalization_and_configuration_reload(
         ).last_invited_at_ms
         == 101_000
     )
+
+
+def test_browser_dm_emits_idempotent_funnel_and_verified_invitation_events(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "db.sqlite")
+    database.migrate()
+    service = BrowserDmService(
+        database,
+        registry_with_browser_account(),
+        FakeReplyClient(("Continue on WhatsApp: +1 555 0100",)),
+        clock=lambda: 100.0,
+    )
+    inbound = BrowserInbound(
+        "account-01",
+        "phone-01",
+        "conversation-01",
+        "fp-funnel",
+        "buyer",
+        "What is the price?",
+        99_000,
+    )
+
+    plan = service.plan(inbound)
+    service.plan(inbound)
+    assert database.lead_funnel_snapshot() == {
+        "dm_inbound": 1,
+        "engaged": 1,
+        "qualified": 1,
+        "invited": 0,
+        "contact_captured": 0,
+        "human_required": 0,
+    }
+
+    assert service.record_result("account-01", "phone-01", plan.plan_id, "sent")
+    assert database.lead_funnel_snapshot()["invited"] == 1
+
+
+@pytest.mark.parametrize(
+    ("text", "stage"),
+    (
+        ("My WhatsApp is +44 7700 900123", "contact_captured"),
+        ("I need a refund", "human_required"),
+    ),
+)
+def test_browser_dm_emits_priority_funnel_events(
+    tmp_path: Path, text: str, stage: str
+) -> None:
+    database = Database(tmp_path / "db.sqlite")
+    database.migrate()
+    service = BrowserDmService(
+        database,
+        registry_with_browser_account(),
+        FakeReplyClient(),
+        clock=lambda: 100.0,
+    )
+
+    service.plan(
+        BrowserInbound(
+            "account-01",
+            "phone-01",
+            "conversation-01",
+            f"fp-{stage}",
+            "buyer",
+            text,
+            99_000,
+        )
+    )
+
+    snapshot = database.lead_funnel_snapshot()
+    assert snapshot["dm_inbound"] == 1
+    assert snapshot[stage] == 1

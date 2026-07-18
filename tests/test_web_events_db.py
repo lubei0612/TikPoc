@@ -1010,6 +1010,130 @@ def test_uncertain_browser_action_is_busy_for_same_owner_until_expiry(
     )
 
 
+def test_lead_funnel_sales_health_and_latency_read_models(tmp_path: Path) -> None:
+    database = Database(tmp_path / "tasks.db")
+    database.migrate()
+
+    for stage in (
+        "dm_inbound",
+        "engaged",
+        "qualified",
+        "invited",
+        "contact_captured",
+        "human_required",
+    ):
+        assert database.record_lead_funnel_event(
+            "account-01",
+            "buyer",
+            stage,
+            "fp-01",
+            conversation_id="conversation-01",
+            occurred_at_ms=1_000,
+        )
+    assert not database.record_lead_funnel_event(
+        "account-01",
+        "buyer",
+        "contact_captured",
+        "fp-01",
+        conversation_id="conversation-01",
+        occurred_at_ms=2_000,
+    )
+    assert database.lead_funnel_snapshot() == {
+        "dm_inbound": 1,
+        "engaged": 1,
+        "qualified": 1,
+        "invited": 1,
+        "contact_captured": 1,
+        "human_required": 1,
+    }
+    recent = database.recent_leads(limit=1)[0]
+    assert {
+        "account_id": "account-01",
+        "participant_username": "buyer",
+        "conversation_id": "conversation-01",
+        "stage": "human_required",
+    }.items() <= recent.items()
+
+    sale_id = database.record_lead_sale(
+        "account-01",
+        "buyer",
+        amount_minor=12_345,
+        currency="USD",
+        status="confirmed",
+        occurred_at_ms=3_000,
+    )
+    assert sale_id > 0
+    assert database.lead_sales_snapshot() == {
+        "by_status": {"confirmed": 1},
+        "confirmed_revenue_minor": {"USD": 12_345},
+        "sales": 1,
+    }
+
+    database.upsert_browser_health(
+        "account-01",
+        "messages",
+        device_id="phone-01",
+        status="ready",
+        observed_at_ms=4_000,
+        detail="Messages visible",
+    )
+    assert database.browser_health_snapshot() == [
+        {
+            "account_id": "account-01",
+            "page_role": "messages",
+            "device_id": "phone-01",
+            "status": "ready",
+            "observed_at_ms": 4_000,
+            "detail": "Messages visible",
+        }
+    ]
+
+    first, _ = database.reserve_browser_inbound_plan(
+        "account-01", "conversation-01", "latency-1", "buyer", "hello", 1_000
+    )
+    second, _ = database.reserve_browser_inbound_plan(
+        "account-01", "conversation-01", "latency-2", "buyer", "again", 2_000
+    )
+    for plan, sent_at_ms in ((first, 1_100), (second, 2_900)):
+        database.complete_browser_reply_plan(
+            plan.id, reply_text="reply", stage="engaged"
+        )
+        with sqlite3.connect(database.path) as connection:
+            connection.execute(
+                "UPDATE browser_reply_plans SET created_at_ms=? WHERE id=?",
+                (1_000 if plan.id == first.id else 2_000, plan.id),
+            )
+        assert database.record_browser_reply_result(
+            "account-01", plan.id, "sent", now_ms=sent_at_ms
+        )
+    assert database.reply_latency_snapshot() == {
+        "confirmed_replies": 2,
+        "median_ms": 500,
+        "p90_ms": 900,
+    }
+
+
+@pytest.mark.parametrize(
+    ("amount_minor", "currency", "status"),
+    ((0, "USD", "confirmed"), (100, "usd", "confirmed"), (100, "USD", "paid")),
+)
+def test_lead_sale_rejects_invalid_business_values(
+    tmp_path: Path, amount_minor: int, currency: str, status: str
+) -> None:
+    database = Database(tmp_path / "tasks.db")
+    database.migrate()
+
+    with pytest.raises(ValueError):
+        database.record_lead_sale(
+            "account-01",
+            "buyer",
+            amount_minor=amount_minor,
+            currency=currency,
+            status=status,
+            occurred_at_ms=1_000,
+        )
+
+
 def test_uncertain_and_superseded_browser_actions_can_be_reclaimed_after_expiry(
     tmp_path: Path,
 ) -> None:

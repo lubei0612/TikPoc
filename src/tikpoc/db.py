@@ -125,6 +125,15 @@ _CONVERSATION_STAGE_RANK = {
     "closed": 6,
 }
 _CONVERSATION_STAGE_ALIASES = {"qualifying": "qualified"}
+_FUNNEL_STAGES = (
+    "dm_inbound",
+    "engaged",
+    "qualified",
+    "invited",
+    "contact_captured",
+    "human_required",
+)
+_SALE_STATUSES = {"pending", "confirmed", "refunded", "cancelled"}
 
 
 def _canonical_conversation_stage(stage: str) -> str:
@@ -433,6 +442,27 @@ class Database:
                     ADD COLUMN invitation_evidence_known INTEGER NOT NULL DEFAULT 0
                     """
                 )
+            if "created_at_ms" not in browser_reply_plan_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE browser_reply_plans
+                    ADD COLUMN created_at_ms INTEGER NOT NULL DEFAULT 0
+                    """
+                )
+            if "sent_at_ms" not in browser_reply_plan_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE browser_reply_plans
+                    ADD COLUMN sent_at_ms INTEGER NOT NULL DEFAULT 0
+                    """
+                )
+            connection.execute(
+                """
+                UPDATE browser_reply_plans
+                SET created_at_ms=CAST(strftime('%s', created_at) AS INTEGER) * 1000
+                WHERE created_at_ms=0
+                """
+            )
             connection.execute(
                 """
                 UPDATE browser_reply_plans SET stage='qualified'
@@ -463,6 +493,52 @@ class Database:
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY(account_id, action_type, action_key)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS lead_funnel_events (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_id TEXT NOT NULL,
+                    participant_username TEXT NOT NULL,
+                    conversation_id TEXT NOT NULL DEFAULT '',
+                    stage TEXT NOT NULL,
+                    source_key TEXT NOT NULL,
+                    occurred_at_ms INTEGER NOT NULL,
+                    UNIQUE(account_id, participant_username, stage, source_key)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS lead_funnel_recent_idx
+                ON lead_funnel_events(occurred_at_ms DESC, event_id DESC)
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS lead_sales (
+                    sale_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_id TEXT NOT NULL,
+                    participant_username TEXT NOT NULL,
+                    amount_minor INTEGER NOT NULL,
+                    currency TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    occurred_at_ms INTEGER NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS browser_account_health (
+                    account_id TEXT NOT NULL,
+                    page_role TEXT NOT NULL,
+                    device_id TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL,
+                    observed_at_ms INTEGER NOT NULL,
+                    detail TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY(account_id, page_role)
                 )
                 """
             )
@@ -958,8 +1034,9 @@ class Database:
                 """
                 INSERT OR IGNORE INTO browser_reply_plans(
                     account_id, conversation_id, inbound_fingerprint,
-                    participant_username, inbound_text, inbound_timestamp_ms
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    participant_username, inbound_text, inbound_timestamp_ms,
+                    created_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, CAST(strftime('%s', 'now') AS INTEGER) * 1000)
                 """,
                 (
                     account_id,
@@ -1403,10 +1480,10 @@ class Database:
             connection.execute(
                 """
                 UPDATE browser_reply_plans
-                SET state='sent', updated_at=CURRENT_TIMESTAMP
+                SET state='sent', sent_at_ms=?, updated_at=CURRENT_TIMESTAMP
                 WHERE id=? AND state=?
                 """,
-                (int(plan_id), current_state),
+                (int(now_ms), int(plan_id), current_state),
             )
             message_timestamp_ms = max(int(now_ms), int(row["inbound_timestamp_ms"]))
             connection.execute(
@@ -1459,6 +1536,216 @@ class Database:
                 ),
             )
             return True
+
+    def record_lead_funnel_event(
+        self,
+        account_id: str,
+        participant_username: str,
+        stage: str,
+        source_key: str,
+        *,
+        conversation_id: str = "",
+        occurred_at_ms: int,
+    ) -> bool:
+        _require_identity(account_id, participant_username, source_key)
+        normalized_stage = str(stage).strip()
+        if normalized_stage not in _FUNNEL_STAGES:
+            raise ValueError(f"invalid lead funnel stage: {stage}")
+        if int(occurred_at_ms) < 0:
+            raise ValueError("lead funnel timestamp must be nonnegative")
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT OR IGNORE INTO lead_funnel_events(
+                    account_id, participant_username, conversation_id,
+                    stage, source_key, occurred_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    account_id.strip(),
+                    participant_username.strip(),
+                    conversation_id.strip(),
+                    normalized_stage,
+                    source_key.strip(),
+                    int(occurred_at_ms),
+                ),
+            )
+            return cursor.rowcount == 1
+
+    def lead_funnel_snapshot(self) -> dict[str, int]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT stage, COUNT(*) AS count
+                FROM lead_funnel_events GROUP BY stage
+                """
+            ).fetchall()
+        counts = {str(row["stage"]): int(row["count"]) for row in rows}
+        return {stage: counts.get(stage, 0) for stage in _FUNNEL_STAGES}
+
+    def recent_leads(self, *, limit: int = 20) -> list[dict[str, object]]:
+        bounded_limit = max(1, min(int(limit), 100))
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                WITH ranked AS (
+                    SELECT account_id, participant_username, conversation_id,
+                           stage, occurred_at_ms,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY account_id, participant_username
+                               ORDER BY occurred_at_ms DESC, event_id DESC
+                           ) AS rank
+                    FROM lead_funnel_events
+                )
+                SELECT account_id, participant_username, conversation_id,
+                       stage, occurred_at_ms
+                FROM ranked WHERE rank=1
+                ORDER BY occurred_at_ms DESC, account_id, participant_username
+                LIMIT ?
+                """,
+                (bounded_limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def record_lead_sale(
+        self,
+        account_id: str,
+        participant_username: str,
+        *,
+        amount_minor: int,
+        currency: str,
+        status: str,
+        occurred_at_ms: int,
+    ) -> int:
+        _require_identity(account_id, participant_username)
+        if int(amount_minor) <= 0:
+            raise ValueError("sale amount must be a positive minor-unit integer")
+        if len(currency) != 3 or not currency.isascii() or not currency.isupper():
+            raise ValueError("sale currency must be three uppercase ASCII letters")
+        if status not in _SALE_STATUSES:
+            raise ValueError(f"invalid sale status: {status}")
+        if int(occurred_at_ms) < 0:
+            raise ValueError("sale timestamp must be nonnegative")
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO lead_sales(
+                    account_id, participant_username, amount_minor,
+                    currency, status, occurred_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    account_id.strip(),
+                    participant_username.strip(),
+                    int(amount_minor),
+                    currency,
+                    status,
+                    int(occurred_at_ms),
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def lead_sales_snapshot(self) -> dict[str, object]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT status, currency, COUNT(*) AS count,
+                       SUM(amount_minor) AS amount_minor
+                FROM lead_sales GROUP BY status, currency
+                """
+            ).fetchall()
+        by_status: dict[str, int] = {}
+        revenue: dict[str, int] = {}
+        sales = 0
+        for row in rows:
+            count = int(row["count"])
+            status = str(row["status"])
+            sales += count
+            by_status[status] = by_status.get(status, 0) + count
+            if status == "confirmed":
+                currency = str(row["currency"])
+                revenue[currency] = revenue.get(currency, 0) + int(row["amount_minor"])
+        return {
+            "by_status": by_status,
+            "confirmed_revenue_minor": revenue,
+            "sales": sales,
+        }
+
+    def upsert_browser_health(
+        self,
+        account_id: str,
+        page_role: str,
+        *,
+        device_id: str,
+        status: str,
+        observed_at_ms: int,
+        detail: str = "",
+    ) -> None:
+        _require_identity(account_id, page_role, status)
+        if int(observed_at_ms) < 0:
+            raise ValueError("browser health timestamp must be nonnegative")
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO browser_account_health(
+                    account_id, page_role, device_id, status,
+                    observed_at_ms, detail
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(account_id, page_role) DO UPDATE SET
+                    device_id=excluded.device_id,
+                    status=excluded.status,
+                    observed_at_ms=excluded.observed_at_ms,
+                    detail=excluded.detail
+                WHERE excluded.observed_at_ms >= browser_account_health.observed_at_ms
+                """,
+                (
+                    account_id.strip(),
+                    page_role.strip(),
+                    device_id.strip(),
+                    status.strip(),
+                    int(observed_at_ms),
+                    detail.strip(),
+                ),
+            )
+
+    def browser_health_snapshot(self) -> list[dict[str, object]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT account_id, page_role, device_id, status,
+                       observed_at_ms, detail
+                FROM browser_account_health
+                ORDER BY account_id, page_role
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def reply_latency_snapshot(self) -> dict[str, int]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT sent_at_ms - created_at_ms AS latency_ms
+                FROM browser_reply_plans
+                WHERE state='sent' AND sent_at_ms >= created_at_ms
+                  AND created_at_ms > 0
+                ORDER BY latency_ms
+                """
+            ).fetchall()
+        latencies = [int(row["latency_ms"]) for row in rows]
+        if not latencies:
+            return {"confirmed_replies": 0, "median_ms": 0, "p90_ms": 0}
+        middle = len(latencies) // 2
+        median_ms = (
+            latencies[middle]
+            if len(latencies) % 2
+            else (latencies[middle - 1] + latencies[middle]) // 2
+        )
+        p90_index = max(0, (9 * len(latencies) + 9) // 10 - 1)
+        return {
+            "confirmed_replies": len(latencies),
+            "median_ms": median_ms,
+            "p90_ms": latencies[p90_index],
+        }
 
     def claim_browser_action(
         self,
