@@ -27,6 +27,7 @@ export function InboxView() {
   const [notice, setNotice] = useState<string | null>(null);
   const selectionController = useRef<AbortController | null>(null);
   const selectionGeneration = useRef(0);
+  const currentSelectionKey = useRef("");
 
   const loadList = useCallback(async (signal?: AbortSignal) => {
     const next = await getLeads(undefined, signal);
@@ -74,6 +75,7 @@ export function InboxView() {
   }, [fetchSelected]);
 
   const choose = (conversation: LeadConversation) => {
+    currentSelectionKey.current = `${conversation.account_id}:${conversation.conversation_id}`;
     setSelectedConversation(conversation);
     setSelected(null);
     setError(null);
@@ -83,13 +85,14 @@ export function InboxView() {
 
   const runAction = async (name: string, command: () => Promise<unknown>, success: string) => {
     if (!selectedConversation) return;
+    const commandSelectionKey = `${selectedConversation.account_id}:${selectedConversation.conversation_id}`;
     setAction(name);
     setError(null);
     setNotice(null);
     try {
       await command();
       setNotice(success);
-      await requestSelected(selectedConversation, fingerprint);
+      if (currentSelectionKey.current === commandSelectionKey) await requestSelected(selectedConversation, fingerprint);
     } catch (reason) {
       setError(errorText(reason));
     } finally {
@@ -129,7 +132,7 @@ export function InboxView() {
         <ConversationList conversations={snapshot.conversations} selectedId={selectedConversation?.conversation_id ?? null} onSelect={choose} />
       </section>
       {selectedConversation && !selected && <aside className="conversation-drawer drawer-loading"><span className="loading-line" />Loading conversation</aside>}
-      {selectedConversation && selected && <ConversationDrawer account={account} conversation={selectedConversation} lead={selected} action={action} error={error} notice={notice} canCreatePlan={Boolean(fingerprint)} onClose={() => { selectionGeneration.current += 1; selectionController.current?.abort(); setSelectedConversation(null); setSelected(null); }} onTakeover={() => runAction("takeover", () => takeOverLead(selectedConversation.account_id, selectedConversation.conversation_id, crypto.randomUUID()), "Human takeover confirmed.")} onManualPlan={(text) => runAction("manual", () => createManualReplyPlan(selectedConversation.account_id, selectedConversation.conversation_id, crypto.randomUUID(), fingerprint, text), "Immutable send plan created; delivery is pending.")} onSale={(amount, currency, status) => runAction("sale", () => recordSale(selectedConversation.account_id, selectedConversation.conversation_id, { commandId: crypto.randomUUID(), amountMinor: Math.round(Number(amount) * 100), currency, status, occurredAtMs: Date.now() }), "Sale recorded by the server.")} />}
+      {selectedConversation && selected && <ConversationDrawer account={account} conversation={selectedConversation} lead={selected} action={action} error={error} notice={notice} canCreatePlan={Boolean(fingerprint)} onClose={() => { currentSelectionKey.current = ""; selectionGeneration.current += 1; selectionController.current?.abort(); setSelectedConversation(null); setSelected(null); }} onTakeover={() => runAction("takeover", () => takeOverLead(selectedConversation.account_id, selectedConversation.conversation_id, crypto.randomUUID()), "Human takeover confirmed.")} onManualPlan={(text) => { if (!fingerprint) { setError("No inbound message is available in bounded history."); return; } void runAction("manual", () => createManualReplyPlan(selectedConversation.account_id, selectedConversation.conversation_id, crypto.randomUUID(), fingerprint, text), "Immutable send plan created; delivery is pending."); }} onSale={(amount, currency, status) => runAction("sale", () => recordSale(selectedConversation.account_id, selectedConversation.conversation_id, { commandId: crypto.randomUUID(), amountMinor: Math.round(Number(amount) * 100), currency, status, occurredAtMs: Date.now() }), "Sale recorded by the server.")} />}
     </main>
   );
 }
