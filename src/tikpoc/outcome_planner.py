@@ -52,6 +52,15 @@ def get_or_create_plan(
     requested_outcome = (
         draw_outcome(seed) if forced_draw is None else OutcomeKind(forced_draw)
     )
+    if forced_draw is None:
+        return repository.create_paced_action_plan(
+            round_id=round_id,
+            identity_key=identity_key,
+            device_id=device_id,
+            seed=seed,
+            now_ms=now_ms,
+            hourly_limits=HOURLY_LIMITS,
+        )
     return repository.create_action_plan(
         round_id=round_id,
         identity_key=identity_key,

@@ -21,7 +21,7 @@ def test_pacing_state_refills_to_capacity_and_consumes_once(tmp_path: Path) -> N
 
     assert 0 <= initial.tokens < 1
     assert repeated == initial
-    assert full.tokens == 1
+    assert 1 <= full.tokens < 2
     assert full.ready is True
     assert repository.consume_action_token(
         "phone-01", OutcomeKind.LIKE, now_ms=36_000, limit=100

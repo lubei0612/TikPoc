@@ -85,7 +85,7 @@ def _eligible_repository(
     return repository, round_id, tuple(target.identity_key for target in targets)
 
 
-def test_each_device_persists_an_independent_equal_weight_draw(tmp_path: Path) -> None:
+def test_each_device_persists_an_independent_paced_plan(tmp_path: Path) -> None:
     repository, round_id, identities = _eligible_repository(
         tmp_path,
         device_ids=("phone-01", "phone-02", "phone-03"),
@@ -113,6 +113,35 @@ def test_each_device_persists_an_independent_equal_weight_draw(tmp_path: Path) -
         )
         == plans[0]
     )
+
+
+def test_dense_eligible_traffic_paces_every_limit_across_the_hour(
+    tmp_path: Path,
+) -> None:
+    repository, round_id, identities = _eligible_repository(tmp_path, target_count=202)
+    started_at_ms = 3_600_000
+    plans = [
+        get_or_create_plan(
+            repository,
+            round_id,
+            identity_key,
+            "phone-01",
+            now_ms=started_at_ms + round(index * 3_600_000 / (len(identities) - 1)),
+        )
+        for index, identity_key in enumerate(identities)
+    ]
+    timestamps = {
+        outcome: [
+            plan.created_at_ms for plan in plans if plan.effective_outcome is outcome
+        ]
+        for outcome in HOURLY_LIMITS
+    }
+
+    assert {outcome: len(values) for outcome, values in timestamps.items()} == dict(
+        HOURLY_LIMITS
+    )
+    assert all(values[-1] - values[0] > 3_000_000 for values in timestamps.values())
+    assert sum(plan.effective_outcome is OutcomeKind.TRACE for plan in plans) == 63
 
 
 @pytest.mark.parametrize(

@@ -2315,6 +2315,137 @@ class AcquisitionRepository:
             )
             return self._action_plan_by_id(connection, int(cursor.lastrowid))
 
+    def create_paced_action_plan(
+        self,
+        *,
+        round_id: str,
+        identity_key: str,
+        device_id: str,
+        seed: str,
+        now_ms: int,
+        hourly_limits: Mapping[OutcomeKind, int],
+    ) -> ActionPlan:
+        if now_ms < 0:
+            raise ValueError("action plan timestamp must be nonnegative")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = self._action_plan(connection, round_id, identity_key, device_id)
+            if existing is not None:
+                return existing
+            snapshot = self._profile_snapshot(connection, round_id, identity_key)
+            if snapshot is None:
+                raise ValueError("profile snapshot is not ready")
+            assignment = connection.execute(
+                """
+                SELECT visit_confirmed_at_ms FROM round_assignments
+                WHERE round_id = ? AND identity_key = ? AND device_id = ?
+                """,
+                (round_id, identity_key, device_id),
+            ).fetchone()
+            if assignment is None or assignment["visit_confirmed_at_ms"] is None:
+                raise ValueError(
+                    "device has no confirmed profile visit for action plan"
+                )
+
+            requested = OutcomeKind.TRACE
+            effective = OutcomeKind.TRACE
+            quota_reason = (
+                "profile_ineligible" if not snapshot.eligible else "pacing_not_due"
+            )
+            quota_window_start_ms: int | None = None
+            selected_state: ActionPacingState | None = None
+            if snapshot.eligible:
+                candidates: list[ActionPacingState] = []
+                for outcome in (
+                    OutcomeKind.LIKE,
+                    OutcomeKind.FAVORITE,
+                    OutcomeKind.REPOST,
+                ):
+                    limit = int(hourly_limits[outcome])
+                    if limit <= 0:
+                        raise ValueError("hourly limits must be positive")
+                    state = self._action_pacing_state(
+                        connection,
+                        device_id,
+                        outcome,
+                        now_ms=now_ms,
+                        limit=limit,
+                    )
+                    if state.ready:
+                        candidates.append(state)
+                if candidates:
+                    total_weight = sum(state.limit for state in candidates)
+                    selected_weight = int(seed[:16], 16) % total_weight
+                    for state in candidates:
+                        if selected_weight < state.limit:
+                            selected_state = state
+                            break
+                        selected_weight -= state.limit
+                    if selected_state is None:
+                        raise RuntimeError("paced outcome selection failed")
+                    requested = selected_state.outcome
+                    effective = requested
+                    quota_reason = None
+                    quota_window_start_ms = now_ms - now_ms % 3_600_000
+                    connection.execute(
+                        """
+                        INSERT OR IGNORE INTO acquisition_quota_windows(
+                            device_id, outcome, window_start_ms
+                        ) VALUES (?, ?, ?)
+                        """,
+                        (device_id, requested.value, quota_window_start_ms),
+                    )
+                    reserved = connection.execute(
+                        """
+                        UPDATE acquisition_quota_windows
+                        SET reserved_count = reserved_count + 1
+                        WHERE device_id = ? AND outcome = ? AND window_start_ms = ?
+                          AND reserved_count < ?
+                        """,
+                        (
+                            device_id,
+                            requested.value,
+                            quota_window_start_ms,
+                            selected_state.limit,
+                        ),
+                    )
+                    if reserved.rowcount != 1:
+                        requested = OutcomeKind.TRACE
+                        effective = OutcomeKind.TRACE
+                        quota_reason = f"{selected_state.outcome.value}_limit_reached"
+                        quota_window_start_ms = None
+                        selected_state = None
+
+            if selected_state is not None:
+                connection.execute(
+                    """
+                    UPDATE action_pacing_state SET tokens = tokens - 1
+                    WHERE device_id = ? AND outcome = ? AND tokens >= 1
+                    """,
+                    (device_id, selected_state.outcome.value),
+                )
+            cursor = connection.execute(
+                """
+                INSERT INTO device_action_plans(
+                    round_id, identity_key, device_id, seed,
+                    requested_outcome, effective_outcome,
+                    quota_window_start_ms, quota_reason, state, created_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'planned', ?)
+                """,
+                (
+                    round_id,
+                    identity_key,
+                    device_id,
+                    seed,
+                    requested.value,
+                    effective.value,
+                    quota_window_start_ms,
+                    quota_reason,
+                    now_ms,
+                ),
+            )
+            return self._action_plan_by_id(connection, int(cursor.lastrowid))
+
     def action_plan(
         self, round_id: str, identity_key: str, device_id: str
     ) -> ActionPlan | None:
@@ -2432,7 +2563,7 @@ class AcquisitionRepository:
             if now_ms < updated_at_ms:
                 raise ValueError("action pacing time cannot move backward")
             tokens = min(
-                1.0,
+                2.0,
                 float(row["tokens"]) + (now_ms - updated_at_ms) * limit / 3_600_000,
             )
             connection.execute(

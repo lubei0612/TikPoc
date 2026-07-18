@@ -21,12 +21,14 @@ Per account limits remain like 100, favorite 14, and repost 25 in every rolling
 reserve capacity until their timestamp leaves the window. A transaction must
 never create a plan that makes rolling usage exceed its limit.
 
-Each device/outcome owns a durable token bucket with capacity one. Tokens refill
+Each device/outcome owns a durable token bucket with capacity two. Tokens refill
 at `limit / 3,600,000` per millisecond. Initial token fractions are derived from
 the device/outcome seed so the three actions do not start together. At an
 eligible target, all actions with a full token and rolling headroom become
 candidates. A deterministic seeded weighted draw selects among candidates; the
-selected token is consumed in the same transaction as plan creation. When no
+selected token is consumed in the same transaction as plan creation. The second
+token preserves small overdue fractions caused by discrete target arrivals but
+never overrides the exact rolling limit. When no
 action is due, the outcome is trace. This naturally intersperses trace visits
 and distributes maximum usage over the full hour.
 
@@ -61,4 +63,3 @@ fixed-hour quota surface to rolling one-hour quota.
 - Profiles with one post are eligible; zero-post profiles are trace-only.
 - Visible route identity and metrics are required before visit/snapshot success.
 - A clean 500-target device run has mean below 6.5 s and P90 below 8.64 s.
-
