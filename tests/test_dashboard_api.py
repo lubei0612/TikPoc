@@ -365,8 +365,8 @@ def test_browser_health_rejects_inconsistent_scan_timestamps(
     body = _browser_post_bodies()["/api/browser-health"]
     body.update(
         timestamp_ms=4_000,
-        last_scan_at_ms=3_900,
-        last_success_at_ms=4_001,
+        last_scan_at_ms=4_001,
+        last_success_at_ms=3_900,
         scan_state="idle",
     )
 
@@ -378,6 +378,29 @@ def test_browser_health_rejects_inconsistent_scan_timestamps(
 
     assert response.status_code == 400
     assert response.json() == {"error": "invalid browser request"}
+
+
+def test_browser_health_accepts_completed_observer_timestamp_order(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(
+        create_app(tmp_path / "completed-health.db", registry=_registry(tmp_path))
+    )
+    body = _browser_post_bodies()["/api/browser-health"]
+    body.update(
+        timestamp_ms=4_000,
+        last_scan_at_ms=3_800,
+        last_success_at_ms=3_900,
+        scan_state="idle",
+    )
+
+    response = client.post(
+        "/api/browser-health",
+        headers={"Origin": "https://www.tiktok.com"},
+        json=body,
+    )
+
+    assert response.status_code == 200
 
 
 def test_browser_health_normalizes_future_client_clock_to_server_time(
@@ -394,8 +417,8 @@ def test_browser_health_normalizes_future_client_clock_to_server_time(
     body = _browser_post_bodies()["/api/browser-health"]
     body.update(
         timestamp_ms=9_000_000,
-        last_scan_at_ms=8_999_900,
-        last_success_at_ms=8_999_800,
+        last_scan_at_ms=8_999_800,
+        last_success_at_ms=8_999_900,
         scan_state="idle",
     )
 
@@ -408,8 +431,8 @@ def test_browser_health_normalizes_future_client_clock_to_server_time(
     assert response.status_code == 200
     health = Database(database_path).browser_health_snapshot()[0]
     assert health["observed_at_ms"] == 4_000
-    assert health["last_scan_at_ms"] == 3_900
-    assert health["last_success_at_ms"] == 3_800
+    assert health["last_scan_at_ms"] == 3_800
+    assert health["last_success_at_ms"] == 3_900
 
 
 def test_browser_account_without_expected_username_reports_unverified_health(

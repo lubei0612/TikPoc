@@ -89,7 +89,9 @@ class BrowserHealthRequest(BrowserIdentityRequest):
 
     @model_validator(mode="after")
     def validate_scan_timestamps(self) -> "BrowserHealthRequest":
-        if not (self.last_success_at_ms <= self.last_scan_at_ms <= self.timestamp_ms):
+        if max(self.last_scan_at_ms, self.last_success_at_ms) > self.timestamp_ms:
+            raise ValueError("browser scan timestamps are inconsistent")
+        if self.last_success_at_ms and not self.last_scan_at_ms:
             raise ValueError("browser scan timestamps are inconsistent")
         return self
 
