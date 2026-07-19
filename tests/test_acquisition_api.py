@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from tikpoc.acquisition_db import AcquisitionRepository
 from tikpoc.acquisition_models import DeviceDiagnostics
+from tikpoc.acquisition_service import merge_browser_health_rows
 from tikpoc.api import create_app
 from tikpoc.db import Database
 from tikpoc.importer import Target
@@ -330,7 +331,47 @@ def test_operations_snapshot_reads_browser_health_in_acquisition_transaction(
             "binding_state": "ready",
             "status": "ready",
             "observed_at_ms": 11_500,
+            "last_scan_at_ms": 0,
+            "last_success_at_ms": 0,
+            "scan_state": "not_started",
             "detail": "ready",
+        }
+    ]
+
+
+def test_browser_health_requires_a_fresh_successful_scan() -> None:
+    rows = merge_browser_health_rows(
+        (),
+        [
+            {
+                "account_id": "account-01",
+                "page_role": "messages",
+                "device_id": "phone-01",
+                "status": "ready",
+                "observed_at_ms": 299_000,
+                "last_scan_at_ms": 299_000,
+                "last_success_at_ms": 100_000,
+                "scan_state": "error",
+            }
+        ],
+        now_ms=300_000,
+    )
+
+    assert rows == [
+        {
+            "account_id": "account-01",
+            "page_role": "messages",
+            "device_id": "phone-01",
+            "browser_profile_label": "",
+            "expected_tiktok_username": "",
+            "observed_username": "",
+            "binding_state": "stale",
+            "status": "stale",
+            "observed_at_ms": 299_000,
+            "last_scan_at_ms": 299_000,
+            "last_success_at_ms": 100_000,
+            "scan_state": "error",
+            "detail": "",
         }
     ]
 

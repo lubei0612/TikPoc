@@ -64,6 +64,9 @@ def merge_browser_health_rows(
     for account_id, device_id, profile_label, expected_username, role in identities:
         row = stored.get((account_id, role), {})
         observed_at_ms = int(row.get("observed_at_ms") or 0)
+        last_scan_at_ms = int(row.get("last_scan_at_ms") or 0)
+        last_success_at_ms = int(row.get("last_success_at_ms") or 0)
+        scan_state = str(row.get("scan_state") or "not_started")
         stored_state = str(row.get("status") or "unbound")
         if stored_state == "healthy":
             stored_state = "ready"
@@ -74,6 +77,11 @@ def merge_browser_health_rows(
         elif (
             observed_at_ms
             and int(now_ms) - observed_at_ms > _BROWSER_HEARTBEAT_STALE_MS
+        ):
+            binding_state = "stale"
+        elif last_scan_at_ms and (
+            not last_success_at_ms
+            or int(now_ms) - last_success_at_ms > _BROWSER_HEARTBEAT_STALE_MS
         ):
             binding_state = "stale"
         else:
@@ -89,6 +97,9 @@ def merge_browser_health_rows(
                 "binding_state": binding_state,
                 "status": binding_state,
                 "observed_at_ms": observed_at_ms,
+                "last_scan_at_ms": last_scan_at_ms,
+                "last_success_at_ms": last_success_at_ms,
+                "scan_state": scan_state,
                 "detail": str(row.get("detail") or ""),
             }
         )
@@ -911,7 +922,8 @@ class AcquisitionService:
         rows = connection.execute(
             """
             SELECT account_id, page_role, device_id, status,
-                   observed_at_ms, detail, observed_username
+                   observed_at_ms, detail, observed_username,
+                   last_scan_at_ms, last_success_at_ms, scan_state
             FROM browser_account_health
             ORDER BY account_id, page_role
             """
