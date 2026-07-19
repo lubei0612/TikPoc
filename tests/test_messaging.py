@@ -415,6 +415,34 @@ def test_ai_reply_uses_bounded_conversation_history_and_handoff_hint() -> None:
     ]
 
 
+def test_ai_reply_asks_channel_preference_without_disclosing_destinations() -> None:
+    requests = []
+
+    def opener(request, timeout):
+        requests.append(request)
+        return FakeResponse("Which channel do you prefer?")
+
+    client = AiReplyClient(
+        base_url="https://llm.example/v1",
+        api_key="secret",
+        model="reply-model",
+        opener=opener,
+    )
+
+    client.reply_conversation(
+        [{"direction": "inbound", "text": "I want to order"}],
+        private_channel_hint="CONTACT_A CHANNEL_A",
+        ask_private_channel_preference=True,
+        reply_tone="Brief and practical",
+    )
+
+    system = json.loads(requests[0].data)["messages"][0]["content"]
+    assert "Ask whether the sender prefers WhatsApp or Telegram" in system
+    assert "Brief and practical" in system
+    assert "CONTACT_A" not in system
+    assert "CHANNEL_A" not in system
+
+
 def test_reply_conversation_preserves_max_character_limit() -> None:
     client = AiReplyClient(
         base_url="https://llm.example/v1",

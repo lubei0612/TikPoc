@@ -125,6 +125,8 @@ def test_new_plan_passes_account_context_and_advances_inbound_state_once(
         "faq_context": "Shipping takes 5-7 days.",
         "conversation_stage": "qualified",
         "should_invite": True,
+        "ask_private_channel_preference": False,
+        "reply_tone": "",
         "fallback": "Thanks for your message.",
         "max_history_messages": 12,
     }
@@ -1042,6 +1044,75 @@ def test_second_meaningful_inbound_turn_requests_invitation(tmp_path: Path) -> N
         ).meaningful_turns
         == 2
     )
+
+
+def test_qualified_lead_is_asked_for_channel_preference_before_destination(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "db.sqlite")
+    database.migrate()
+    ai = FakeReplyClient(("Would you prefer WhatsApp or Telegram?",))
+    service = BrowserDmService(
+        database,
+        registry_with_browser_account(
+            private_channel_hint="",
+            whatsapp="CONTACT_A",
+            telegram="CHANNEL_A",
+        ),
+        ai,
+    )
+
+    reply = service.plan(
+        BrowserInbound(
+            "account-01",
+            "phone-01",
+            "conversation-01",
+            "fp-preference",
+            "buyer",
+            "I want to order a bag",
+            1,
+        )
+    )
+
+    assert reply.stage == "qualified"
+    assert ai.calls[0][1]["ask_private_channel_preference"] is True
+    assert ai.calls[0][1]["private_channel_hint"] == ""
+    assert "CONTACT_A" not in reply.reply_text
+    assert "CHANNEL_A" not in reply.reply_text
+
+
+def test_qualified_lead_receives_only_the_selected_channel(tmp_path: Path) -> None:
+    database = Database(tmp_path / "db.sqlite")
+    database.migrate()
+    ai = FakeReplyClient(
+        ("Contact us on WhatsApp: CONTACT_A if you would like to buy.",)
+    )
+    service = BrowserDmService(
+        database,
+        registry_with_browser_account(
+            private_channel_hint="",
+            whatsapp="WhatsApp: CONTACT_A",
+            telegram="Telegram: CHANNEL_A",
+        ),
+        ai,
+    )
+
+    reply = service.plan(
+        BrowserInbound(
+            "account-01",
+            "phone-01",
+            "conversation-01",
+            "fp-selected-channel",
+            "buyer",
+            "WhatsApp please, I want to order",
+            1,
+        )
+    )
+
+    assert reply.stage == "invited"
+    assert ai.calls[0][1]["private_channel_hint"] == "WhatsApp: CONTACT_A"
+    assert ai.calls[0][1]["ask_private_channel_preference"] is False
+    assert "CHANNEL_A" not in reply.reply_text
 
 
 def test_atomic_inbound_reservation_has_one_creator_across_connections(

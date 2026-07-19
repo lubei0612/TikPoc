@@ -69,6 +69,27 @@ def test_browser_account_does_not_require_business_credentials(tmp_path: Path) -
     assert account.browser_dm_enabled is True
 
 
+def test_browser_account_loads_separate_private_channels_and_reply_tone(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "accounts.yaml"
+    config.write_text(
+        "accounts:\n"
+        "  - account_id: account-01\n"
+        "    device_id: phone-01\n"
+        "    whatsapp: CONTACT_A\n"
+        "    telegram: CHANNEL_A\n"
+        "    reply_tone: Brief and practical\n",
+        encoding="utf-8",
+    )
+
+    account = WebAccountRegistry.from_path(config).by_account_id("account-01")
+
+    assert account.whatsapp == "CONTACT_A"
+    assert account.telegram == "CHANNEL_A"
+    assert account.reply_tone == "Brief and practical"
+
+
 def test_quoted_false_disables_boolean_account_settings(tmp_path: Path) -> None:
     config = tmp_path / "accounts.yaml"
     config.write_text(

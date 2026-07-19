@@ -35,6 +35,9 @@ class WebAccount:
     browser_dm_enabled: bool = True
     expected_tiktok_username: str = ""
     browser_profile_label: str = ""
+    whatsapp: str = ""
+    telegram: str = ""
+    reply_tone: str = ""
 
     def __post_init__(self) -> None:
         if self.mode is None:
@@ -153,6 +156,9 @@ class WebAccountRegistry:
                     private_channel_hint=str(
                         item.get("private_channel_hint") or ""
                     ).strip(),
+                    whatsapp=str(item.get("whatsapp") or "").strip(),
+                    telegram=str(item.get("telegram") or "").strip(),
+                    reply_tone=str(item.get("reply_tone") or "").strip(),
                     offer_context=str(item.get("offer_context") or "").strip(),
                     faq_text=faq_text,
                     reply_language=str(item.get("reply_language") or "auto").strip(),

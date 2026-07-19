@@ -32,6 +32,8 @@ def _build_system_prompt(
     conversation_stage: str,
     should_invite: bool,
     private_channel_hint: str,
+    ask_private_channel_preference: bool,
+    reply_tone: str,
 ) -> str:
     parts = [
         "Reply to the TikTok sender in the same language they use.",
@@ -46,6 +48,14 @@ def _build_system_prompt(
         "inventory, delivery promises, discounts, payment instructions, refund "
         "decisions, links, or contact details.",
     ]
+    tone = _bounded_prompt_fragment(reply_tone, 500)
+    if tone:
+        parts.append(f"Account reply tone: {tone}")
+    if ask_private_channel_preference:
+        parts.append(
+            "Ask whether the sender prefers WhatsApp or Telegram. Do not include "
+            "either destination until the sender chooses one."
+        )
     if should_invite:
         destination = _bounded_prompt_fragment(
             private_channel_hint, _PROMPT_DESTINATION_LIMIT
@@ -54,7 +64,9 @@ def _build_system_prompt(
             parts.append(
                 "Include one private-channel invitation using exactly this "
                 f"destination: {destination}. Do not repeat it if it already appears "
-                "in the conversation, and answer the sender's question first."
+                "in the conversation, answer the sender's question first, and end "
+                "with one short natural sentence inviting interested buyers to "
+                "contact that destination for details or purchasing."
             )
     return "\n".join(parts)[:_SYSTEM_PROMPT_LIMIT]
 
@@ -111,6 +123,8 @@ class AiReplyClient:
         faq_context: str = "",
         conversation_stage: str = "",
         should_invite: bool = False,
+        ask_private_channel_preference: bool = False,
+        reply_tone: str = "",
         fallback: str | None = None,
         max_history_messages: int = 12,
         max_characters: int = 300,
@@ -142,6 +156,8 @@ class AiReplyClient:
                         conversation_stage=conversation_stage,
                         should_invite=should_invite,
                         private_channel_hint=private_channel_hint,
+                        ask_private_channel_preference=ask_private_channel_preference,
+                        reply_tone=reply_tone,
                     ),
                 },
                 *conversation,

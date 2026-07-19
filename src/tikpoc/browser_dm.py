@@ -4,7 +4,11 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .db import BrowserConversationBusy, BrowserReplyPlan, Database
-from .lead_conversion import ConversationStage, assess_inbound
+from .lead_conversion import (
+    ConversationStage,
+    assess_inbound,
+    preferred_private_channel,
+)
 from .web_accounts import WebAccount, WebAccountRegistry
 
 __all__ = (
@@ -57,11 +61,13 @@ class BrowserDmService:
         reply_client,
         *,
         clock: Callable[[], float] = time.time,
+        account_overlay: Callable[[WebAccount], WebAccount] | None = None,
     ) -> None:
         self.database = database
         self.registry = registry
         self.reply_client = reply_client
         self.clock = clock
+        self.account_overlay = account_overlay or (lambda account: account)
         self._account_locks = {
             account.account_id: threading.Lock() for account in registry.accounts
         }
@@ -81,7 +87,27 @@ class BrowserDmService:
             or not account.browser_dm_enabled
         ):
             raise ValueError("browser direct messages are disabled for this account")
-        return account
+        return self.account_overlay(account)
+
+    @staticmethod
+    def _private_channel_selection(
+        account: WebAccount, inbound_text: str, *, invitation_due: bool
+    ) -> tuple[str, bool]:
+        if not invitation_due:
+            return "", False
+        channels = {
+            "whatsapp": _normalize_whitespace(account.whatsapp),
+            "telegram": _normalize_whitespace(account.telegram),
+        }
+        channels = {name: value for name, value in channels.items() if value}
+        if not channels:
+            return _normalize_whitespace(account.private_channel_hint), False
+        preferred = preferred_private_channel(inbound_text)
+        if preferred in channels:
+            return channels[preferred], False
+        if len(channels) == 1:
+            return next(iter(channels.values())), False
+        return "", True
 
     def plan(self, inbound: BrowserInbound) -> BrowserReply:
         values = (
@@ -184,9 +210,19 @@ class BrowserDmService:
                 )
                 return _reply_from_plan(completed)
 
-            private_channel_hint = _normalize_whitespace(account.private_channel_hint)
+            private_channel_hint, ask_channel_preference = (
+                self._private_channel_selection(
+                    account,
+                    plan.inbound_text,
+                    invitation_due=assessment.should_invite,
+                )
+            )
             configured_invite = bool(assessment.should_invite and private_channel_hint)
-            if assessment.should_invite and not configured_invite:
+            if (
+                assessment.should_invite
+                and not configured_invite
+                and not ask_channel_preference
+            ):
                 self.database.record_browser_diagnostic_event(
                     account.account_id,
                     "invite_configuration_missing",
@@ -231,6 +267,8 @@ class BrowserDmService:
                 faq_context=account.faq_text,
                 conversation_stage=assessment.stage.value,
                 should_invite=configured_invite,
+                ask_private_channel_preference=ask_channel_preference,
+                reply_tone=account.reply_tone,
                 fallback=account.fallback_acknowledgement,
                 max_history_messages=12,
             )
@@ -273,12 +311,25 @@ class BrowserDmService:
                 raise KeyError(plan_id)
             if plan.account_id != account.account_id:
                 raise ValueError("browser reply plan belongs to a different account")
+            migration_hints = (
+                account.private_channel_hint,
+                account.whatsapp,
+                account.telegram,
+            )
+            normalized_reply = _normalize_whitespace(plan.reply_text)
+            migration_hint = next(
+                (
+                    _normalize_whitespace(hint)
+                    for hint in migration_hints
+                    if _normalize_whitespace(hint)
+                    and _normalize_whitespace(hint) in normalized_reply
+                ),
+                "",
+            )
             reconciled = self.database.reconcile_browser_reply_invitation_evidence(
                 account.account_id,
                 plan.id,
-                private_channel_hint=_normalize_whitespace(
-                    account.private_channel_hint
-                ),
+                private_channel_hint=migration_hint,
             )
             now_ms = int(self.clock() * 1_000)
             recorded = self.database.record_browser_reply_result(

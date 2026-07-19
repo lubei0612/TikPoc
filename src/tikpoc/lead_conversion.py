@@ -209,6 +209,15 @@ def shows_buying_intent(text: str) -> bool:
     return any(pattern.search(normalized) for pattern in _BUYING_PATTERNS)
 
 
+def preferred_private_channel(text: str) -> str:
+    normalized = _normalize(text).casefold()
+    if re.search(r"\bwhats?app\b", normalized):
+        return "whatsapp"
+    if re.search(r"\btelegram\b|\btg\b", normalized):
+        return "telegram"
+    return ""
+
+
 def _accepts_private_channel(text: str) -> bool:
     normalized = _normalize(text)
     return any(

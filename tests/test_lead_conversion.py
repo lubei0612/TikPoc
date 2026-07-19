@@ -8,12 +8,26 @@ from tikpoc.lead_conversion import (
     build_lead_prompt,
     extract_contact,
     is_meaningful,
+    preferred_private_channel,
     requires_human,
     shows_buying_intent,
 )
 
 
 DAY_MS = 24 * 60 * 60 * 1000
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("WhatsApp please", "whatsapp"),
+        ("Telegram works for me", "telegram"),
+        ("可以用 TG 联系", "telegram"),
+        ("Tell me more here", ""),
+    ],
+)
+def test_preferred_private_channel(text: str, expected: str) -> None:
+    assert preferred_private_channel(text) == expected
 
 
 def _assess(
