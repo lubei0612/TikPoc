@@ -288,6 +288,72 @@ def test_cli_pool_import_validates_source_before_database_mutation(
     assert not database_path.exists()
 
 
+def test_cli_proxy_guard_runs_one_redacted_cycle(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    config_path = tmp_path / "devices.yaml"
+    _write_fleet_config(config_path)
+
+    def fake_run(config, adb_path):
+        assert len(config.devices) == 2
+        assert adb_path == Path("/sdk/adb")
+        return (
+            type(
+                "Health",
+                (),
+                {
+                    "proxy_state": "healthy",
+                    "http_status": 200,
+                },
+            )(),
+            type(
+                "Health",
+                (),
+                {
+                    "proxy_state": "corrected",
+                    "http_status": 200,
+                },
+            )(),
+        )
+
+    monkeypatch.setattr(cli, "_run_proxy_guard", fake_run, raising=False)
+
+    result = main(
+        [
+            "proxy-guard",
+            "--devices",
+            str(config_path),
+            "--adb-path",
+            "/sdk/adb",
+            "--once",
+        ]
+    )
+
+    assert result == 0
+    assert capsys.readouterr().out == (
+        "devices=2 healthy=1 corrected=1 failed=0 http_200=2 http_unknown=0\n"
+    )
+
+
+def test_cli_proxy_guard_validates_inputs_before_running(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.yaml"
+    with pytest.raises(SystemExit, match="device configuration does not exist"):
+        main(["proxy-guard", "--devices", str(missing), "--once"])
+
+    config_path = tmp_path / "devices.yaml"
+    _write_fleet_config(config_path)
+    with pytest.raises(SystemExit, match="interval must be at least 5 seconds"):
+        main(
+            [
+                "proxy-guard",
+                "--devices",
+                str(config_path),
+                "--interval",
+                "1",
+            ]
+        )
+
+
 def test_cli_supabase_pool_import_uses_deterministic_pool_and_source_counts(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:

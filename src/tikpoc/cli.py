@@ -35,6 +35,11 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("config/secrets/supabase.env"),
     )
+    proxy_guard = commands.add_parser("proxy-guard")
+    proxy_guard.add_argument("--devices", type=Path, required=True)
+    proxy_guard.add_argument("--adb-path", type=Path)
+    proxy_guard.add_argument("--interval", type=float, default=30.0)
+    proxy_guard.add_argument("--once", action="store_true")
     round_create = commands.add_parser("round-create")
     round_create.add_argument("--db", type=Path, required=True)
     round_create.add_argument("--pool", required=True)
@@ -102,6 +107,32 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "proxy-guard":
+        import time
+
+        _require_file(args.devices, "device configuration")
+        if args.interval < 5:
+            raise SystemExit("interval must be at least 5 seconds")
+        config = FleetConfig.from_path(args.devices)
+        try:
+            while True:
+                rows = _run_proxy_guard(config, args.adb_path)
+                healthy = sum(row.proxy_state == "healthy" for row in rows)
+                corrected = sum(row.proxy_state == "corrected" for row in rows)
+                failed = len(rows) - healthy - corrected
+                http_200 = sum(row.http_status == 200 for row in rows)
+                http_unknown = sum(row.http_status is None for row in rows)
+                print(
+                    f"devices={len(rows)} healthy={healthy} "
+                    f"corrected={corrected} failed={failed} "
+                    f"http_200={http_200} http_unknown={http_unknown}",
+                    flush=True,
+                )
+                if args.once:
+                    return 0
+                time.sleep(args.interval)
+        except KeyboardInterrupt:
+            return 130
     if args.command == "browser":
         from . import browser_connect
         from .web_accounts import WebAccountRegistry
@@ -448,6 +479,12 @@ def _run_acquisition_fleet(
     from .fleet_runtime import run_acquisition_fleet
 
     return run_acquisition_fleet(repository, round_id, config)
+
+
+def _run_proxy_guard(config: FleetConfig, adb_path: Path | None):
+    from .proxy_guard import ProxyGuard
+
+    return ProxyGuard(config, adb_path=adb_path).reconcile()
 
 
 def _load_env_file(path: Path) -> None:
