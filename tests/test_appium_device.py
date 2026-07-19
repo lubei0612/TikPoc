@@ -292,6 +292,32 @@ class BaselineStuckUntilRestartDriver(FakeDriver):
         self.restarted = True
 
 
+class StableIdBlankUsernameFallbackDriver(FakeDriver):
+    def __init__(self) -> None:
+        super().__init__()
+        self.route_started = False
+        self.username_fallback_loaded = False
+
+    def execute_script(self, name: str, arguments: dict[str, str]) -> None:
+        super().execute_script(name, arguments)
+        url = arguments["url"]
+        if url.startswith("https://www.tiktok.com/@"):
+            self.username_fallback_loaded = True
+            self.page_source = PROFILE_XML
+        else:
+            self.route_started = True
+            self.page_source = "<hierarchy />"
+
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if value == "com.zhiliaoapp.musically:id/s7e":
+            if self.username_fallback_loaded:
+                return [FakeElement("@old_name")]
+            if not self.route_started:
+                return [FakeElement("@previous")]
+            return []
+        return super().find_elements(by, value)
+
+
 class IncompleteStableRouteDriver(RenamedStableRouteDriver):
     def __init__(self) -> None:
         super().__init__()
@@ -488,6 +514,29 @@ def test_appium_device_restarts_when_inbox_cannot_clear_the_profile() -> None:
         "tiktok://inbox",
         "snssdk1233://user/profile/123",
     ]
+
+
+def test_appium_device_falls_back_to_exact_username_after_stable_id_stays_blank() -> (
+    None
+):
+    driver = StableIdBlankUsernameFallbackDriver()
+    device = AppiumTikTokDevice(driver, metric_read_attempts=1, poll_interval=0)
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="uid:123",
+        target_id="123",
+        sec_uid="sec-1",
+        username="old_name",
+        profile_url="https://www.tiktok.com/@old_name",
+        source_video_id="",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    device.open_target(target)
+    device.confirm_profile_identity(target)
+
+    assert driver.scripts[-1][1]["url"] == "https://www.tiktok.com/@old_name"
 
 
 def test_appium_device_reads_metrics_and_clicks_selected_post() -> None:

@@ -287,7 +287,20 @@ class AppiumTikTokDevice:
             self._open_route(stable_uri)
             if self._wait_any_profile_surface():
                 return
-            raise ValueError("stable profile route did not load after restart")
+            username_uri = target.profile_url.strip() or (
+                f"https://www.tiktok.com/@{expected}"
+            )
+            self._open_route(username_uri)
+            try:
+                self.wait_profile_ready(expected)
+                self._wait_profile_surface()
+                return
+            except ProfileIdentityMismatch:
+                raise
+            except ValueError as error:
+                raise ValueError(
+                    "stable and username profile routes did not load"
+                ) from error
         self.wait_profile_ready(target.username)
         self._wait_profile_surface()
 
