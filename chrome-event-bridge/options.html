@@ -17,12 +17,19 @@
       <form id="settings-form">
         <section aria-labelledby="identity-heading">
           <h2 id="identity-heading">账号绑定</h2>
-          <label>
+          <label class="switch-row">
+            <span>
+              <strong>自动识别当前 TikTok 账号</strong>
+              <small id="auto-binding-detail">打开 TikTok 页面后按可见用户名匹配本机配置。</small>
+            </span>
+            <input id="auto-binding-enabled" name="autoBindingEnabled" type="checkbox" />
+          </label>
+          <label id="manual-binding-row">
             <span>Chrome Profile 对应账号</span>
-            <select id="account-binding" name="accountBinding" required disabled>
+            <select id="account-binding" name="accountBinding" disabled>
               <option value="">请先连接本机服务</option>
             </select>
-            <small id="binding-detail">连接成功后从服务端账号配置中选择。</small>
+            <small id="binding-detail">自动识别失败时可关闭上方开关后人工选择。</small>
           </label>
         </section>
 

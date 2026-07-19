@@ -9,6 +9,14 @@
     return String(value || "").trim().toLowerCase();
   }
 
+  function bindingMode(settings) {
+    return settings && settings.bindingMode === "manual" ? "manual" : "auto";
+  }
+
+  function bindingModeLabel(settings) {
+    return bindingMode(settings) === "manual" ? "人工绑定" : "自动识别";
+  }
+
   function settingsForBinding(settings, binding) {
     return {
       ...settings,
@@ -95,6 +103,8 @@
   }
 
   return {
+    bindingMode,
+    bindingModeLabel,
     bindingObservation,
     bindingStateLabel,
     canObserveBinding,

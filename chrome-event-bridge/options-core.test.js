@@ -139,3 +139,11 @@ test("binding observation writes do not reschedule their own scanner", () => {
   }), true);
   assert.equal(optionsCore.shouldScheduleForStorageChanges({}), false);
 });
+
+test("automatic binding is the default and manual mode is explicit", () => {
+  assert.equal(optionsCore.bindingMode({}), "auto");
+  assert.equal(optionsCore.bindingMode({ bindingMode: "auto" }), "auto");
+  assert.equal(optionsCore.bindingMode({ bindingMode: "manual" }), "manual");
+  assert.equal(optionsCore.bindingModeLabel({}), "自动识别");
+  assert.equal(optionsCore.bindingModeLabel({ bindingMode: "manual" }), "人工绑定");
+});

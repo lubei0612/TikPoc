@@ -10,9 +10,12 @@ const form = document.querySelector("#settings-form");
 const status = document.querySelector("#status");
 const bindingSelect = document.querySelector("#account-binding");
 const bindingDetail = document.querySelector("#binding-detail");
+const autoBindingEnabled = document.querySelector("#auto-binding-enabled");
+const autoBindingDetail = document.querySelector("#auto-binding-detail");
 let lastConnectionTest = null;
 let currentSettings = {};
 let bindings = [];
+let autoConnectStatus = null;
 
 function showStatus(message, state = "") {
   status.textContent = message;
@@ -26,6 +29,7 @@ function values() {
     browserFollowbackEnabled: document.querySelector("#browser-followback-enabled").checked,
     browserDmEnabled: document.querySelector("#browser-dm-enabled").checked,
     autoOpenActivity: document.querySelector("#auto-open-activity").checked,
+    bindingMode: autoBindingEnabled.checked ? "auto" : "manual",
     lastConnectionTest,
   };
 }
@@ -35,6 +39,15 @@ function selectedBinding() {
 }
 
 function updateBindingDetail() {
+  const automatic = autoBindingEnabled.checked;
+  bindingSelect.disabled = automatic || bindings.length === 0;
+  bindingSelect.required = !automatic;
+  const observed = autoConnectStatus?.observedUsername
+    ? `@${autoConnectStatus.observedUsername}`
+    : "尚未观察到页面用户";
+  autoBindingDetail.textContent = automatic
+    ? `${observed} · ${autoConnectStatus?.state || "等待自动匹配"}`
+    : "已切换为人工绑定，保存前请选择一个账号。";
   const binding = selectedBinding();
   bindingDetail.textContent = binding
     ? `设备：${binding.device_id} · TikTok：@${binding.expected_tiktok_username || "未配置"}`
@@ -46,7 +59,6 @@ function renderBindings(accounts, selectedAccountId = "") {
   bindingSelect.replaceChildren();
   if (bindings.length === 0) {
     bindingSelect.append(new Option("没有可用账号", ""));
-    bindingSelect.disabled = true;
     updateBindingDetail();
     return;
   }
@@ -62,7 +74,6 @@ function renderBindings(accounts, selectedAccountId = "") {
     option.disabled = !binding.binding_ready;
     bindingSelect.append(option);
   }
-  bindingSelect.disabled = false;
   bindingSelect.value = selectedAccountId;
   updateBindingDetail();
 }
@@ -86,9 +97,10 @@ function loadBindings(dashboardUrl, selectedAccountId = "") {
   });
 }
 
-chrome.storage.local.get([SETTINGS_KEY], (stored) => {
+chrome.storage.local.get([SETTINGS_KEY, "tikpocAutoConnectStatus"], (stored) => {
   const settings = stored[SETTINGS_KEY] || {};
   currentSettings = settings;
+  autoConnectStatus = stored.tikpocAutoConnectStatus || null;
   lastConnectionTest = settings.lastConnectionTest || null;
   document.querySelector("#dashboard-url").value =
     settings.dashboardUrl || "http://127.0.0.1:8766";
@@ -99,6 +111,8 @@ chrome.storage.local.get([SETTINGS_KEY], (stored) => {
   document.querySelector("#auto-open-activity").checked = Boolean(
     settings.autoOpenActivity,
   );
+  autoBindingEnabled.checked = TikPocOptionsCore.bindingMode(settings) === "auto";
+  updateBindingDetail();
   if (settings.lastConnectionTest?.ok) {
     loadBindings(document.querySelector("#dashboard-url").value, settings.accountId).catch(
       (error) => showStatus(error.message, "error"),
@@ -108,6 +122,14 @@ chrome.storage.local.get([SETTINGS_KEY], (stored) => {
 
 form.addEventListener("submit", (event) => {
   event.preventDefault();
+  if (autoBindingEnabled.checked) {
+    const settings = TikPocOptionsCore.mergeRuntimeSettings(currentSettings, values());
+    chrome.storage.local.set({ [SETTINGS_KEY]: settings }, () => {
+      currentSettings = settings;
+      showStatus("已启用可见用户名自动识别。请打开或重载 TikTok 页面。", "success");
+    });
+    return;
+  }
   const binding = selectedBinding();
   if (!binding) {
     showStatus("请先选择此 Chrome Profile 对应的账号。", "error");
@@ -155,6 +177,7 @@ form.addEventListener("submit", (event) => {
 });
 
 bindingSelect.addEventListener("change", updateBindingDetail);
+autoBindingEnabled.addEventListener("change", updateBindingDetail);
 
 document.querySelector("#test-connection").addEventListener("click", () => {
   const settings = values();
