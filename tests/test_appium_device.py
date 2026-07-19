@@ -260,6 +260,38 @@ class RestartRequiredStableRouteDriver(FakeDriver):
             self.restarted = True
 
 
+class BaselineStuckUntilRestartDriver(FakeDriver):
+    def __init__(self) -> None:
+        super().__init__()
+        self.restarted = False
+        self.at_baseline = False
+        self.terminate_calls = 0
+        self.activate_calls = 0
+
+    def execute_script(self, name: str, arguments: dict[str, str]) -> None:
+        super().execute_script(name, arguments)
+        if not self.restarted:
+            return
+        self.at_baseline = arguments["url"] == "tiktok://inbox"
+        self.page_source = "<hierarchy />" if self.at_baseline else PROFILE_XML
+
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if value == "com.zhiliaoapp.musically:id/s7e":
+            if self.restarted:
+                return [] if self.at_baseline else [FakeElement("@renamed")]
+            return [FakeElement("@previous")]
+        return super().find_elements(by, value)
+
+    def terminate_app(self, package: str) -> None:
+        super().terminate_app(package)
+        self.terminate_calls += 1
+
+    def activate_app(self, package: str) -> None:
+        super().activate_app(package)
+        self.activate_calls += 1
+        self.restarted = True
+
+
 class IncompleteStableRouteDriver(RenamedStableRouteDriver):
     def __init__(self) -> None:
         super().__init__()
@@ -425,6 +457,35 @@ def test_appium_device_restarts_once_after_baseline_route_stays_blank() -> None:
         "snssdk1233://user/profile/123",
         "tiktok://inbox",
         "snssdk1233://user/profile/123",
+        "tiktok://inbox",
+        "snssdk1233://user/profile/123",
+    ]
+
+
+def test_appium_device_restarts_when_inbox_cannot_clear_the_profile() -> None:
+    driver = BaselineStuckUntilRestartDriver()
+    device = AppiumTikTokDevice(driver, metric_read_attempts=1, poll_interval=0)
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="uid:123",
+        target_id="123",
+        sec_uid="sec-1",
+        username="old_name",
+        profile_url="",
+        source_video_id="",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    device.open_target(target)
+    device.confirm_profile_identity(target)
+
+    assert driver.terminate_calls == 1
+    assert driver.activate_calls == 1
+    assert [script[1]["url"] for script in driver.scripts] == [
+        "snssdk1233://user/profile/123",
+        "tiktok://inbox",
+        "tiktok://inbox",
         "snssdk1233://user/profile/123",
     ]
 

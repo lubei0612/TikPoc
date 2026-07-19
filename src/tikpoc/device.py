@@ -275,32 +275,18 @@ class AppiumTikTokDevice:
                 if attempt + 1 < self.metric_read_attempts:
                     self.sleeper(self.poll_interval)
             self._open_route("tiktok://inbox")
-            baseline_cleared = False
-            for attempt in range(self.metric_read_attempts):
-                if not self._visible_profile_username():
-                    baseline_cleared = True
-                    break
-                if attempt + 1 < self.metric_read_attempts:
-                    self.sleeper(self.poll_interval)
-            if not baseline_cleared:
-                raise ValueError("stable profile route did not change")
-            self._open_route(stable_uri)
-            for attempt in range(self.metric_read_attempts):
-                actual = self._visible_profile_username()
-                if actual:
-                    self._wait_profile_surface()
+            baseline_cleared = self._wait_profile_cleared()
+            if baseline_cleared:
+                self._open_route(stable_uri)
+                if self._wait_any_profile_surface():
                     return
-                if attempt + 1 < self.metric_read_attempts:
-                    self.sleeper(self.poll_interval)
             self.restart_app()
+            self._open_route("tiktok://inbox")
+            if not self._wait_profile_cleared():
+                raise ValueError("stable profile route did not change after restart")
             self._open_route(stable_uri)
-            for attempt in range(self.metric_read_attempts):
-                actual = self._visible_profile_username()
-                if actual:
-                    self._wait_profile_surface()
-                    return
-                if attempt + 1 < self.metric_read_attempts:
-                    self.sleeper(self.poll_interval)
+            if self._wait_any_profile_surface():
+                return
             raise ValueError("stable profile route did not load after restart")
         self.wait_profile_ready(target.username)
         self._wait_profile_surface()
@@ -351,6 +337,23 @@ class AppiumTikTokDevice:
             if elements:
                 return elements
         return []
+
+    def _wait_profile_cleared(self) -> bool:
+        for attempt in range(self.metric_read_attempts):
+            if not self._visible_profile_username():
+                return True
+            if attempt + 1 < self.metric_read_attempts:
+                self.sleeper(self.poll_interval)
+        return False
+
+    def _wait_any_profile_surface(self) -> bool:
+        for attempt in range(self.metric_read_attempts):
+            if self._visible_profile_username():
+                self._wait_profile_surface()
+                return True
+            if attempt + 1 < self.metric_read_attempts:
+                self.sleeper(self.poll_interval)
+        return False
 
     def _wait_profile_surface(self) -> None:
         for attempt in range(self.metric_read_attempts):
