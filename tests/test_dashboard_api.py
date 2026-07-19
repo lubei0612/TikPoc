@@ -1357,8 +1357,8 @@ def test_browser_bindings_expose_only_nonsecret_profile_mapping(
                 "expected_tiktok_username": "",
                 "browser_profile_label": "TikPoc 02",
                 "enabled": False,
-                "browser_followback_enabled": True,
-                "browser_dm_enabled": True,
+                "browser_followback_enabled": False,
+                "browser_dm_enabled": False,
                 "binding_ready": False,
             },
         ]

@@ -330,23 +330,29 @@ def create_app(
     @app.get("/api/browser-bindings")
     def browser_bindings() -> JSONResponse:
         accounts = () if registry is None else registry.accounts
-        return _json(
-            {
-                "accounts": [
-                    {
-                        "account_id": account.account_id,
-                        "device_id": account.device_id,
-                        "expected_tiktok_username": account.expected_tiktok_username,
-                        "browser_profile_label": account.browser_profile_label,
-                        "enabled": account.enabled,
-                        "browser_followback_enabled": account.browser_followback_enabled,
-                        "browser_dm_enabled": account.browser_dm_enabled,
-                        "binding_ready": bool(account.expected_tiktok_username),
-                    }
-                    for account in accounts
-                ]
+
+        def binding_payload(account: WebAccount) -> dict[str, object]:
+            settings = database.account_operator_settings(
+                account.account_id,
+                default_ai_enabled=(account.enabled and account.browser_dm_enabled),
+                default_followback_enabled=(
+                    account.enabled and account.browser_followback_enabled
+                ),
+            )
+            return {
+                "account_id": account.account_id,
+                "device_id": account.device_id,
+                "expected_tiktok_username": account.expected_tiktok_username,
+                "browser_profile_label": account.browser_profile_label,
+                "enabled": account.enabled,
+                "browser_followback_enabled": bool(
+                    account.enabled and settings["followback_enabled"]
+                ),
+                "browser_dm_enabled": bool(account.enabled and settings["ai_enabled"]),
+                "binding_ready": bool(account.expected_tiktok_username),
             }
-        )
+
+        return _json({"accounts": [binding_payload(account) for account in accounts]})
 
     @app.post("/api/browser-dm/reply-plan")
     async def browser_reply_plan(request: Request) -> JSONResponse:
@@ -679,6 +685,7 @@ def create_app(
         return runtime_account(registry.by_account_id(account_id))
 
     def account_readiness(account: WebAccount) -> dict[str, object]:
+        account = runtime_account(account)
         settings = database.account_operator_settings(
             account.account_id,
             default_ai_enabled=(account.enabled and account.browser_dm_enabled),

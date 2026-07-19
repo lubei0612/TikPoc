@@ -208,3 +208,33 @@ def test_browser_dm_account_overlay_reads_latest_saved_account_settings(
     assert initial.whatsapp == "CONTACT_A"
     assert updated.whatsapp == "CONTACT_UPDATED"
     assert updated.offer_context == "Updated offer"
+
+
+def test_lead_readiness_uses_runtime_private_channel_configuration(tmp_path) -> None:
+    client, _ = _settings_client(tmp_path)
+
+    accounts = client.get("/api/leads").json()["accounts"]
+
+    assert accounts[0]["private_channel_configured"] is True
+    assert accounts[1]["private_channel_configured"] is False
+
+
+def test_browser_bindings_return_persisted_operator_switches(tmp_path) -> None:
+    client, _ = _settings_client(tmp_path)
+    client.post(
+        "/api/accounts/account-01/followback-enable",
+        json={"command_id": "disable-followback", "enabled": False},
+    )
+    client.post(
+        "/api/accounts/account-01/ai-enable",
+        json={"command_id": "disable-ai", "enabled": False},
+    )
+
+    response = client.get(
+        "/api/browser-bindings",
+        headers={"Origin": "https://www.tiktok.com"},
+    )
+
+    account = response.json()["accounts"][0]
+    assert account["browser_followback_enabled"] is False
+    assert account["browser_dm_enabled"] is False
