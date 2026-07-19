@@ -48,6 +48,10 @@ const leadPayload = (selected: object | null = null) => ({
     confirmed_revenue_minor: { USD: 12_500 },
     sales: 1,
   },
+  browser_health: [
+    { account_id: "account-01", device_id: "phone-01", browser_profile_label: "客服一号", expected_tiktok_username: "shop_one", observed_username: "shop_one", page_role: "activity", binding_state: "ready", status: "ready", observed_at_ms: 8_000, detail: "" },
+    { account_id: "account-01", device_id: "phone-01", browser_profile_label: "客服一号", expected_tiktok_username: "shop_one", observed_username: "shop_one", page_role: "messages", binding_state: "ready", status: "ready", observed_at_ms: 8_000, detail: "" },
+  ],
 });
 
 const selectedLead = (humanRequired = false) => ({
@@ -111,6 +115,42 @@ it("takes over a conversation before enabling the manual composer", async () => 
     expect.stringContaining("inbound_fingerprint=inbound-2"),
     expect.objectContaining({ signal: expect.any(AbortSignal) }),
   );
+});
+
+it("keeps AI and follow-back controls isolated by account and page health", async () => {
+  const payload = leadPayload();
+  payload.accounts.push({
+    ...payload.accounts[0],
+    account_id: "account-02",
+    device_id: "phone-02",
+  });
+  payload.browser_health = [
+    ...payload.browser_health.map((row) =>
+      row.page_role === "messages" ? { ...row, binding_state: "mismatch", status: "mismatch" } : row,
+    ),
+    ...payload.browser_health.map((row) => ({
+      ...row,
+      account_id: "account-02",
+      device_id: "phone-02",
+      browser_profile_label: "客服二号",
+    })),
+  ];
+  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+    if (init?.method === "POST") return jsonResponse({ enabled: true });
+    return jsonResponse(payload);
+  });
+
+  render(<InboxView />);
+
+  expect(await screen.findByRole("checkbox", { name: "account-01 AI 自动回复" })).toBeDisabled();
+  expect(screen.getByRole("checkbox", { name: "account-01 自动回关" })).toBeEnabled();
+  expect(screen.getByRole("checkbox", { name: "account-02 AI 自动回复" })).toBeEnabled();
+  expect(screen.getByRole("checkbox", { name: "account-02 自动回关" })).toBeEnabled();
+  fireEvent.click(screen.getByRole("checkbox", { name: "account-01 自动回关" }));
+  await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
+    "/api/accounts/account-01/followback-enable",
+    expect.objectContaining({ method: "POST" }),
+  ));
 });
 
 it("creates an immutable manual plan and records sale amounts in minor units", async () => {

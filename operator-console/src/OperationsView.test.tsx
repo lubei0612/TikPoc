@@ -206,6 +206,41 @@ it("loads the operations snapshot and coverage for the selected round", async ()
   );
 });
 
+it("renders two localized browser readiness rows for each of 12 accounts", async () => {
+  const snapshot = operationSnapshot();
+  const states = ["unbound", "mismatch", "signed_out", "verification_required", "ready", "stale"];
+  snapshot.browser_health = Array.from({ length: 12 }, (_, index) =>
+    (["activity", "messages"] as const).map((pageRole) => ({
+      account_id: `account-${String(index + 1).padStart(2, "0")}`,
+      device_id: `phone-${String(index + 1).padStart(2, "0")}`,
+      browser_profile_label: `客服 Profile ${index + 1}`,
+      expected_tiktok_username: `shop_${index + 1}`,
+      observed_username: index % states.length === 0 ? "" : `visible_${index + 1}`,
+      page_role: pageRole,
+      binding_state: states[index % states.length],
+      status: states[index % states.length],
+      observed_at_ms: 4_300 + index,
+      detail: "/messages",
+    })),
+  ).flat();
+  vi.spyOn(globalThis, "fetch").mockImplementation((input) =>
+    String(input).startsWith("/api/coverage")
+      ? jsonResponse(coverageSnapshot)
+      : jsonResponse(snapshot),
+  );
+
+  render(<OperationsView roundId="round-1" />);
+
+  const table = await screen.findByTestId("browser-health");
+  expect(within(table).getAllByRole("row")).toHaveLength(25);
+  for (const label of ["未绑定", "身份不符", "已退出", "需验证", "已就绪", "心跳过期"]) {
+    expect(within(table).getAllByText(label)).toHaveLength(4);
+  }
+  expect(within(table).getAllByText("客服 Profile 12")).toHaveLength(2);
+  expect(within(table).getAllByText("@shop_12")).toHaveLength(2);
+  expect(within(table).getAllByText("@visible_12")).toHaveLength(2);
+});
+
 it("shows dense capacity KPIs before devices and preserves the operations section order", async () => {
   mockInitialLoad();
   render(<OperationsView roundId="round-1" />);

@@ -109,6 +109,16 @@ def test_lead_list_redacts_secrets_and_returns_readiness_and_selected_history(
     assert account["private_channel_configured"] is True
     assert account["ai_enabled"] is True
     assert account["followback_enabled"] is True
+    assert len(payload["browser_health"]) == 4
+    assert {
+        (row["account_id"], row["page_role"], row["binding_state"])
+        for row in payload["browser_health"]
+    } == {
+        ("account-01", "activity", "unbound"),
+        ("account-01", "messages", "unbound"),
+        ("account-02", "activity", "unbound"),
+        ("account-02", "messages", "unbound"),
+    }
     assert set(payload["conversations"][0]) >= {
         "stage",
         "participant_username",

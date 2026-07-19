@@ -70,6 +70,10 @@ export interface BrowserHealth {
   account_id: string;
   page_role: "activity" | "messages";
   device_id: string;
+  browser_profile_label: string;
+  expected_tiktok_username: string;
+  observed_username: string;
+  binding_state: string;
   status: string;
   observed_at_ms: number;
   detail: string;
@@ -200,6 +204,7 @@ export interface LeadInboxSnapshot {
   selected: SelectedLead | null;
   funnel: FunnelSnapshot;
   sales: SalesSnapshot;
+  browser_health: BrowserHealth[];
 }
 
 export class ApiError extends Error {

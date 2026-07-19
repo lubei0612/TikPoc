@@ -11,6 +11,7 @@ from tikpoc.api import create_app
 from tikpoc.db import Database
 from tikpoc.importer import Target
 from tikpoc.rounds import create_exposure_round
+from tikpoc.web_accounts import WebAccount, WebAccountRegistry
 
 
 def _target(index: int) -> Target:
@@ -25,7 +26,12 @@ def _target(index: int) -> Target:
     )
 
 
-def _seeded_operations_app(tmp_path: Path) -> tuple[object, str, int]:
+def _seeded_operations_app(
+    tmp_path: Path,
+    *,
+    registry: WebAccountRegistry | None = None,
+    clock_seconds: int = 12,
+) -> tuple[object, str, int]:
     path = tmp_path / "tikpoc.db"
     repository = AcquisitionRepository(path, clock_ms=lambda: 10_000)
     repository.migrate()
@@ -133,7 +139,11 @@ def _seeded_operations_app(tmp_path: Path) -> tuple[object, str, int]:
         observed_at_ms=11_500,
         detail="ready",
     )
-    return create_app(path, clock=lambda: 12), round_id, deferred_id
+    return (
+        create_app(path, clock=lambda: clock_seconds, registry=registry),
+        round_id,
+        deferred_id,
+    )
 
 
 def _legacy_control_database(tmp_path: Path) -> tuple[Path, str, dict[str, int]]:
@@ -314,11 +324,72 @@ def test_operations_snapshot_reads_browser_health_in_acquisition_transaction(
             "account_id": "account-01",
             "page_role": "messages",
             "device_id": "phone-01",
-            "status": "healthy",
+            "browser_profile_label": "",
+            "expected_tiktok_username": "",
+            "observed_username": "",
+            "binding_state": "ready",
+            "status": "ready",
             "observed_at_ms": 11_500,
             "detail": "ready",
         }
     ]
+
+
+def test_operations_snapshot_expands_12_browser_accounts_and_local_states(
+    tmp_path: Path,
+) -> None:
+    registry = WebAccountRegistry(
+        tuple(
+            WebAccount(
+                account_id=f"account-{index:02d}",
+                device_id=f"phone-{index:02d}",
+                expected_tiktok_username=f"shop_{index}",
+                browser_profile_label=f"客服 Profile {index}",
+            )
+            for index in range(1, 13)
+        )
+    )
+    app, round_id, _ = _seeded_operations_app(
+        tmp_path,
+        registry=registry,
+        clock_seconds=200,
+    )
+    database = app.state.database
+    for account_id, role, state, observed, observed_at in (
+        ("account-01", "messages", "ready", "shop_1", 199_500),
+        ("account-02", "activity", "mismatch", "shop_other", 199_500),
+        ("account-03", "messages", "signed_out", "", 199_500),
+        ("account-04", "activity", "verification_required", "", 199_500),
+        ("account-05", "messages", "ready", "shop_5", 199_500),
+        ("account-06", "activity", "ready", "shop_6", 1_000),
+    ):
+        database.upsert_browser_health(
+            account_id,
+            role,
+            device_id=registry.by_account_id(account_id).device_id,
+            status=state,
+            observed_at_ms=observed_at,
+            observed_username=observed,
+        )
+
+    response = TestClient(app).get(f"/api/operations?round_id={round_id}")
+
+    assert response.status_code == 200
+    rows = response.json()["browser_health"]
+    assert len(rows) == 24
+    by_key = {(row["account_id"], row["page_role"]): row for row in rows}
+    assert by_key[("account-01", "activity")]["binding_state"] == "unbound"
+    assert by_key[("account-01", "messages")]["binding_state"] == "ready"
+    assert by_key[("account-02", "activity")]["binding_state"] == "mismatch"
+    assert by_key[("account-03", "messages")]["binding_state"] == "signed_out"
+    assert (
+        by_key[("account-04", "activity")]["binding_state"] == "verification_required"
+    )
+    assert by_key[("account-06", "activity")]["binding_state"] == "stale"
+    assert by_key[("account-12", "messages")]["browser_profile_label"] == (
+        "客服 Profile 12"
+    )
+    assert by_key[("account-12", "messages")]["expected_tiktok_username"] == ("shop_12")
 
 
 def test_pool_round_lists_and_paginated_coverage_are_bounded(tmp_path: Path) -> None:

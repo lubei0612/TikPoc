@@ -15,6 +15,7 @@ from .acquisition_service import (
     AcquisitionConflict,
     AcquisitionNotFound,
     AcquisitionService,
+    merge_browser_health_rows,
 )
 from .api_models import (
     AccountEnableCommand,
@@ -155,6 +156,7 @@ def create_app(
         acquisition,
         clock_ms=lambda: int(clock() * 1000),
         import_roots=tuple(import_roots or (database_path.parent,)),
+        browser_accounts=() if registry is None else registry.accounts,
     )
     acquisition_service.migrate()
     if browser_dm_service is None and registry is not None:
@@ -715,6 +717,11 @@ def create_app(
             if registry is None
             else [account_readiness(account) for account in registry.accounts]
         )
+        browser_health = merge_browser_health_rows(
+            () if registry is None else registry.accounts,
+            database.browser_health_snapshot(),
+            now_ms=int(clock() * 1_000),
+        )
         account_ids = (
             ()
             if registry is None
@@ -738,6 +745,7 @@ def create_app(
                 "selected": selected,
                 "funnel": database.lead_funnel_snapshot(account_ids=account_ids),
                 "sales": database.lead_sales_snapshot(account_ids=account_ids),
+                "browser_health": browser_health,
             }
         )
 

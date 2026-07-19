@@ -13,7 +13,7 @@ import {
 } from "../api";
 import { ConversationDrawer } from "../components/ConversationDrawer";
 import { ConversationList } from "../components/ConversationList";
-import { localizeError } from "../localization";
+import { localizeError, localizeValue } from "../localization";
 
 const errorText = (reason: unknown) => localizeError(reason, "线索操作失败");
 type ScopedText = { key: string; text: string };
@@ -105,12 +105,12 @@ export function InboxView() {
     }
   };
 
-  const toggleAccount = async (accountId: string, enabled: boolean) => {
-    const accountKey = `account:${accountId}`;
-    setAction({ key: accountKey, name: "account" });
+  const toggleAccount = async (accountId: string, setting: "ai" | "followback", enabled: boolean) => {
+    const accountKey = `account:${accountId}:${setting}`;
+    setAction({ key: accountKey, name: setting });
     setError(null);
     try {
-      await setAccountEnabled(accountId, "ai", enabled, crypto.randomUUID());
+      await setAccountEnabled(accountId, setting, enabled, crypto.randomUUID());
       await loadList();
     } catch (reason) {
       setError({ key: "", text: errorText(reason) });
@@ -127,6 +127,8 @@ export function InboxView() {
   const selectedAction = action?.key === selectedKey ? action.name : null;
   const selectedError = error?.key === selectedKey ? error.text : null;
   const selectedNotice = notice?.key === selectedKey ? notice.text : null;
+  const browserState = (accountId: string, pageRole: "activity" | "messages") =>
+    snapshot.browser_health?.find((row) => row.account_id === accountId && row.page_role === pageRole)?.binding_state ?? "unbound";
   return (
     <main className="inbox-workspace">
       <section className="inbox-main">
@@ -135,8 +137,17 @@ export function InboxView() {
           <button className="icon-only" aria-label="刷新线索收件箱" title="刷新线索收件箱" disabled={action !== null} onClick={() => loadList().catch((reason) => setError({ key: "", text: errorText(reason) }))}><RefreshCw size={15} /></button>
         </header>
         <div className="account-control-strip">
-          <span><SlidersHorizontal size={14} />账号 AI</span>
-          {snapshot.accounts.map((item) => <label key={item.account_id}><span>{item.account_id}<small>{item.private_channel_configured ? "私域已就绪" : "私域未配置"}</small></span><input aria-label={`${item.account_id} AI 自动处理`} type="checkbox" checked={item.ai_enabled} disabled={!item.enabled || action !== null} onChange={(event) => toggleAccount(item.account_id, event.target.checked)} /></label>)}
+          <span><SlidersHorizontal size={14} />账号自动化</span>
+          {snapshot.accounts.map((item) => {
+            const activityState = browserState(item.account_id, "activity");
+            const messagesState = browserState(item.account_id, "messages");
+            return <div className="account-control" key={item.account_id}>
+              <strong>{item.account_id}</strong>
+              <small>{item.private_channel_configured ? "私域已就绪" : "私域未配置"}</small>
+              <label><span>AI 回复<small>{localizeValue(messagesState)}</small></span><input aria-label={`${item.account_id} AI 自动回复`} type="checkbox" checked={item.ai_enabled} disabled={!item.enabled || messagesState !== "ready" || action?.key === `account:${item.account_id}:ai`} onChange={(event) => toggleAccount(item.account_id, "ai", event.target.checked)} /></label>
+              <label><span>自动回关<small>{localizeValue(activityState)}</small></span><input aria-label={`${item.account_id} 自动回关`} type="checkbox" checked={item.followback_enabled} disabled={!item.enabled || activityState !== "ready" || action?.key === `account:${item.account_id}:followback`} onChange={(event) => toggleAccount(item.account_id, "followback", event.target.checked)} /></label>
+            </div>;
+          })}
         </div>
         {error?.key === "" && !selectedConversation && <div className="action-error" role="alert">{error.text}</div>}
         <ConversationList conversations={snapshot.conversations} selectedId={selectedConversation?.conversation_id ?? null} onSelect={choose} />

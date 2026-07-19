@@ -9,6 +9,7 @@ from pathlib import Path
 from .acquisition_db import AcquisitionRepository
 from .importer import read_targets
 from .rounds import create_exposure_round
+from .web_accounts import WebAccount
 
 
 _QUOTA_LIMITS = {"like": 100, "favorite": 14, "repost": 25}
@@ -21,6 +22,77 @@ _SCREENSHOT_MEDIA_TYPES = {
     ".png": "image/png",
     ".webp": "image/webp",
 }
+_BROWSER_PAGE_ROLES = ("activity", "messages")
+_BROWSER_HEARTBEAT_STALE_MS = 120_000
+
+
+def merge_browser_health_rows(
+    accounts: Sequence[WebAccount],
+    stored_rows: Sequence[Mapping[str, object]],
+    *,
+    now_ms: int,
+) -> list[dict[str, object]]:
+    stored = {
+        (str(row["account_id"]), str(row["page_role"])): row for row in stored_rows
+    }
+    identities = (
+        [
+            (
+                account.account_id,
+                account.device_id,
+                account.browser_profile_label,
+                account.expected_tiktok_username,
+                role,
+            )
+            for account in accounts
+            for role in _BROWSER_PAGE_ROLES
+        ]
+        if accounts
+        else [
+            (
+                account_id,
+                str(row.get("device_id") or ""),
+                "",
+                "",
+                role,
+            )
+            for (account_id, role), row in sorted(stored.items())
+        ]
+    )
+
+    result: list[dict[str, object]] = []
+    for account_id, device_id, profile_label, expected_username, role in identities:
+        row = stored.get((account_id, role), {})
+        observed_at_ms = int(row.get("observed_at_ms") or 0)
+        stored_state = str(row.get("status") or "unbound")
+        if stored_state == "healthy":
+            stored_state = "ready"
+        if accounts and not expected_username:
+            binding_state = "unbound"
+        elif not row:
+            binding_state = "unbound"
+        elif (
+            observed_at_ms
+            and int(now_ms) - observed_at_ms > _BROWSER_HEARTBEAT_STALE_MS
+        ):
+            binding_state = "stale"
+        else:
+            binding_state = stored_state
+        result.append(
+            {
+                "account_id": account_id,
+                "page_role": role,
+                "device_id": device_id,
+                "browser_profile_label": profile_label,
+                "expected_tiktok_username": expected_username,
+                "observed_username": str(row.get("observed_username") or ""),
+                "binding_state": binding_state,
+                "status": binding_state,
+                "observed_at_ms": observed_at_ms,
+                "detail": str(row.get("detail") or ""),
+            }
+        )
+    return result
 
 
 def _is_supported_image(path: Path, suffix: str) -> bool:
@@ -79,11 +151,13 @@ class AcquisitionService:
         *,
         clock_ms: Callable[[], int],
         import_roots: Sequence[Path],
+        browser_accounts: Sequence[WebAccount] = (),
     ) -> None:
         self.repository = repository
         self.path = repository.path
         self.clock_ms = clock_ms
         self.import_roots = tuple(root.resolve() for root in import_roots)
+        self.browser_accounts = tuple(browser_accounts)
 
     def migrate(self) -> None:
         with self._connect() as connection:
@@ -830,19 +904,23 @@ class AcquisitionService:
             )
         return devices
 
-    @staticmethod
     def _browser_health_rows(
+        self,
         connection: sqlite3.Connection,
     ) -> list[dict[str, object]]:
         rows = connection.execute(
             """
             SELECT account_id, page_role, device_id, status,
-                   observed_at_ms, detail
+                   observed_at_ms, detail, observed_username
             FROM browser_account_health
             ORDER BY account_id, page_role
             """
         ).fetchall()
-        return [dict(row) for row in rows]
+        return merge_browser_health_rows(
+            self.browser_accounts,
+            [dict(row) for row in rows],
+            now_ms=self.clock_ms(),
+        )
 
     def _latest_diagnostics(
         self, connection: sqlite3.Connection, round_id: str

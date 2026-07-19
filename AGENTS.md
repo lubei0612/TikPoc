@@ -353,10 +353,21 @@ Completed on `feat/web-lead-conversion`:
 - Task 4 specification and quality reviews passed with no remaining Critical or
   Important findings. Full Python verification passed `596` tests; Chrome Node
   verification remains `46` tests.
+- Multi-account Browser Task 5 is complete: Operations and Inbox receive one
+  Activity row and one Messages row for every configured account, with Profile,
+  expected/observed username, server binding state, and heartbeat expiry.
+- The Chinese console distinguishes `未绑定`, `身份不符`, `已退出`, `需验证`,
+  `已就绪`, and `心跳过期`. AI reply and follow-back switches are independently
+  scoped to the affected account and page role; no browser navigation controls
+  were added.
+- Task 5 specification and quality reviews passed. Full Python verification
+  passed `597` tests, frontend component verification passed `31` tests, Chrome
+  Node verification passed `46` tests, and Playwright passed `12` tests at
+  1440x1000, 1920x1080, and 390x844 with inspected long-identity screenshots.
 - The retained debug round failed capacity promotion: mean 170.718 seconds,
   P90 15.572 seconds, projected 421 targets per 20-hour day, with historical
   identity mismatch evidence. A fresh calibration-free round is still required.
-- Last fresh full Python verification: `596 passed`; Chrome Node verification:
+- Last fresh full Python verification: `597 passed`; Chrome Node verification:
   `46 passed`; Android bridge build passed with the portable build-root fix.
 - Full-repository Ruff format check has a pre-existing 14-file formatting
   baseline; do not reformat those unrelated files as part of a narrow task.
@@ -365,8 +376,8 @@ Outstanding at the current checkpoint:
 
 1. Run the fresh 500-target slot-1 pacing/performance gate and record measured
    stage mean/P90 separately from projections.
-2. Complete Multi-account Browser Tasks 4-6 and notify the user before the
-   first two-account live follow-back/reply acceptance.
+2. Complete Multi-account Browser Task 6 and notify the user before the first
+   two-account live follow-back/reply acceptance.
 3. Execute the remaining Mobile Task 10 two-device live gate on slots 1 and 2.
 4. Finish full regression, two-device calibration, four-/eight-hour
    endurance tests, seven-device benchmark, runbooks, branch integration, and

@@ -83,10 +83,10 @@
 - Modify: `operator-console/src/InboxView.test.tsx`
 - Modify: `operator-console/src/styles.css`
 
-- [ ] Add component tests for 12 accounts, both Activity/Messages rows, and Chinese states `未绑定`, `身份不符`, `已退出`, `需验证`, `已就绪`, and `心跳过期`.
-- [ ] Extend browser health contracts with expected/observed username and binding state; render one compact row per account/page role without fixed account columns.
-- [ ] Keep AI and follow-back account switches independent and disabled only for the affected unhealthy account; do not add browser fleet navigation controls.
-- [ ] Run Vitest/build and Playwright at 1440x1000 and 390x844 with long account names; rebuild embedded assets and commit `feat: show multi-account browser readiness`.
+- [x] Add component tests for 12 accounts, both Activity/Messages rows, and Chinese states `未绑定`, `身份不符`, `已退出`, `需验证`, `已就绪`, and `心跳过期`.
+- [x] Extend browser health contracts with expected/observed username and binding state; render one compact row per account/page role without fixed account columns.
+- [x] Keep AI and follow-back account switches independent and disabled only for the affected unhealthy account; do not add browser fleet navigation controls.
+- [x] Run Vitest/build and Playwright at 1440x1000 and 390x844 with long account names; rebuild embedded assets and commit `feat: show multi-account browser readiness`.
 
 ### Task 6: Two-Account Isolation And Live Acceptance Gate
 

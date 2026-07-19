@@ -99,9 +99,19 @@ database.upsert_browser_health(
     "account-01",
     "messages",
     device_id="phone-01-long-identity",
-    status="healthy",
+    status="ready",
     observed_at_ms=11_500,
     detail="synthetic ready",
+    observed_username="synthetic_shop_account_with_a_long_username",
+)
+database.upsert_browser_health(
+    "account-01",
+    "activity",
+    device_id="phone-01-long-identity",
+    status="ready",
+    observed_at_ms=11_500,
+    detail="synthetic ready",
+    observed_username="synthetic_shop_account_with_a_long_username",
 )
 participant = "buyer_with_a_very_long_synthetic_username_for_overflow_testing"
 for index, text in enumerate(("Interested", "Please share the details"), start=1):
@@ -131,8 +141,15 @@ registry = WebAccountRegistry(
             private_channel_hint="SYNTHETIC_PRIVATE_DESTINATION",
             offer_context="Synthetic offer",
             faq_text="Synthetic FAQ",
+            expected_tiktok_username="synthetic_shop_account_with_a_long_username",
+            browser_profile_label="客服一号专用 Chrome Profile（超长名称布局检查）",
         ),
-        WebAccount(account_id="account-02", device_id="phone-02"),
+        WebAccount(
+            account_id="account-02",
+            device_id="phone-02",
+            expected_tiktok_username="synthetic_shop_two",
+            browser_profile_label="客服二号 Chrome Profile",
+        ),
     )
 )
 app = create_app(

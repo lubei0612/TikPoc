@@ -103,9 +103,9 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .assignment-cell span { color: #59635d; font-size: 10px; text-transform: capitalize; }
 .status-label { display: inline-flex; align-items: center; gap: 6px; color: #59635d; font-size: 10px; font-weight: 750; text-transform: uppercase; }
 .status-label > span { width: 7px; height: 7px; background: #89918d; border-radius: 50%; box-shadow: 0 0 0 2px #e2e5e2; }
-.status-healthy > span, .status-completed > span, .status-success > span { background: var(--green); }
-.status-degraded > span, .status-uncertain > span, .status-pending > span { background: var(--amber); }
-.status-unhealthy > span, .status-failed > span { background: var(--red); }
+.status-healthy > span, .status-completed > span, .status-success > span, .status-ready > span { background: var(--green); }
+.status-degraded > span, .status-uncertain > span, .status-pending > span, .status-verification_required > span, .status-stale > span { background: var(--amber); }
+.status-unhealthy > span, .status-failed > span, .status-mismatch > span, .status-signed_out > span { background: var(--red); }
 .cell-note { display: block; margin-top: 3px; color: var(--red); font-size: 9px; }
 .control-state { display: block; margin-top: 3px; font-size: 9px; font-weight: 700; text-transform: uppercase; }
 .timing-pair { display: grid; gap: 4px; color: #52605a; font-family: "SFMono-Regular", Consolas, monospace; font-size: 10px; }
@@ -171,6 +171,9 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .evidence-table th { top: 0; }
 .evidence-table td { height: 43px; font-variant-numeric: tabular-nums; }
 .evidence-table td small { display: block; max-width: 180px; color: #7a837e; font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browser-pane .evidence-table { min-width: 620px; }
+.browser-identities { max-width: 170px; }
+.browser-identities > span, .browser-identities > small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .proof-state { display: inline-flex; align-items: center; gap: 5px; font-weight: 750; }
 .proof-complete { color: var(--green); }
 .proof-partial { color: var(--amber); }
@@ -194,8 +197,11 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .workspace-title p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
 .account-control-strip { min-height: 54px; display: flex; align-items: stretch; gap: 0; overflow-x: auto; background: #e4e8e3; border-bottom: 1px solid var(--line-strong); }
 .account-control-strip > span { min-width: 110px; display: flex; align-items: center; gap: 7px; padding: 0 12px; color: #4d5953; font-size: 10px; font-weight: 800; text-transform: uppercase; border-right: 1px solid #c6cdc7; }
-.account-control-strip label { min-width: 145px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 12px; border-right: 1px solid #c6cdc7; font-size: 10px; font-weight: 700; }
-.account-control-strip label > span { display: grid; gap: 2px; }
+.account-control { min-width: 220px; display: grid; grid-template-columns: repeat(2, minmax(86px, 1fr)); gap: 5px 12px; padding: 7px 12px; border-right: 1px solid #c6cdc7; }
+.account-control > strong { grid-column: 1; overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.account-control > small { grid-column: 2; justify-self: end; }
+.account-control label { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 7px; font-size: 9px; font-weight: 700; }
+.account-control label > span { display: grid; gap: 1px; }
 .account-control-strip small { color: #6e7973; font-size: 8px; font-weight: 650; }
 .account-control-strip input { width: 15px; height: 15px; accent-color: var(--cyan); }
 .conversation-list { border-bottom: 1px solid var(--line-strong); }

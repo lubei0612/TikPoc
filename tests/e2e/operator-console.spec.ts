@@ -108,6 +108,8 @@ test("operations shows mobile traces and sticky horizontal coverage", async ({ p
   await expect(page.locator(".quota-table th", { hasText: "滚动用量" })).toBeVisible();
   await expect(page.locator(".quota-table tbody tr").first()).toBeVisible();
   await expect(page.getByTestId("coverage-matrix").getByText("long_target_identity_for_mobile_layout_verification")).toBeVisible();
+  await expect(page.getByTestId("browser-health").getByText("客服一号专用 Chrome Profile（超长名称布局检查）").first()).toBeVisible();
+  await expect(page.getByTestId("browser-health").getByText("已就绪")).toHaveCount(2);
   await expect(page.getByRole("button", { name: /重试 phone-03/ })).toBeVisible();
   await page.getByRole("button", { name: "停止轮次" }).click();
   const dialog = page.getByRole("dialog", { name: "确认停止轮次" });
@@ -164,6 +166,9 @@ test("inbox exposes readiness and operator controls in a bounded drawer", async 
   const errors = rejectConsoleErrors(page);
   await page.goto("/inbox");
   await expect(page.getByRole("heading", { name: "线索转化" })).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: "account-01 AI 自动回复" })).toBeEnabled();
+  await expect(page.getByRole("checkbox", { name: "account-01 自动回关" })).toBeEnabled();
+  await expect(page.getByRole("checkbox", { name: "account-02 AI 自动回复" })).toBeDisabled();
   await page.getByRole("button", { name: /打开 buyer_with_a_very_long/ }).click();
   await expect(page.getByText("私域渠道已配置")).toBeVisible();
   await expect(page.getByRole("button", { name: /人工接管/ })).toBeVisible();

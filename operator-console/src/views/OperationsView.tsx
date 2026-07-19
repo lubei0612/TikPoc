@@ -80,7 +80,9 @@ export function OperationsView({
       healthChange.current?.({
         healthyDevices: nextSnapshot.devices.filter((device) => device.health === "healthy").length,
         totalDevices: nextSnapshot.devices.length,
-        healthyBrowserObservers: nextSnapshot.browser_health.filter((observer) => observer.status === "healthy").length,
+        healthyBrowserObservers: nextSnapshot.browser_health.filter((observer) =>
+          observer.binding_state === "ready" || (!observer.binding_state && observer.status === "healthy"),
+        ).length,
         totalBrowserObservers: nextSnapshot.browser_health.length,
       });
       setLoadError(null);
