@@ -411,6 +411,33 @@ Completed on `feat/web-lead-conversion`:
   identity mismatch evidence. A fresh calibration-free round is still required.
 - Last fresh full Python verification: `603 passed`; Chrome Node verification:
   `69 passed`; Android bridge build and Ruff check passed.
+- The localhost console now has a fourth `/settings` workspace for one global
+  OpenAI-compatible provider and per-account WhatsApp, Telegram, offer, FAQ,
+  and reply-tone configuration. Provider keys are write-only; saved local
+  settings are ignored, atomic, owner-only (`0600`), and hot-loaded for new
+  plans.
+- Qualified leads are asked to choose WhatsApp or Telegram before a destination
+  is disclosed. After a preference, only the selected destination is available
+  to the prompt, with a concise buying call to action. Existing cooldown,
+  immutable-plan, reply-budget, contact-capture, and human-takeover rules remain.
+- Browser auto-binding now returns the persisted per-account AI and follow-back
+  switches instead of stale YAML defaults. Runtime private-channel settings also
+  drive Inbox readiness immediately.
+- A real provider connection test passed without retaining response content.
+  Both controlled accounts report AI enabled, follow-back enabled, private
+  channel configured, model configured, and Activity/Messages `4/4` ready.
+- The latest controlled conversation persisted one message in each direction,
+  but later consecutive bubbles disappeared after sender reload. Persisted
+  inbound changes appeared only after receiver reload and were therefore
+  treated as startup baselines. This round produced zero new reply plans,
+  `dm_send` leases, and follow-back leases; visible autonomous send and fresh
+  follow-back acceptance remain open and must not be claimed as passed.
+- Latest full verification after the settings and synchronization fixes: Python
+  `625 passed`, Chrome Node `69 passed`, frontend `35 passed`, Playwright `15/15`
+  at desktop/wide/mobile, production build, Android build, Ruff check, and
+  `git diff --check` passed.
+- Supabase is recorded only as a future repository migration boundary for a
+  separate session; no Supabase implementation is part of this checkpoint.
 - Full-repository Ruff format check has a pre-existing 8-file formatting
   baseline; do not reformat those unrelated files as part of a narrow task.
 
@@ -418,11 +445,12 @@ Outstanding at the current checkpoint:
 
 1. Run the fresh 500-target slot-1 pacing/performance gate and record measured
    stage mean/P90 separately from projections.
-2. Complete the remaining Multi-account Browser Task 6 automatic fallback-reply,
-   reload-idempotency, contact-stage, and human-handoff live gates. Mutual follow,
+2. Complete the remaining Multi-account Browser Task 6 automatic reply,
+   reload-idempotency, channel-preference, single-destination invitation,
+   contact-stage, human-handoff, and fresh follow-back live gates. Mutual follow,
    bidirectional manual DM delivery, and `4/4` browser health already passed; do
-   not repeat them on the restricted conversation. Continue visible-send testing
-   with a different message-capable controlled account.
+   not repeat them on a conversation whose later bubbles disappear after reload.
+   Continue with a fresh controlled conversation that receives live DOM updates.
 3. Execute the remaining Mobile Task 10 two-device live gate on slots 1 and 2.
 4. Finish full regression, two-device calibration, four-/eight-hour
    endurance tests, seven-device benchmark, runbooks, branch integration, and
