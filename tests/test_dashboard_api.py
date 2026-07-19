@@ -356,6 +356,62 @@ def test_browser_health_persists_visible_identity_before_binding_conflict(
     ]
 
 
+def test_browser_health_rejects_inconsistent_scan_timestamps(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(
+        create_app(tmp_path / "invalid-health.db", registry=_registry(tmp_path))
+    )
+    body = _browser_post_bodies()["/api/browser-health"]
+    body.update(
+        timestamp_ms=4_000,
+        last_scan_at_ms=3_900,
+        last_success_at_ms=4_001,
+        scan_state="idle",
+    )
+
+    response = client.post(
+        "/api/browser-health",
+        headers={"Origin": "https://www.tiktok.com"},
+        json=body,
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"error": "invalid browser request"}
+
+
+def test_browser_health_normalizes_future_client_clock_to_server_time(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "future-health.db"
+    client = TestClient(
+        create_app(
+            database_path,
+            registry=_registry(tmp_path),
+            clock=lambda: 4.0,
+        )
+    )
+    body = _browser_post_bodies()["/api/browser-health"]
+    body.update(
+        timestamp_ms=9_000_000,
+        last_scan_at_ms=8_999_900,
+        last_success_at_ms=8_999_800,
+        scan_state="idle",
+    )
+
+    response = client.post(
+        "/api/browser-health",
+        headers={"Origin": "https://www.tiktok.com"},
+        json=body,
+    )
+
+    assert response.status_code == 200
+    health = Database(database_path).browser_health_snapshot()[0]
+    assert health["observed_at_ms"] == 4_000
+    assert health["last_scan_at_ms"] == 3_900
+    assert health["last_success_at_ms"] == 3_800
+
+
 def test_browser_account_without_expected_username_reports_unverified_health(
     tmp_path: Path,
 ) -> None:

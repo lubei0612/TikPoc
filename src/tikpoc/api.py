@@ -137,18 +137,24 @@ def _record_browser_health(
     database: Database,
     body: BrowserHealthRequest,
     *,
+    received_at_ms: int,
     binding_state: str | None = None,
 ) -> None:
+    clock_skew_ms = max(0, body.timestamp_ms - int(received_at_ms))
+
+    def server_time(client_time_ms: int) -> int:
+        return max(0, int(client_time_ms) - clock_skew_ms) if client_time_ms else 0
+
     database.upsert_browser_health(
         body.account_id,
         body.page_role,
         device_id=body.device_id,
         status=binding_state or body.binding_state,
-        observed_at_ms=body.timestamp_ms,
+        observed_at_ms=server_time(body.timestamp_ms),
         detail=body.path,
         observed_username=body.observed_username,
-        last_scan_at_ms=body.last_scan_at_ms,
-        last_success_at_ms=body.last_success_at_ms,
+        last_scan_at_ms=server_time(body.last_scan_at_ms),
+        last_success_at_ms=server_time(body.last_success_at_ms),
         scan_state=body.scan_state,
     )
     database.record_runtime_event(f"browser_health_{body.page_role}", body.account_id)
@@ -587,11 +593,20 @@ def create_app(
         try:
             _browser_account(registry, body)
         except BrowserBindingConflict as error:
-            _record_browser_health(database, body, binding_state=error.binding_state)
+            _record_browser_health(
+                database,
+                body,
+                received_at_ms=int(clock() * 1_000),
+                binding_state=error.binding_state,
+            )
             return _json({"error": error.error_code}, 409)
         except (KeyError, TypeError, ValueError, ValidationError):
             return _json({"error": "invalid browser request"}, 400)
-        _record_browser_health(database, body)
+        _record_browser_health(
+            database,
+            body,
+            received_at_ms=int(clock() * 1_000),
+        )
         return _json({"recorded": True})
 
     @app.post("/api/tiktok-business/webhook")
