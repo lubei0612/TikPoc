@@ -27,6 +27,8 @@ class ConversionAssessment:
     should_invite: bool
     contact: str = ""
     human_reason: str = ""
+    profile_contact_reason: str = ""
+    stop_contact_reason: str = ""
 
 
 _EMAIL_PATTERN = re.compile(
@@ -133,6 +135,30 @@ _HUMAN_REASONS = (
         ),
     ),
 )
+_STOP_CONTACT_PATTERNS = (
+    re.compile(
+        r"\b(?:stop|quit)\b.{0,30}\b(?:messag(?:e|ing)|contact(?:ing)?|follow(?:ing)?)\b|"
+        r"\b(?:do not|don't|dont|never)\b.{0,30}\b(?:message|contact|follow)\b|"
+        r"\bleave me alone\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"(?:不要|别|停止).{0,8}(?:再)?(?:联系|私信|发消息|关注|跟随)(?:我)?"),
+    re.compile(
+        r"\b(?:h[oö]r|hoer)\s+auf\b.{0,30}\b(?:kontaktieren|nachrichten|folgen)\b|"
+        r"\bnicht mehr\b.{0,20}\b(?:kontaktieren|anschreiben|folgen)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bno me (?:contactes|escribas|sigas)(?: m[aá]s)?\b|"
+        r"\bdeja de (?:contactarme|escribirme|seguirme)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bne me (?:contactez|[eé]crivez|suivez) plus\b|"
+        r"\barr[eê]tez de (?:me contacter|m['’][eé]crire|me suivre)\b",
+        re.IGNORECASE,
+    ),
+)
 _PRIVATE_CHANNEL_ACCEPTANCE_PATTERNS = (
     re.compile(
         r"\b(yes|sure|okay|ok|fine|great|happy to)\b.{0,30}"
@@ -204,6 +230,13 @@ def requires_human(text: str) -> bool:
     return bool(_human_reason(text))
 
 
+def _stop_contact_reason(text: str) -> str:
+    normalized = _normalize(text)
+    if any(pattern.search(normalized) for pattern in _STOP_CONTACT_PATTERNS):
+        return "explicit_opt_out"
+    return ""
+
+
 def shows_buying_intent(text: str) -> bool:
     normalized = _normalize(text)
     return any(pattern.search(normalized) for pattern in _BUYING_PATTERNS)
@@ -235,16 +268,27 @@ def assess_inbound(
 ) -> ConversionAssessment:
     previous_stage = ConversationStage(previous_stage)
     meaningful = is_meaningful(text)
-    if previous_stage in {ConversationStage.HUMAN_REQUIRED, ConversationStage.CLOSED}:
+    if previous_stage == ConversationStage.CLOSED:
         return ConversionAssessment(previous_stage, meaningful, False)
+    if previous_stage == ConversationStage.HUMAN_REQUIRED:
+        previous_stage = ConversationStage.QUALIFIED
+
+    stop_contact_reason = _stop_contact_reason(text)
+    if stop_contact_reason:
+        return ConversionAssessment(
+            ConversationStage.CLOSED,
+            meaningful,
+            False,
+            stop_contact_reason=stop_contact_reason,
+        )
 
     human_reason = _human_reason(text)
     if human_reason:
         return ConversionAssessment(
-            ConversationStage.HUMAN_REQUIRED,
+            ConversationStage.QUALIFIED,
             meaningful,
-            False,
-            human_reason=human_reason,
+            True,
+            profile_contact_reason=human_reason,
         )
 
     contact = extract_contact(text)

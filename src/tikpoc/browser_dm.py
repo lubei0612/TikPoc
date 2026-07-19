@@ -7,7 +7,6 @@ from .db import BrowserConversationBusy, BrowserReplyPlan, Database
 from .lead_conversion import (
     ConversationStage,
     assess_inbound,
-    preferred_private_channel,
 )
 from .web_accounts import WebAccount, WebAccountRegistry
 
@@ -53,6 +52,36 @@ def _normalize_whitespace(value: str) -> str:
     return " ".join(value.split())
 
 
+_PROFILE_CONTACT_REPLY = (
+    "Please use the link on our TikTok profile or the contact details in our "
+    "pinned profile posts if you're interested."
+)
+
+
+def _ensure_profile_contact_reply(reply_text: str, account: WebAccount) -> str:
+    normalized = _normalize_whitespace(reply_text)
+    lowered = normalized.casefold()
+    configured_values = (
+        account.private_channel_hint,
+        account.whatsapp,
+        account.telegram,
+    )
+    exposes_destination = any(
+        value and _normalize_whitespace(value).casefold() in lowered
+        for value in configured_values
+    )
+    asks_direct_channel = "whatsapp" in lowered or "telegram" in lowered
+    has_profile_route = (
+        "profile" in lowered and ("link" in lowered or "pinned" in lowered)
+    ) or ("主页" in normalized and ("链接" in normalized or "置顶" in normalized))
+    if exposes_destination or asks_direct_channel:
+        return _PROFILE_CONTACT_REPLY
+    if has_profile_route:
+        return normalized
+    prefix = normalized[: max(0, 300 - len(_PROFILE_CONTACT_REPLY) - 1)].rstrip()
+    return f"{prefix} {_PROFILE_CONTACT_REPLY}".strip()
+
+
 class BrowserDmService:
     def __init__(
         self,
@@ -88,26 +117,6 @@ class BrowserDmService:
         ):
             raise ValueError("browser direct messages are disabled for this account")
         return self.account_overlay(account)
-
-    @staticmethod
-    def _private_channel_selection(
-        account: WebAccount, inbound_text: str, *, invitation_due: bool
-    ) -> tuple[str, bool]:
-        if not invitation_due:
-            return "", False
-        channels = {
-            "whatsapp": _normalize_whitespace(account.whatsapp),
-            "telegram": _normalize_whitespace(account.telegram),
-        }
-        channels = {name: value for name, value in channels.items() if value}
-        if not channels:
-            return _normalize_whitespace(account.private_channel_hint), False
-        preferred = preferred_private_channel(inbound_text)
-        if preferred in channels:
-            return channels[preferred], False
-        if len(channels) == 1:
-            return next(iter(channels.values())), False
-        return "", True
 
     def plan(self, inbound: BrowserInbound) -> BrowserReply:
         values = (
@@ -210,25 +219,9 @@ class BrowserDmService:
                 )
                 return _reply_from_plan(completed)
 
-            private_channel_hint, ask_channel_preference = (
-                self._private_channel_selection(
-                    account,
-                    plan.inbound_text,
-                    invitation_due=assessment.should_invite,
-                )
+            profile_contact_due = bool(
+                assessment.should_invite or assessment.profile_contact_reason
             )
-            configured_invite = bool(assessment.should_invite and private_channel_hint)
-            if (
-                assessment.should_invite
-                and not configured_invite
-                and not ask_channel_preference
-            ):
-                self.database.record_browser_diagnostic_event(
-                    account.account_id,
-                    "invite_configuration_missing",
-                    plan.inbound_fingerprint,
-                    {"conversation_id": plan.conversation_id},
-                )
 
             confirmed_replies, reserved_replies = (
                 self.database.browser_reply_budget_counts(
@@ -265,23 +258,24 @@ class BrowserDmService:
             )
             reply_text = self.reply_client.reply_conversation(
                 history,
-                private_channel_hint=private_channel_hint,
+                private_channel_hint="",
                 offer_context=account.offer_context,
                 faq_context=account.faq_text,
                 conversation_stage=assessment.stage.value,
-                should_invite=configured_invite,
-                ask_private_channel_preference=ask_channel_preference,
+                should_invite=assessment.should_invite,
+                ask_private_channel_preference=False,
+                profile_contact_due=profile_contact_due,
+                profile_contact_reason=assessment.profile_contact_reason,
                 reply_tone=account.reply_tone,
                 brand_name=account.brand_name,
                 introduce_ai=introduce_ai,
                 fallback=account.fallback_acknowledgement,
                 max_history_messages=12,
             )
+            if profile_contact_due:
+                reply_text = _ensure_profile_contact_reply(reply_text, account)
             stage = assessment.stage
-            invitation_included = bool(
-                configured_invite
-                and private_channel_hint in _normalize_whitespace(reply_text)
-            )
+            invitation_included = bool(profile_contact_due and reply_text.strip())
             if invitation_included:
                 stage = ConversationStage.INVITED
             completed = self.database.finalize_browser_reply_plan(

@@ -1,4 +1,3 @@
-import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
@@ -96,8 +95,7 @@ def test_new_plan_passes_account_context_and_advances_inbound_state_once(
 ) -> None:
     database = Database(tmp_path / "db.sqlite")
     database.migrate()
-    destination = "WhatsApp: +1 555 0100"
-    ai = FakeReplyClient((f"Yes. Continue on {destination}",))
+    ai = FakeReplyClient(("Yes. Use the link on our TikTok profile.",))
     service = BrowserDmService(
         database, registry_with_browser_account(), ai, clock=lambda: 100.0
     )
@@ -121,12 +119,14 @@ def test_new_plan_passes_account_context_and_advances_inbound_state_once(
     history, options = ai.calls[0]
     assert [item["message_id"] for item in history] == ["fp-context"]
     assert options == {
-        "private_channel_hint": destination,
+        "private_channel_hint": "",
         "offer_context": "Bags from the current catalog",
         "faq_context": "Shipping takes 5-7 days.",
         "conversation_stage": "qualified",
         "should_invite": True,
         "ask_private_channel_preference": False,
+        "profile_contact_due": True,
+        "profile_contact_reason": "",
         "reply_tone": "",
         "brand_name": "Sample Brand",
         "introduce_ai": True,
@@ -220,10 +220,12 @@ def test_reply_budget_closes_without_calling_ai(tmp_path: Path) -> None:
     assert state.stage == "closed"
 
 
-def test_human_required_plan_is_empty_and_does_not_call_ai(tmp_path: Path) -> None:
+def test_former_human_required_request_gets_profile_contact_ai_reply(
+    tmp_path: Path,
+) -> None:
     database = Database(tmp_path / "db.sqlite")
     database.migrate()
-    ai = FakeReplyClient()
+    ai = FakeReplyClient(("Please use the link on our TikTok profile.",))
     service = BrowserDmService(database, registry_with_browser_account(), ai)
 
     reply = service.plan(
@@ -238,15 +240,40 @@ def test_human_required_plan_is_empty_and_does_not_call_ai(tmp_path: Path) -> No
         )
     )
 
-    assert reply.stage == "human_required"
+    assert reply.stage == "invited"
+    assert reply.reply_text == "Please use the link on our TikTok profile."
+    assert len(ai.calls) == 1
+    assert ai.calls[0][1]["profile_contact_due"] is True
+    assert ai.calls[0][1]["profile_contact_reason"] == "refund"
+    state = database.browser_conversation_state("account-01", "conversation-01")
+    assert state.stage == "qualified"
+    assert state.human_required is False
+
+
+def test_stop_contact_plan_is_empty_and_does_not_call_ai(tmp_path: Path) -> None:
+    database = Database(tmp_path / "db.sqlite")
+    database.migrate()
+    ai = FakeReplyClient()
+    service = BrowserDmService(database, registry_with_browser_account(), ai)
+
+    reply = service.plan(
+        BrowserInbound(
+            "account-01",
+            "phone-01",
+            "conversation-01",
+            "fp-stop",
+            "buyer",
+            "stop messaging me",
+            99_000,
+        )
+    )
+
+    assert reply.stage == "closed"
     assert reply.reply_text == ""
     assert ai.calls == []
-    state = database.browser_conversation_state("account-01", "conversation-01")
-    assert state.stage == "human_required"
-    assert state.human_required is True
 
 
-def test_missing_invite_configuration_is_recorded_once_without_queueing(
+def test_profile_contact_route_needs_no_direct_destination_configuration(
     tmp_path: Path,
 ) -> None:
     database = Database(tmp_path / "db.sqlite")
@@ -272,8 +299,9 @@ def test_missing_invite_configuration_is_recorded_once_without_queueing(
     second = service.plan(inbound)
 
     assert first == second
-    assert first.stage == "qualified"
-    assert ai.calls[0][1]["should_invite"] is False
+    assert first.stage == "invited"
+    assert "TikTok profile" in first.reply_text
+    assert ai.calls[0][1]["should_invite"] is True
     with sqlite3.connect(database.path) as connection:
         connection.row_factory = sqlite3.Row
         rows = connection.execute(
@@ -284,13 +312,10 @@ def test_missing_invite_configuration_is_recorded_once_without_queueing(
               AND event_type='invite_configuration_missing'
             """
         ).fetchall()
-    assert len(rows) == 1
-    assert rows[0]["dedup_key"] == "fp-missing-invite"
-    assert json.loads(rows[0]["payload_json"]) == {"conversation_id": "conversation-01"}
-    assert rows[0]["state"] == "completed"
+    assert rows == []
 
 
-def test_missing_invite_configuration_is_recorded_when_reply_budget_is_full(
+def test_profile_contact_request_at_full_budget_records_no_missing_config(
     tmp_path: Path,
 ) -> None:
     database = Database(tmp_path / "db.sqlite")
@@ -348,7 +373,7 @@ def test_missing_invite_configuration_is_recorded_when_reply_budget_is_full(
               AND dedup_key='fp-missing-invite-at-budget'
             """
         ).fetchone()[0]
-    assert event_count == 1
+    assert event_count == 0
 
 
 def test_confirmed_result_appends_outbound_and_counts_once(tmp_path: Path) -> None:
@@ -471,7 +496,8 @@ def test_uncertain_plan_keeps_conversation_busy_until_reconciled(
 
     reconciled = service.plan(next_inbound)
 
-    assert reconciled.reply_text == "Reconciled next draft"
+    assert reconciled.reply_text.startswith("Reconciled next draft")
+    assert "TikTok profile" in reconciled.reply_text
     assert len(ai.calls) == 2
 
 
@@ -577,7 +603,7 @@ def test_existing_planning_reservation_recovers_inbound_atomically(
     assert [item["message_id"] for item in messages] == ["fp-recovery"]
 
 
-def test_human_request_has_priority_when_reply_budget_is_reached(
+def test_profile_contact_request_respects_reply_budget(
     tmp_path: Path,
 ) -> None:
     database = Database(tmp_path / "db.sqlite")
@@ -608,7 +634,7 @@ def test_human_request_has_priority_when_reply_budget_is_reached(
         )
     )
 
-    assert reply.stage == "human_required"
+    assert reply.stage == "closed"
     assert reply.reply_text == ""
     assert ai.calls == []
 
@@ -816,7 +842,7 @@ def test_cooldown_timestamp_changes_only_when_draft_contains_invitation(
     assert state.auto_reply_count == 2
 
 
-def test_provider_fallback_without_destination_is_not_planned_as_invited(
+def test_provider_fallback_adds_profile_contact_route(
     tmp_path: Path,
 ) -> None:
     database = Database(tmp_path / "db.sqlite")
@@ -839,7 +865,9 @@ def test_provider_fallback_without_destination_is_not_planned_as_invited(
         )
     )
 
-    assert reply.stage == "qualified"
+    assert reply.stage == "invited"
+    assert reply.reply_text.startswith("Thanks for your message.")
+    assert "TikTok profile" in reply.reply_text
     assert (
         database.browser_conversation_state(
             "account-01", "conversation-01"
@@ -1082,7 +1110,7 @@ def test_second_meaningful_inbound_turn_requests_invitation(tmp_path: Path) -> N
     )
 
 
-def test_qualified_lead_is_asked_for_channel_preference_before_destination(
+def test_qualified_lead_is_sent_to_profile_without_channel_preference(
     tmp_path: Path,
 ) -> None:
     database = Database(tmp_path / "db.sqlite")
@@ -1110,14 +1138,18 @@ def test_qualified_lead_is_asked_for_channel_preference_before_destination(
         )
     )
 
-    assert reply.stage == "qualified"
-    assert ai.calls[0][1]["ask_private_channel_preference"] is True
+    assert reply.stage == "invited"
+    assert "TikTok profile" in reply.reply_text
+    assert ai.calls[0][1]["ask_private_channel_preference"] is False
     assert ai.calls[0][1]["private_channel_hint"] == ""
+    assert ai.calls[0][1]["profile_contact_due"] is True
     assert "CONTACT_A" not in reply.reply_text
     assert "CHANNEL_A" not in reply.reply_text
 
 
-def test_qualified_lead_receives_only_the_selected_channel(tmp_path: Path) -> None:
+def test_qualified_lead_never_receives_configured_direct_channel(
+    tmp_path: Path,
+) -> None:
     database = Database(tmp_path / "db.sqlite")
     database.migrate()
     ai = FakeReplyClient(
@@ -1146,9 +1178,12 @@ def test_qualified_lead_receives_only_the_selected_channel(tmp_path: Path) -> No
     )
 
     assert reply.stage == "invited"
-    assert ai.calls[0][1]["private_channel_hint"] == "WhatsApp: CONTACT_A"
+    assert ai.calls[0][1]["private_channel_hint"] == ""
     assert ai.calls[0][1]["ask_private_channel_preference"] is False
+    assert ai.calls[0][1]["profile_contact_due"] is True
+    assert "CONTACT_A" not in reply.reply_text
     assert "CHANNEL_A" not in reply.reply_text
+    assert "TikTok profile" in reply.reply_text
 
 
 def test_atomic_inbound_reservation_has_one_creator_across_connections(
@@ -1348,7 +1383,8 @@ def test_superseded_pending_draft_releases_budget_without_closing_conversation(
         )
     )
 
-    assert replacement.reply_text == "Replacement draft"
+    assert replacement.reply_text.startswith("Replacement draft")
+    assert "TikTok profile" in replacement.reply_text
     assert len(ai.calls) == 2
     assert (
         database.browser_conversation_state("account-01", "conversation-01").stage
@@ -1493,7 +1529,7 @@ def test_browser_dm_emits_idempotent_funnel_and_verified_invitation_events(
     ("text", "stage"),
     (
         ("My WhatsApp is +44 7700 900123", "contact_captured"),
-        ("I need a refund", "human_required"),
+        ("I need a refund", "qualified"),
     ),
 )
 def test_browser_dm_emits_priority_funnel_events(

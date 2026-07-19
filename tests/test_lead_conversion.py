@@ -85,12 +85,14 @@ def test_contact_capture_has_priority_over_invitation() -> None:
         "Can you decide a special price for me?",
     ],
 )
-def test_payment_complaint_or_unsupported_decision_requires_human(text: str) -> None:
+def test_payment_complaint_or_unsupported_decision_routes_to_profile_contact(
+    text: str,
+) -> None:
     assert requires_human(text) is True
     result = _assess(text, meaningful_turns=1)
-    assert result.stage == ConversationStage.HUMAN_REQUIRED
-    assert result.human_reason
-    assert result.should_invite is False
+    assert result.stage == ConversationStage.QUALIFIED
+    assert result.profile_contact_reason
+    assert result.should_invite is True
 
 
 @pytest.mark.parametrize(
@@ -105,12 +107,37 @@ def test_payment_complaint_or_unsupported_decision_requires_human(text: str) -> 
         "请让经理联系我",
     ],
 )
-def test_explicit_handoff_request_requires_human(text: str) -> None:
+def test_explicit_handoff_request_routes_to_profile_contact(text: str) -> None:
     assert requires_human(text) is True
     result = _assess(text, meaningful_turns=1)
-    assert result.stage == ConversationStage.HUMAN_REQUIRED
-    assert result.human_reason == "human_handoff"
+    assert result.stage == ConversationStage.QUALIFIED
+    assert result.profile_contact_reason == "human_handoff"
+    assert result.should_invite is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "stop messaging me",
+        "不要再联系我",
+        "hör auf mir zu folgen",
+        "no me contactes más",
+        "ne me contactez plus",
+    ],
+)
+def test_explicit_stop_contact_closes_without_reply(text: str) -> None:
+    result = _assess(text, meaningful_turns=1)
+
+    assert result.stage == ConversationStage.CLOSED
+    assert result.stop_contact_reason == "explicit_opt_out"
     assert result.should_invite is False
+
+
+def test_product_preference_rejection_remains_replyable() -> None:
+    result = _assess("I am not interested in red; do you have black?")
+
+    assert result.stage != ConversationStage.CLOSED
+    assert result.stop_contact_reason == ""
 
 
 @pytest.mark.parametrize(
@@ -250,17 +277,24 @@ def test_later_nonterminal_stages_do_not_regress(stage: ConversationStage) -> No
     assert result.should_invite is False
 
 
-@pytest.mark.parametrize(
-    "stage", [ConversationStage.HUMAN_REQUIRED, ConversationStage.CLOSED]
-)
-def test_terminal_stages_ignore_later_inbound(stage: ConversationStage) -> None:
+def test_closed_stage_ignores_later_inbound() -> None:
     result = _assess(
         "My WhatsApp is +44 7700 900123 and I want to buy",
-        previous_stage=stage,
+        previous_stage=ConversationStage.CLOSED,
     )
-    assert result.stage == stage
+    assert result.stage == ConversationStage.CLOSED
     assert result.contact == ""
     assert result.should_invite is False
+
+
+def test_legacy_human_required_stage_reopens_for_autonomous_service() -> None:
+    result = _assess(
+        "My WhatsApp is +44 7700 900123 and I want to buy",
+        previous_stage=ConversationStage.HUMAN_REQUIRED,
+    )
+
+    assert result.stage == ConversationStage.CONTACT_CAPTURED
+    assert result.contact == "+44 7700 900123"
 
 
 def test_prompt_api_is_keyword_only() -> None:

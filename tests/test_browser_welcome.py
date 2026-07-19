@@ -24,6 +24,7 @@ def _registry() -> WebAccountRegistry:
                 device_id="phone-01",
                 mode="browser",
                 brand_name="Sample Brand",
+                offer_context="Mirror-quality bags from the current catalog.",
                 welcome_after_followback=True,
                 welcome_language="English",
             ),
@@ -89,7 +90,7 @@ def test_completed_followback_creates_one_durable_welcome_plan(
     assert len(ai.calls) == 1
     assert ai.calls[0][0] == []
     assert ai.calls[0][1] == {
-        "offer_context": "",
+        "offer_context": "Mirror-quality bags from the current catalog.",
         "faq_context": "",
         "conversation_stage": "new",
         "reply_tone": "",

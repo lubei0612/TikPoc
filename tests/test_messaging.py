@@ -222,6 +222,7 @@ def test_new_follower_welcome_uses_default_language_without_private_channels() -
 
     client.reply_conversation(
         [],
+        offer_context="Mirror-quality bags from the current catalog.",
         brand_name="Sample Brand",
         introduce_ai=True,
         response_mode="new_follower_welcome",
@@ -232,8 +233,37 @@ def test_new_follower_welcome_uses_default_language_without_private_channels() -
     assert "Write the welcome in English" in system
     assert "Sample Brand's AI customer-service assistant" in system
     assert "Thank the person for following" in system
-    assert "one easy product-oriented question" in system
+    assert "Mirror-quality bags from the current catalog." in system
+    assert "one direct product-interest question" in system
     assert "Do not include WhatsApp, Telegram" in system
+
+
+def test_profile_contact_prompt_excludes_stored_direct_destinations() -> None:
+    requests = []
+
+    def opener(request, timeout):
+        requests.append(request)
+        return FakeResponse("Please use the link on our TikTok profile.")
+
+    client = AiReplyClient(
+        base_url="https://llm.example/v1",
+        api_key="secret",
+        model="reply-model",
+        opener=opener,
+    )
+
+    client.reply_conversation(
+        [{"direction": "inbound", "text": "I need a refund"}],
+        private_channel_hint="SECRET_DESTINATION",
+        profile_contact_due=True,
+        profile_contact_reason="refund",
+    )
+
+    system = json.loads(requests[0].data)["messages"][0]["content"]
+    assert "link on the TikTok account profile" in system
+    assert "pinned profile posts" in system
+    assert "live transfer" in system
+    assert "SECRET_DESTINATION" not in system
 
 
 def test_lead_reply_prompt_bounds_context_and_excludes_private_values() -> None:

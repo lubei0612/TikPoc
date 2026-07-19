@@ -76,6 +76,8 @@ def _build_system_prompt(
     introduce_ai: bool,
     response_mode: str,
     welcome_language: str,
+    profile_contact_due: bool,
+    profile_contact_reason: str,
 ) -> str:
     if response_mode not in {"conversation", "new_follower_welcome"}:
         raise ValueError("invalid AI response mode")
@@ -122,8 +124,10 @@ def _build_system_prompt(
     if response_mode == "new_follower_welcome":
         parts.append(
             "Thank the person for following, introduce the AI service role, and ask "
-            "one easy product-oriented question. Do not include WhatsApp, Telegram, "
-            "or any private-channel destination."
+            "one direct product-interest question grounded in the supplied offer "
+            "facts. When the offer facts describe mirror-quality bags, ask whether "
+            "the person is interested in those bags. Do not include WhatsApp, "
+            "Telegram, or any private-channel destination."
         )
     tone = _bounded_prompt_fragment(reply_tone, 500)
     if tone:
@@ -145,6 +149,14 @@ def _build_system_prompt(
                 "with one short natural sentence inviting interested buyers to "
                 "contact that destination for details or purchasing."
             )
+    if profile_contact_due:
+        reason = _bounded_prompt_fragment(profile_contact_reason, 100)
+        parts.append(
+            "Direct the customer to the link on the TikTok account profile or the "
+            "contact details in pinned profile posts. Do not include a stored direct "
+            "destination, promise a live transfer, or claim a person is currently "
+            f"available. Contact-route reason: {reason or 'customer interest'}."
+        )
     return "\n".join(parts)[:_SYSTEM_PROMPT_LIMIT]
 
 
@@ -206,6 +218,8 @@ class AiReplyClient:
         introduce_ai: bool = False,
         response_mode: str = "conversation",
         welcome_language: str = "English",
+        profile_contact_due: bool = False,
+        profile_contact_reason: str = "",
         fallback: str | None = None,
         max_history_messages: int = 12,
         max_characters: int = 300,
@@ -243,6 +257,8 @@ class AiReplyClient:
                         introduce_ai=introduce_ai,
                         response_mode=response_mode,
                         welcome_language=welcome_language,
+                        profile_contact_due=profile_contact_due,
+                        profile_contact_reason=profile_contact_reason,
                     ),
                 },
                 *conversation,
