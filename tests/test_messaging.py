@@ -76,7 +76,18 @@ def test_ai_reply_falls_back_when_not_configured() -> None:
     assert client.reply("Hello") == "Thanks for your message. How can I help?"
 
 
-def test_runtime_ai_client_loads_latest_provider_for_each_request(tmp_path) -> None:
+def test_runtime_ai_client_loads_latest_provider_for_each_request(
+    tmp_path, monkeypatch
+) -> None:
+    for name in (
+        "TKAUTO_LLM_BASE_URL",
+        "TKAUTO_LLM_API_KEY",
+        "TKAUTO_LLM_MODEL",
+        "MODEL_MONITOR_LLM_BASE_URL",
+        "MODEL_MONITOR_LLM_API_KEY",
+        "MODEL_MONITOR_LLM_MODEL",
+    ):
+        monkeypatch.delenv(name, raising=False)
     requests = []
 
     def opener(request, timeout):

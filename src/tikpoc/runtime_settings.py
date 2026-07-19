@@ -85,9 +85,15 @@ class RuntimeSettingsStore:
             provider = {}
         environment = self._environment_provider()
         return ProviderCredentials(
-            base_url=str(provider.get("base_url") or environment.base_url).rstrip("/"),
-            api_key=str(provider.get("api_key") or environment.api_key),
-            model=str(provider.get("model") or environment.model).strip(),
+            base_url=str(
+                provider["base_url"] if "base_url" in provider else environment.base_url
+            ).rstrip("/"),
+            api_key=str(
+                provider["api_key"] if "api_key" in provider else environment.api_key
+            ),
+            model=str(
+                provider["model"] if "model" in provider else environment.model
+            ).strip(),
         )
 
     def save_provider(
