@@ -328,8 +328,8 @@ def test_operations_snapshot_reads_browser_health_in_acquisition_transaction(
             "browser_profile_label": "",
             "expected_tiktok_username": "",
             "observed_username": "",
-            "binding_state": "ready",
-            "status": "ready",
+            "binding_state": "stale",
+            "status": "stale",
             "observed_at_ms": 11_500,
             "last_scan_at_ms": 0,
             "last_success_at_ms": 0,
@@ -411,6 +411,9 @@ def test_operations_snapshot_expands_12_browser_accounts_and_local_states(
             status=state,
             observed_at_ms=observed_at,
             observed_username=observed,
+            last_scan_at_ms=observed_at if state == "ready" else 0,
+            last_success_at_ms=observed_at if state == "ready" else 0,
+            scan_state="idle" if state == "ready" else "not_started",
         )
 
     response = TestClient(app).get(f"/api/operations?round_id={round_id}")

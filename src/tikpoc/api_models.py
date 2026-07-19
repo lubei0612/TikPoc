@@ -1,6 +1,6 @@
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 
 BoundedText = Annotated[
@@ -86,6 +86,12 @@ class BrowserHealthRequest(BrowserIdentityRequest):
     last_scan_at_ms: int = Field(default=0, ge=0)
     last_success_at_ms: int = Field(default=0, ge=0)
     scan_state: BoundedText = "not_started"
+
+    @model_validator(mode="after")
+    def validate_scan_timestamps(self) -> "BrowserHealthRequest":
+        if not (self.last_success_at_ms <= self.last_scan_at_ms <= self.timestamp_ms):
+            raise ValueError("browser scan timestamps are inconsistent")
+        return self
 
 
 class DeviceEventRequest(ApiRequest):

@@ -79,7 +79,7 @@ def merge_browser_health_rows(
             and int(now_ms) - observed_at_ms > _BROWSER_HEARTBEAT_STALE_MS
         ):
             binding_state = "stale"
-        elif last_scan_at_ms and (
+        elif stored_state == "ready" and (
             not last_success_at_ms
             or int(now_ms) - last_success_at_ms > _BROWSER_HEARTBEAT_STALE_MS
         ):
