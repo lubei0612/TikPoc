@@ -3,6 +3,8 @@ import os
 from collections.abc import Callable
 from urllib.request import Request, urlopen
 
+from .runtime_settings import ProviderCredentials
+
 
 _PROMPT_CONTEXT_LIMIT = 3_000
 _PROMPT_DESTINATION_LIMIT = 500
@@ -177,3 +179,36 @@ class AiReplyClient:
         if isinstance(content, str) and content.strip():
             return content.strip()[:reply_limit]
         return bounded_fallback
+
+
+class RuntimeAiReplyClient:
+    def __init__(
+        self,
+        credentials_loader: Callable[[], ProviderCredentials],
+        *,
+        opener: Callable = urlopen,
+        fallback: str = _DEFAULT_FALLBACK,
+    ) -> None:
+        self.credentials_loader = credentials_loader
+        self.opener = opener
+        self.fallback = fallback
+
+    def _client(self) -> AiReplyClient:
+        provider = self.credentials_loader()
+        return AiReplyClient(
+            base_url=provider.base_url,
+            api_key=provider.api_key,
+            model=provider.model,
+            opener=self.opener,
+            fallback=self.fallback,
+        )
+
+    def reply(self, message: str) -> str:
+        return self._client().reply(message)
+
+    def reply_conversation(
+        self,
+        history: list[dict[str, object]],
+        **kwargs: object,
+    ) -> str:
+        return self._client().reply_conversation(history, **kwargs)

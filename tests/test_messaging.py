@@ -2,7 +2,8 @@ import json
 
 import pytest
 
-from tikpoc.messaging import AiReplyClient
+from tikpoc.messaging import AiReplyClient, RuntimeAiReplyClient
+from tikpoc.runtime_settings import RuntimeSettingsStore
 
 
 class FakeResponse:
@@ -73,6 +74,27 @@ def test_ai_reply_falls_back_when_not_configured() -> None:
     client = AiReplyClient(base_url="", api_key="", model="")
 
     assert client.reply("Hello") == "Thanks for your message. How can I help?"
+
+
+def test_runtime_ai_client_loads_latest_provider_for_each_request(tmp_path) -> None:
+    requests = []
+
+    def opener(request, timeout):
+        requests.append(request)
+        return FakeResponse()
+
+    store = RuntimeSettingsStore(tmp_path / "operator-settings.json")
+    client = RuntimeAiReplyClient(store.provider_credentials, opener=opener)
+    assert client.reply("Hello") == "Thanks for your message. How can I help?"
+
+    store.save_provider(
+        base_url="https://provider.example/v1",
+        api_key="synthetic-secret",
+        model="model-b",
+    )
+
+    assert client.reply("Hello") == "Thanks, how can I help?"
+    assert requests[0].full_url == "https://provider.example/v1/chat/completions"
 
 
 def test_lead_reply_prompt_contains_offer_faq_stage_and_invite() -> None:
