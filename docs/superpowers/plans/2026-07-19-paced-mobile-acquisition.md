@@ -78,7 +78,7 @@
 - Modify: `docs/mobile-fleet-runbook.md`
 - Modify: `AGENTS.md`
 
-- [ ] Run Python, Ruff, Chrome Node, Android build, and `git diff --check`.
-- [ ] Run controlled trace/like/favorite/repost calibration and verify visible post-action state without duplicate clicks.
+- [x] Run Python, Ruff, Chrome Node, Android build, and `git diff --check`.
+- [x] Run controlled trace/like/favorite/repost calibration and verify visible post-action state without duplicate clicks.
 - [ ] Run a fresh 500-target slot-1 round, record measured mean/P90 separately from projection, and require mean `<6.5s`, P90 `<8.64s`, exact coverage, and zero uncertain work.
 - [ ] Record results and commit `docs: record paced mobile acceptance`.

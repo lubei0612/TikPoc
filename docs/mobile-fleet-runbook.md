@@ -39,3 +39,34 @@ P90 was 15.572 seconds, and projected 20-hour capacity was 421 targets/day.
 The capacity command correctly failed on timing and historical identity mismatch
 evidence. Run a fresh, calibration-free round before evaluating promotion.
 
+## Paced Slot 1 Final-Attempt Gate (2026-07-19)
+
+A new database and round reused the available 326-unique-target CSV after the
+rolling pacing and route-recovery changes. Durable business state finished with:
+
+- 326/326 completed assignments, confirmed visits, and complete coverage;
+- 45 confirmed likes, 7 favorites, 11 reposts, and 263 trace-only visits;
+- zero uncertain plans and zero active assignment leases;
+- no quota integrity, false-completion, identity, or cardinality findings.
+
+The actions were created across approximately 26 minutes. Their relative counts
+track the configured hourly rates of 100/14/25 rather than firing at round start.
+
+Capacity uses the final `profile_opening` attempt for a recovered assignment and
+accepts `pacing_not_due` only for a quota-free trace plan. The resulting audit was:
+
+- mean 4.658 seconds, P90 6.980 seconds;
+- 772.8 confirmed targets/hour;
+- projected 15,455 unique targets per 20-hour day;
+- route/identity/metrics/video/action P90 values of 1.302/2.461/0.996/2.022/2.461 seconds.
+
+One target exposed a stable-user-ID route that remained blank for more than 60
+seconds. The bounded recovery now tries the stable route, Inbox baseline, one app
+restart, then the public username URL with exact visible-username verification.
+That target completed through the final fallback.
+
+This is measured 326-target final-attempt evidence, not the planned clean
+500-unique-target promotion gate. The run was interrupted for route diagnosis and
+the affected assignment accumulated earlier failed attempts before the fix. Keep
+the 500-target gate open until a larger unique input is available and run it from
+an unchanged build.

@@ -1644,12 +1644,12 @@ class AcquisitionRepository:
                 """,
                 (round_id,),
             ).fetchall()
-            first_claims = {
+            final_claims = {
                 int(row["assignment_id"]): int(row["started_at_ms"])
                 for row in connection.execute(
                     """
                     SELECT history.assignment_id,
-                           MIN(history.changed_at_ms) AS started_at_ms
+                           MAX(history.changed_at_ms) AS started_at_ms
                     FROM assignment_phase_history AS history
                     JOIN round_assignments AS assignment
                       ON assignment.assignment_id = history.assignment_id
@@ -1749,7 +1749,7 @@ class AcquisitionRepository:
                     continue
                 completed_count += 1
                 assignment_id = int(row["assignment_id"])
-                started_at_ms = first_claims.get(assignment_id)
+                started_at_ms = final_claims.get(assignment_id)
                 completed_at_ms = row["completed_at_ms"]
                 plan_key = (str(row["identity_key"]), str(row["device_id"]))
                 plan_evidence = confirmed_plans.get(plan_key)
@@ -1806,10 +1806,8 @@ class AcquisitionRepository:
                         )
                     )
                     plan_valid = (
-                        started_at_ms
-                        <= visit_value
-                        <= plan_created_at_ms
-                        <= completed_value
+                        visit_value <= plan_created_at_ms <= completed_value
+                        and started_at_ms < completed_value
                         and snapshot_valid
                         and outcome_valid
                         and (
@@ -1828,7 +1826,7 @@ class AcquisitionRepository:
                     or completed_value is None
                     or started_at_ms is None
                     or completed_value <= started_at_ms
-                    or not started_at_ms <= visit_value <= completed_value
+                    or visit_value > completed_value
                     or not plan_valid
                 ):
                     continue
@@ -2080,7 +2078,7 @@ class AcquisitionRepository:
             valid = (
                 effective is OutcomeKind.TRACE
                 and window_start_ms is None
-                and reason is None
+                and reason in {None, "pacing_not_due"}
             )
             return valid, effective
 

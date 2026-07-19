@@ -462,6 +462,57 @@ def test_round_capacity_uses_only_structurally_completed_assignment_timings(
     assert report.passed is True
 
 
+def test_round_capacity_accepts_paced_trace_when_no_action_is_due(
+    tmp_path: Path,
+) -> None:
+    repository, round_id = repository_with_round(tmp_path, target_count=1)
+    seed_completed_round(repository, round_id)
+    with sqlite3.connect(repository.path) as connection:
+        prepare_eligible_round(connection, round_id)
+        connection.execute(
+            """
+            UPDATE device_action_plans
+            SET requested_outcome='trace', effective_outcome='trace',
+                quota_window_start_ms=NULL, quota_reason='pacing_not_due'
+            WHERE round_id=?
+            """,
+            (round_id,),
+        )
+
+    audit = repository.capacity_audit(round_id, expected_devices=2)
+
+    assert len(audit.timings) == 2
+    assert audit.false_success_count == 0
+    assert audit.quota_overrun_count == 0
+
+
+def test_round_capacity_uses_the_final_attempt_start_time(tmp_path: Path) -> None:
+    repository, round_id = repository_with_round(tmp_path, target_count=1)
+    seed_completed_round(repository, round_id)
+    with sqlite3.connect(repository.path) as connection:
+        assignment_id, completed_at_ms = connection.execute(
+            """
+            SELECT assignment_id, completed_at_ms
+            FROM round_assignments
+            WHERE round_id=? AND device_id='phone-01'
+            """,
+            (round_id,),
+        ).fetchone()
+        connection.execute(
+            """
+            INSERT INTO assignment_phase_history(
+                assignment_id, from_phase, to_phase, details_json, changed_at_ms
+            ) VALUES (?, 'deferred', 'profile_opening', '{}', ?)
+            """,
+            (assignment_id, int(completed_at_ms) - 1_000),
+        )
+
+    audit = repository.capacity_audit(round_id, expected_devices=2)
+
+    assert [timing.duration_ms for timing in audit.timings] == [1_000, 6_400]
+    assert audit.false_success_count == 0
+
+
 def test_round_capacity_audit_uses_one_explicit_read_transaction(
     tmp_path: Path, monkeypatch
 ) -> None:

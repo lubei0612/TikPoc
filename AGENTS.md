@@ -324,11 +324,17 @@ Completed on `feat/web-lead-conversion`:
 - The Chinese Operations console now shows rolling pacing and 20-hour capacity
   KPIs. Component tests pass 29/29 and Playwright passes 12/12 at 1440x1000,
   1920x1080, and 390x844 with inspected full-page screenshots.
+- A fresh-database 326-target paced run completed 326/326 with zero uncertain
+  plans or leases. Final-attempt mean/P90 were 4.658/6.980 seconds and the
+  20-hour projection was 15,455 targets. This is measured 326-target evidence;
+  the unchanged-build 500-unique-target gate remains open.
+- Stable-ID routes that remain blank after baseline and one restart now fall
+  back to the public username URL and require exact visible username matching.
 - The retained debug round failed capacity promotion: mean 170.718 seconds,
   P90 15.572 seconds, projected 421 targets per 20-hour day, with historical
   identity mismatch evidence. A fresh calibration-free round is still required.
-- Last fresh full Python verification: `573 passed`; Chrome Node verification:
-  `31 passed`; Android bridge build passed with the portable build-root fix.
+- Last fresh full Python verification: `582 passed`; Chrome Node verification:
+  `36 passed`; Android bridge build passed with the portable build-root fix.
 - Full-repository Ruff format check has a pre-existing 14-file formatting
   baseline; do not reformat those unrelated files as part of a narrow task.
 
