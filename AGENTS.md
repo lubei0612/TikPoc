@@ -254,8 +254,33 @@ Current live boundary:
 - Visible AI send, reload idempotency, multi-turn invitation, contact-stage, and
   human-handoff acceptance remain open. Continue them with a different controlled
   recipient conversation that can receive messages normally.
-- Automatic follow-back remains paused to avoid processing historical Activity
-  entries. Do not repeat the already completed mutual-follow or manual-DM tests.
+- Automatic follow-back was paused at this earlier checkpoint to avoid processing
+  historical Activity entries. The follow-up below supersedes the switch state;
+  do not repeat the already completed mutual-follow or manual-DM tests.
+
+### AI Settings And Automation Follow-up
+
+- Active worktree commits now include the AI/private-channel design and plan,
+  secure runtime settings, preferred-channel reply policy, the `/settings`
+  console workspace, and runtime browser-switch synchronization.
+- The localhost settings page supports one global OpenAI-compatible base URL,
+  write-only API key, model, redacted connection test, and per-account WhatsApp,
+  Telegram, offer, FAQ, and reply-tone settings. Local values are ignored and
+  stored with owner-only permissions; no secret or destination is in this report.
+- Both controlled accounts currently report AI enabled, follow-back enabled,
+  private channel configured, model configured, and Activity/Messages `4/4`
+  ready. A real provider connection test succeeded.
+- Latest regression: Python `625 passed`, Chrome Node `69 passed`, frontend
+  `35 passed`, Playwright `15/15` across desktop/wide/mobile, production build,
+  Android build, Ruff check, and `git diff --check` passed.
+- The current controlled conversation persisted one message in each direction,
+  but later consecutive bubbles disappeared after sender reload. Persisted
+  inbound changes appeared only after receiver reload and became protected
+  startup baselines. No new AI plan, DM lease, or follow-back lease was created
+  in this round, so visible autonomous reply and fresh follow-back remain open.
+- Continue only with a fresh controlled conversation that receives live DOM
+  updates and one new follower event. Supabase is deferred to a separate session
+  and is recorded here only as the future database migration target.
 
 ## Pause Checkpoint (2026-07-17)
 
