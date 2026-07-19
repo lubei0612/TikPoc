@@ -59,6 +59,7 @@ class ActionResult(StrEnum):
     CONFIRMED = "confirmed"
     NOT_APPLIED = "not_applied"
     UNCERTAIN = "uncertain"
+    UNAVAILABLE = "unavailable"
 
 
 @dataclass(frozen=True)

@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from tikpoc.acquisition_db import AcquisitionRepository
-from tikpoc.acquisition_models import OutcomeKind
+from tikpoc.acquisition_models import ActionPlanState, ActionResult, OutcomeKind
 from tikpoc.importer import Target
 from tikpoc.models import ProfileMetrics
 from tikpoc.outcome_planner import (
@@ -228,6 +228,69 @@ def test_ineligible_profile_forces_trace_without_quota(tmp_path: Path) -> None:
     assert plan.effective_outcome is OutcomeKind.TRACE
     assert plan.quota_reason == "profile_ineligible"
     assert repository.quota_window("phone-01", OutcomeKind.LIKE, 0) is None
+
+
+def test_visible_unavailable_action_becomes_confirmed_trace_and_releases_quota(
+    tmp_path: Path,
+) -> None:
+    repository, round_id, identities = _eligible_repository(tmp_path)
+    plan = get_or_create_plan(
+        repository,
+        round_id,
+        identities[0],
+        "phone-01",
+        now_ms=3_500_000,
+        forced_draw=OutcomeKind.REPOST,
+    )
+    with pytest.raises(ValueError, match="unavailable action evidence"):
+        repository.confirm_action_unavailable_as_trace(plan.plan_id)
+    repository.mark_action_executing(plan.plan_id)
+    repository.record_action_result(
+        plan.plan_id,
+        ActionResult.UNAVAILABLE,
+        now_ms=3_500_001,
+    )
+
+    fallback = repository.confirm_action_unavailable_as_trace(plan.plan_id)
+
+    assert fallback.requested_outcome is OutcomeKind.REPOST
+    assert fallback.effective_outcome is OutcomeKind.TRACE
+    assert fallback.quota_reason == "repost_unavailable"
+    assert fallback.quota_window_start_ms is None
+    assert fallback.state is ActionPlanState.CONFIRMED
+    quota = repository.quota_window("phone-01", OutcomeKind.REPOST, 0)
+    assert quota is not None
+    assert quota.reserved_count == 0
+    assert quota.confirmed_count == 0
+    assert quota.uncertain_count == 0
+
+
+def test_unavailable_trace_fallback_rejects_non_repost_actions(tmp_path: Path) -> None:
+    repository, round_id, identities = _eligible_repository(tmp_path)
+    plan = get_or_create_plan(
+        repository,
+        round_id,
+        identities[0],
+        "phone-01",
+        now_ms=3_500_000,
+        forced_draw=OutcomeKind.LIKE,
+    )
+    repository.mark_action_executing(plan.plan_id)
+    repository.record_action_result(
+        plan.plan_id,
+        ActionResult.UNAVAILABLE,
+        now_ms=3_500_001,
+    )
+
+    with pytest.raises(ValueError, match="only supported for repost"):
+        repository.confirm_action_unavailable_as_trace(plan.plan_id)
+
+    unchanged = repository.action_plan(round_id, identities[0], "phone-01")
+    quota = repository.quota_window("phone-01", OutcomeKind.LIKE, 0)
+    assert unchanged is not None
+    assert unchanged.effective_outcome is OutcomeKind.LIKE
+    assert unchanged.state is ActionPlanState.PLANNED
+    assert quota is not None and quota.reserved_count == 1
 
 
 def test_seeded_draws_are_evenly_distributed() -> None:

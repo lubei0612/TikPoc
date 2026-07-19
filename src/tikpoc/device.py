@@ -45,6 +45,11 @@ FAVORITE_ACTIVE_XPATH = (
 )
 SHARE_CONTROL_XPATH = '//*[starts-with(@content-desc, "Share video.")]'
 REPOST_CONTROL_XPATH = '//*[@text="Repost" or @content-desc="Repost"]'
+SHARE_SURFACE_XPATH = '//*[@content-desc="Bottom sheet"]'
+COPY_LINK_XPATH = (
+    '//*[@text="Copy link" or @content-desc="Copy link" or '
+    '@text="复制链接" or @content-desc="复制链接"]'
+)
 REPOST_ACTIVE_XPATH = (
     '//*[contains(@text,"You reposted") or contains(@content-desc,"You reposted") or '
     'contains(@text,"Remove repost") or contains(@content-desc,"Remove repost")]'
@@ -225,6 +230,8 @@ class AppiumTikTokDevice:
                 share.click()
                 repost = self._wait_for_element(REPOST_CONTROL_XPATH)
                 if repost is None:
+                    if self._share_surface_visible():
+                        return ActionResult.UNAVAILABLE
                     return ActionResult.UNCERTAIN
             repost.click()
         else:
@@ -435,7 +442,19 @@ class AppiumTikTokDevice:
             elements = self.driver.find_elements(By.XPATH, selector)
         except Exception:
             return None
-        return elements[0] if elements else None
+        for element in elements:
+            try:
+                if element.is_displayed():
+                    return element
+            except Exception:
+                continue
+        return None
+
+    def _share_surface_visible(self) -> bool:
+        return (
+            self._first_visible(SHARE_SURFACE_XPATH) is not None
+            and self._first_visible(COPY_LINK_XPATH) is not None
+        )
 
     def _wait_for_element(self, selector: str):
         deadline = self.clock() + self.action_timeout

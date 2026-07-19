@@ -33,6 +33,9 @@ class FakeElement:
         value = self.attributes.get(name)
         return value() if callable(value) else value
 
+    def is_displayed(self) -> bool:
+        return bool(self.attributes.get("displayed", True))
+
     @property
     def screenshot_as_png(self) -> bytes:
         return b"after" if self.clicked else b"before"
@@ -834,6 +837,28 @@ class SemanticActionDriver:
         return elements[0]
 
 
+class RepostUnavailableDriver(SemanticActionDriver):
+    def find_elements(self, by: str, value: str):
+        if "Repost" in value:
+            return []
+        if self.share_open and (
+            'content-desc="Bottom sheet"' in value or "Copy link" in value
+        ):
+            return [SemanticElement("Share surface")]
+        return super().find_elements(by, value)
+
+
+class HiddenRepostUnavailableDriver(RepostUnavailableDriver):
+    def find_elements(self, by: str, value: str):
+        if self.share_open and (
+            'content-desc="Bottom sheet"' in value or "Copy link" in value
+        ):
+            return [
+                SemanticElement("Hidden share surface", attributes={"displayed": False})
+            ]
+        return super().find_elements(by, value)
+
+
 class SteppingClock:
     def __init__(self) -> None:
         self.value = 0.0
@@ -871,6 +896,22 @@ def test_execute_repost_clicks_share_then_repost_and_verifies_state() -> None:
 
     assert device.execute_outcome(OutcomeKind.REPOST) is ActionResult.CONFIRMED
     assert driver.clicked_labels == ["Share", "Repost"]
+
+
+def test_execute_repost_reports_visible_unavailable_share_surface() -> None:
+    driver = RepostUnavailableDriver()
+    device = AppiumTikTokDevice(driver, poll_interval=0, action_timeout=0)
+
+    assert device.execute_outcome(OutcomeKind.REPOST).value == "unavailable"
+    assert driver.clicked_labels == ["Share"]
+
+
+def test_execute_repost_keeps_hidden_share_surface_uncertain() -> None:
+    driver = HiddenRepostUnavailableDriver()
+    device = AppiumTikTokDevice(driver, poll_interval=0, action_timeout=0)
+
+    assert device.execute_outcome(OutcomeKind.REPOST) is ActionResult.UNCERTAIN
+    assert driver.clicked_labels == ["Share"]
 
 
 def test_reconcile_liked_video_does_not_click_again() -> None:

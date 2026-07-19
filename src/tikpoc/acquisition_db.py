@@ -1695,6 +1695,8 @@ class AcquisitionRepository:
                                AS requested_quota_uncertain_count,
                            MIN(CASE WHEN attempt.result = 'confirmed'
                                THEN attempt.attempted_at_ms END) AS confirmed_at_ms
+                          ,MIN(CASE WHEN attempt.result = 'unavailable'
+                               THEN attempt.attempted_at_ms END) AS unavailable_at_ms
                     FROM device_action_plans AS plan
                     LEFT JOIN action_attempts AS attempt
                       ON attempt.plan_id = plan.plan_id
@@ -1780,6 +1782,11 @@ class AcquisitionRepository:
                         if plan_evidence["confirmed_at_ms"] is None
                         else int(plan_evidence["confirmed_at_ms"])
                     )
+                    unavailable_at_ms = (
+                        None
+                        if plan_evidence["unavailable_at_ms"] is None
+                        else int(plan_evidence["unavailable_at_ms"])
+                    )
                     snapshot_eligible = int(snapshot_evidence["eligible"])
                     snapshot_observed_at_ms = int(snapshot_evidence["observed_at_ms"])
                     relationship_valid, effective_outcome = (
@@ -1805,21 +1812,33 @@ class AcquisitionRepository:
                             <= completed_value
                         )
                     )
+                    unavailable_fallback = (
+                        effective_outcome is OutcomeKind.TRACE
+                        and str(plan_evidence["quota_reason"] or "")
+                        == f"{plan_evidence['requested_outcome']}_unavailable"
+                    )
+                    terminal_evidence_valid = (
+                        unavailable_at_ms is not None
+                        and video_confirmed_at_ms is not None
+                        and video_confirmed_at_ms
+                        <= unavailable_at_ms
+                        <= completed_value
+                        if unavailable_fallback
+                        else effective_outcome is OutcomeKind.TRACE
+                        or (
+                            confirmed_at_ms is not None
+                            and video_confirmed_at_ms is not None
+                            and video_confirmed_at_ms
+                            <= confirmed_at_ms
+                            <= completed_value
+                        )
+                    )
                     plan_valid = (
                         visit_value <= plan_created_at_ms <= completed_value
                         and started_at_ms < completed_value
                         and snapshot_valid
                         and outcome_valid
-                        and (
-                            effective_outcome is OutcomeKind.TRACE
-                            or (
-                                confirmed_at_ms is not None
-                                and video_confirmed_at_ms is not None
-                                and video_confirmed_at_ms
-                                <= confirmed_at_ms
-                                <= completed_value
-                            )
-                        )
+                        and terminal_evidence_valid
                     )
                 if (
                     visit_value is None
@@ -2083,6 +2102,13 @@ class AcquisitionRepository:
             return valid, effective
 
         limit = _CAPACITY_QUOTA_LIMITS.get(requested)
+        if (
+            requested is OutcomeKind.REPOST
+            and effective is OutcomeKind.TRACE
+            and window_start_ms is None
+            and reason == "repost_unavailable"
+        ):
+            return True, effective
         expected_window_start_ms = created_at_ms - created_at_ms % 3_600_000
         if limit is None or window_start_ms != expected_window_start_ms:
             return False, effective
@@ -2750,6 +2776,74 @@ class AcquisitionRepository:
             connection.execute(
                 "UPDATE device_action_plans SET state = 'confirmed' WHERE plan_id = ?",
                 (plan_id,),
+            )
+            return self._action_plan_by_id(connection, plan_id)
+
+    def confirm_action_unavailable_as_trace(self, plan_id: int) -> ActionPlan:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            plan = self._action_plan_by_id(connection, plan_id)
+            if plan.requested_outcome is not OutcomeKind.REPOST:
+                raise ValueError(
+                    "unavailable trace fallback is only supported for repost"
+                )
+            if plan.effective_outcome is OutcomeKind.TRACE:
+                if (
+                    plan.state is not ActionPlanState.CONFIRMED
+                    or plan.quota_reason != "repost_unavailable"
+                ):
+                    raise ValueError("trace fallback is not confirmed")
+                return plan
+            if plan.effective_outcome is not OutcomeKind.REPOST:
+                raise ValueError(
+                    "unavailable trace fallback is only supported for repost"
+                )
+            if plan.state is not ActionPlanState.PLANNED:
+                raise ValueError("unavailable action result is not reconciled")
+            latest_attempt = connection.execute(
+                """
+                SELECT result FROM action_attempts
+                WHERE plan_id = ? ORDER BY attempt_index DESC LIMIT 1
+                """,
+                (plan_id,),
+            ).fetchone()
+            if (
+                latest_attempt is None
+                or str(latest_attempt["result"]) != ActionResult.UNAVAILABLE.value
+            ):
+                raise ValueError("unavailable action evidence is missing")
+            if plan.quota_window_start_ms is not None:
+                released = connection.execute(
+                    """
+                    UPDATE acquisition_quota_windows
+                    SET reserved_count = CASE
+                        WHEN reserved_count > 0 THEN reserved_count - 1 ELSE 0 END
+                    WHERE device_id = ? AND outcome = ? AND window_start_ms = ?
+                      AND reserved_count > 0
+                    """,
+                    (
+                        plan.device_id,
+                        plan.effective_outcome.value,
+                        plan.quota_window_start_ms,
+                    ),
+                )
+                if released.rowcount != 1:
+                    raise ValueError("unavailable action quota reservation is missing")
+                connection.execute(
+                    """
+                    UPDATE action_pacing_state SET tokens = MIN(tokens + 1, 2.0)
+                    WHERE device_id = ? AND outcome = ?
+                    """,
+                    (plan.device_id, plan.effective_outcome.value),
+                )
+            connection.execute(
+                """
+                UPDATE device_action_plans
+                SET effective_outcome = 'trace', quota_window_start_ms = NULL,
+                    quota_reason = ?, state = 'confirmed'
+                WHERE plan_id = ?
+                """,
+                ("repost_unavailable", plan_id),
             )
             return self._action_plan_by_id(connection, plan_id)
 

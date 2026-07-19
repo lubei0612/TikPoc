@@ -281,6 +281,41 @@ def test_slow_action_is_deferred_without_false_completion(tmp_path: Path) -> Non
     assert device.diagnostic_calls == 1
 
 
+def test_visible_unavailable_action_completes_as_trace_fallback(
+    tmp_path: Path,
+) -> None:
+    repository, assignment = _claimed_assignment(tmp_path)
+    device = ScriptedVerifiedDevice(
+        metrics=ProfileMetrics(20, 10, 5),
+        action_results=[ActionResult.UNAVAILABLE],
+    )
+    worker = MobileAssignmentWorker(
+        repository,
+        device,
+        device_id="phone-01",
+        owner_id="worker-1",
+        clock_ms=lambda: 1_000,
+        plan_provider=_forced_plan(OutcomeKind.REPOST),
+    )
+
+    worker.run_assignment(assignment)
+
+    stored = repository.assignment(assignment.assignment_id)
+    plan = repository.action_plan(
+        assignment.round_id, assignment.identity_key, "phone-01"
+    )
+    quota = repository.quota_window("phone-01", OutcomeKind.REPOST, 0)
+    assert stored.phase is AssignmentPhase.COMPLETED
+    assert plan is not None
+    assert plan.requested_outcome is OutcomeKind.REPOST
+    assert plan.effective_outcome is OutcomeKind.TRACE
+    assert plan.quota_reason == "repost_unavailable"
+    assert plan.state is ActionPlanState.CONFIRMED
+    assert quota is not None and quota.reserved_count == 0
+    assert device.action_calls == [OutcomeKind.REPOST]
+    assert device.reconcile_calls == []
+
+
 def test_identity_mismatch_is_durable_and_blocks_capacity(tmp_path: Path) -> None:
     repository, assignment = _claimed_assignment(tmp_path)
     device = ScriptedVerifiedDevice(metrics=ProfileMetrics(20, 10, 5))

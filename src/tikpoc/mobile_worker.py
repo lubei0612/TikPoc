@@ -303,6 +303,18 @@ class MobileAssignmentWorker:
                     now_ms=self.clock_ms(),
                 )
                 return
+            if result is ActionResult.UNAVAILABLE:
+                if plan.effective_outcome is not OutcomeKind.REPOST:
+                    self._defer(assignment_id, "unexpected_action_unavailable")
+                    return
+                self.repository.confirm_action_unavailable_as_trace(plan.plan_id)
+                self.repository.complete_assignment(
+                    assignment_id,
+                    self.owner_id,
+                    phase,
+                    now_ms=self.clock_ms(),
+                )
+                return
             timed_out = self.clock_ms() - started_at_ms >= self.action_timeout_ms
             if attempts >= self.max_action_attempts or timed_out:
                 self._defer(assignment_id, f"action_{result.value}")

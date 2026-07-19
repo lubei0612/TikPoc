@@ -1502,6 +1502,48 @@ def test_round_capacity_accepts_fallback_when_reservations_reach_limit(
     assert not_exhausted.quota_overrun_count > 0
 
 
+def test_round_capacity_accepts_visible_unavailable_action_trace_fallback(
+    tmp_path: Path,
+) -> None:
+    repository, round_id = repository_with_round(tmp_path, target_count=1)
+    seed_completed_round(repository, round_id)
+    with sqlite3.connect(repository.path) as connection:
+        prepare_eligible_round(connection, round_id)
+        plan_id = int(
+            connection.execute(
+                """
+            UPDATE device_action_plans
+            SET requested_outcome = 'repost', effective_outcome = 'trace',
+                quota_window_start_ms = NULL,
+                quota_reason = 'repost_unavailable'
+            WHERE round_id = ? AND device_id = 'phone-01'
+            RETURNING plan_id
+            """,
+                (round_id,),
+            ).fetchone()[0]
+        )
+
+    missing_evidence = repository.capacity_audit(round_id, expected_devices=2)
+    assert len(missing_evidence.timings) == 1
+    assert missing_evidence.false_success_count == 1
+
+    with sqlite3.connect(repository.path) as connection:
+        connection.execute(
+            """
+            INSERT INTO action_attempts(
+                plan_id, attempt_index, result, diagnostics_json, attempted_at_ms
+            ) VALUES (?, 1, 'unavailable', '{}', 15_900)
+            """,
+            (plan_id,),
+        )
+
+    audit = repository.capacity_audit(round_id, expected_devices=2)
+
+    assert len(audit.timings) == 2
+    assert audit.false_success_count == 0
+    assert audit.quota_overrun_count == 0
+
+
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
