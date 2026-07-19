@@ -117,11 +117,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             while True:
                 rows = _run_proxy_guard(config, args.adb_path)
-                healthy = sum(row.proxy_state == "healthy" for row in rows)
-                corrected = sum(row.proxy_state == "corrected" for row in rows)
+                for row in rows:
+                    print(
+                        f"observed_at_ms={row.observed_at_ms} "
+                        f"device_id={row.device_id} adb_state={row.adb_state} "
+                        f"proxy_state={row.proxy_state} "
+                        f"http_state={row.http_state} "
+                        f"http_status={row.http_status if row.http_status is not None else '-'}",
+                        flush=True,
+                    )
+                healthy = sum(
+                    row.proxy_state == "healthy" and row.http_state != "failed"
+                    for row in rows
+                )
+                corrected = sum(
+                    row.proxy_state == "corrected" and row.http_state != "failed"
+                    for row in rows
+                )
                 failed = len(rows) - healthy - corrected
                 http_200 = sum(row.http_status == 200 for row in rows)
-                http_unknown = sum(row.http_status is None for row in rows)
+                http_unknown = sum(row.http_state == "unknown" for row in rows)
                 print(
                     f"devices={len(rows)} healthy={healthy} "
                     f"corrected={corrected} failed={failed} "

@@ -1,6 +1,8 @@
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from tikpoc.fleet import FleetConfig, FleetDevice
 from tikpoc.proxy_guard import ProxyGuard
 
@@ -195,3 +197,46 @@ def test_proxy_guard_records_source_address_outage_without_running_commands() ->
     ]
     assert runner.commands == []
     assert "private interface detail" not in repr(rows)
+
+
+@pytest.mark.parametrize(
+    ("curl_result", "expected_state", "expected_status"),
+    [
+        (subprocess.CompletedProcess((), 0, "403", ""), "failed", 403),
+        (subprocess.CompletedProcess((), 0, "000", ""), "failed", 0),
+        (subprocess.TimeoutExpired((), 12), "failed", None),
+        (subprocess.CalledProcessError(127, ()), "unknown", None),
+    ],
+)
+def test_proxy_guard_distinguishes_http_failure_from_missing_curl(
+    curl_result, expected_state, expected_status
+) -> None:
+    runner = FakeRunner()
+    runner.proxy["192.0.2.10:30100"] = runner.proxy["192.0.2.10:30000"]
+
+    def probe_runner(command, **kwargs):
+        if "curl" in command:
+            if isinstance(curl_result, BaseException):
+                raise curl_result
+            return subprocess.CompletedProcess(
+                command,
+                curl_result.returncode,
+                curl_result.stdout,
+                curl_result.stderr,
+            )
+        return runner(command, **kwargs)
+
+    guard = ProxyGuard(
+        _config(),
+        adb_path=Path("/sdk/adb"),
+        source_address=lambda _host: "192.0.2.20",
+        listener_probe=lambda _host, _port: True,
+        runner=probe_runner,
+        clock_ms=lambda: 123456789,
+    )
+
+    rows = guard.reconcile()
+
+    assert rows[0].http_state == expected_state
+    assert rows[0].http_status == expected_status
+    assert rows[0].observed_at_ms == 123456789

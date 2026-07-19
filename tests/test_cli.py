@@ -302,16 +302,24 @@ def test_cli_proxy_guard_runs_one_redacted_cycle(
                 "Health",
                 (),
                 {
+                    "device_id": "phone-01",
+                    "adb_state": "device",
                     "proxy_state": "healthy",
                     "http_status": 200,
+                    "http_state": "ok",
+                    "observed_at_ms": 123456789,
                 },
             )(),
             type(
                 "Health",
                 (),
                 {
+                    "device_id": "phone-02",
+                    "adb_state": "device",
                     "proxy_state": "corrected",
                     "http_status": 200,
+                    "http_state": "ok",
+                    "observed_at_ms": 123456789,
                 },
             )(),
         )
@@ -331,7 +339,37 @@ def test_cli_proxy_guard_runs_one_redacted_cycle(
 
     assert result == 0
     assert capsys.readouterr().out == (
+        "observed_at_ms=123456789 device_id=phone-01 adb_state=device "
+        "proxy_state=healthy http_state=ok http_status=200\n"
+        "observed_at_ms=123456789 device_id=phone-02 adb_state=device "
+        "proxy_state=corrected http_state=ok http_status=200\n"
         "devices=2 healthy=1 corrected=1 failed=0 http_200=2 http_unknown=0\n"
+    )
+
+
+def test_cli_proxy_guard_counts_http_failures_as_failed(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    config_path = tmp_path / "devices.yaml"
+    _write_fleet_config(config_path)
+    row = type(
+        "Health",
+        (),
+        {
+            "device_id": "phone-01",
+            "adb_state": "device",
+            "proxy_state": "healthy",
+            "http_status": 403,
+            "http_state": "failed",
+            "observed_at_ms": 123456789,
+        },
+    )()
+    monkeypatch.setattr(cli, "_run_proxy_guard", lambda *_args: (row,))
+
+    assert main(["proxy-guard", "--devices", str(config_path), "--once"]) == 0
+
+    assert capsys.readouterr().out.endswith(
+        "devices=1 healthy=0 corrected=0 failed=1 http_200=0 http_unknown=0\n"
     )
 
 

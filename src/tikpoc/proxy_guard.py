@@ -15,6 +15,8 @@ class ProxyHealth:
     adb_state: str
     proxy_state: str
     http_status: int | None
+    http_state: str
+    observed_at_ms: int
 
 
 def _source_address(destination: str) -> str:
@@ -31,6 +33,10 @@ def _listener_probe(host: str, port: int) -> bool:
         return False
 
 
+def _clock_ms() -> int:
+    return int(time.time() * 1_000)
+
+
 class ProxyGuard:
     def __init__(
         self,
@@ -41,6 +47,7 @@ class ProxyGuard:
         listener_probe: Callable[[str, int], bool] = _listener_probe,
         runner: Callable[..., object] = subprocess.run,
         sleeper: Callable[[float], None] = time.sleep,
+        clock_ms: Callable[[], int] = _clock_ms,
         recovery_wait_seconds: float = 5.0,
         timeout_seconds: float = 12.0,
     ) -> None:
@@ -55,15 +62,24 @@ class ProxyGuard:
         self.listener_probe = listener_probe
         self.runner = runner
         self.sleeper = sleeper
+        self.clock_ms = clock_ms
         self.recovery_wait_seconds = max(0.0, float(recovery_wait_seconds))
         self.timeout_seconds = max(1.0, float(timeout_seconds))
 
     def reconcile(self) -> tuple[ProxyHealth, ...]:
+        observed_at_ms = self.clock_ms()
         try:
             proxy_host = self.source_address(self.config.myt_host)
         except (OSError, ValueError):
             return tuple(
-                ProxyHealth(device.device_id, "unknown", "source_unavailable", None)
+                ProxyHealth(
+                    device.device_id,
+                    "unknown",
+                    "source_unavailable",
+                    None,
+                    "unknown",
+                    observed_at_ms,
+                )
                 for device in self.config.devices
             )
         proxy_port = self.config.relay_upstream_port
@@ -77,16 +93,27 @@ class ProxyGuard:
             listener_ready = self.listener_probe("127.0.0.1", proxy_port)
         if not listener_ready:
             return tuple(
-                ProxyHealth(device.device_id, "unknown", "listener_unavailable", None)
+                ProxyHealth(
+                    device.device_id,
+                    "unknown",
+                    "listener_unavailable",
+                    None,
+                    "unknown",
+                    observed_at_ms,
+                )
                 for device in self.config.devices
             )
         return tuple(
-            self._reconcile_device(device, proxy_host, proxy_port)
+            self._reconcile_device(device, proxy_host, proxy_port, observed_at_ms)
             for device in self.config.devices
         )
 
     def _reconcile_device(
-        self, device: FleetDevice, proxy_host: str, proxy_port: int
+        self,
+        device: FleetDevice,
+        proxy_host: str,
+        proxy_port: int,
+        observed_at_ms: int,
     ) -> ProxyHealth:
         try:
             self._run((str(self.adb_path), "connect", device.adb_endpoint))
@@ -95,7 +122,12 @@ class ProxyGuard:
             )
             if adb_state != "device":
                 return ProxyHealth(
-                    device.device_id, adb_state or "offline", "device_unavailable", None
+                    device.device_id,
+                    adb_state or "offline",
+                    "device_unavailable",
+                    None,
+                    "unknown",
+                    observed_at_ms,
                 )
             observed = (
                 self._setting(device, "http_proxy"),
@@ -128,14 +160,24 @@ class ProxyGuard:
                         )
                     )
                 proxy_state = "corrected"
+            http_status, http_state = self._http_probe(device, proxy_host, proxy_port)
             return ProxyHealth(
                 device.device_id,
                 adb_state,
                 proxy_state,
-                self._http_probe(device, proxy_host, proxy_port),
+                http_status,
+                http_state,
+                observed_at_ms,
             )
         except (OSError, subprocess.SubprocessError, ValueError):
-            return ProxyHealth(device.device_id, "offline", "device_unavailable", None)
+            return ProxyHealth(
+                device.device_id,
+                "offline",
+                "device_unavailable",
+                None,
+                "unknown",
+                observed_at_ms,
+            )
 
     def _setting(self, device: FleetDevice, field: str) -> str:
         return self._run(
@@ -153,7 +195,7 @@ class ProxyGuard:
 
     def _http_probe(
         self, device: FleetDevice, proxy_host: str, proxy_port: int
-    ) -> int | None:
+    ) -> tuple[int | None, str]:
         try:
             output = self._run(
                 (
@@ -176,9 +218,12 @@ class ProxyGuard:
                     "https://www.tiktok.com/",
                 )
             )
-            return int(output) if output.isdigit() else None
-        except (OSError, subprocess.SubprocessError, ValueError):
-            return None
+            status = int(output) if output.isdigit() else None
+            return status, "ok" if status == 200 else "failed"
+        except subprocess.CalledProcessError as error:
+            return None, "unknown" if error.returncode == 127 else "failed"
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            return None, "failed"
 
     def _run(self, command: Sequence[str]) -> str:
         completed = self.runner(
