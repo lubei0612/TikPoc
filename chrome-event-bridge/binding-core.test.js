@@ -12,7 +12,7 @@ function link(href, visible = true) {
 
 function page(links = [], text = "") {
   return {
-    body: { textContent: text },
+    body: { innerText: text, textContent: text },
     querySelectorAll() { return links; },
   };
 }
@@ -69,5 +69,15 @@ test("ignores hidden profile links", () => {
   assert.deepEqual(
     binding.evaluateBinding(page([link("https://www.tiktok.com/@shop_one", false)]), "shop_one"),
     { state: "unverified", observedUsername: "" },
+  );
+});
+
+test("ignores verification words in hidden page source", () => {
+  const documentValue = page([link("https://www.tiktok.com/@shop_one")]);
+  documentValue.body.textContent = "captcha implementation metadata";
+
+  assert.deepEqual(
+    binding.evaluateBinding(documentValue, "shop_one"),
+    { state: "ready", observedUsername: "shop_one" },
   );
 });

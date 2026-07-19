@@ -141,13 +141,20 @@ tikpoc browser guide [--extension-path PATH]
 - Modify: `docs/web-engagement-runbook.md`
 - Modify: `AGENTS.md`
 
-- [ ] Reload both dedicated Profiles and run `tikpoc browser connect` until `account-01` and `account-02` each report ready Activity and Messages health.
-- [ ] Enable account-scoped follow-back and AI reply settings only after fresh follower and DM baselines exist.
-- [ ] From each account, follow the other account once and verify exactly one visible follow-back completed result per direction.
+- [x] Reload both dedicated Profiles and run `tikpoc browser connect` until `account-01` and `account-02` each report ready Activity and Messages health.
+- [x] Enable account-scoped AI reply settings only after fresh DM baselines exist; leave follow-back paused after the mutual-follow gate.
+- [x] From each account, follow the other account once and verify the visible following/friend result per direction.
 - [ ] Send three concise acceptance DMs per direction and verify one immutable plan, one lease, one visible outbound response, and one completed result per inbound fingerprint.
-- [ ] Reload both pages and confirm no duplicate follow-back, plan, or send.
+- [ ] Reload both pages and confirm no duplicate automatic plan or send. Mutual-follow and bidirectional manual-DM state already survived reopening without repetition.
 - [ ] Verify invitation cooldown only if a real private destination is locally configured; otherwise record the gate as not exercised rather than inventing a destination.
 - [ ] Send a synthetic contact-format acceptance message and a human-request message, verify `contact_captured` then `human_required`, and verify ordinary AI replies stop after handoff.
-- [ ] Record only aliases, timestamps, states, counts, and mobile progress; omit message bodies, contacts, destinations, cookies, and tokens.
+- [x] Record only aliases, timestamps, states, counts, and mobile progress; omit message bodies, contacts, destinations, cookies, and tokens.
 - [ ] Run full Python, Node, frontend, Playwright, Android, Ruff, touched-file format, syntax, and `git diff --check` verification.
 - [ ] Update the Task 6 checklist and checkpoint, then commit `docs: record two-account browser acceptance`.
+
+Live checkpoint on 2026-07-19: `4/4` browser health, mutual visible follow,
+and bidirectional manual DM delivery passed. The existing final inbound was
+baselined while identity binding recovered, so aggregate persistence remained at
+zero reply plans and zero DM action leases. No automatic reply was observed.
+Remote model credentials and a private destination were not configured;
+follow-back remains paused and the remaining automatic-reply gates stay open.

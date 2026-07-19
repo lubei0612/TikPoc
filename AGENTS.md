@@ -375,25 +375,40 @@ Completed on `feat/web-lead-conversion`:
 - Task 6 synthetic regression passed `598` Python tests, `48` Chrome Node tests,
   `31` frontend tests, and `12` Playwright tests. Android build, Ruff check,
   touched-file format, JavaScript syntax, and `git diff --check` passed.
-- Chrome was running and the ChatGPT Chrome Extension was installed and enabled,
-  but browser control discovery returned no window. No real follow, follow-back,
-  or DM action was started; opening/reconnecting a Chrome window is the next
-  live-acceptance prerequisite.
+- Multi-account Browser Task 6 live acceptance resumed with two controlled
+  Chrome Profiles. Both account identities were bound and Activity plus
+  Messages health recovered to `4/4` ready after the localhost service restart.
+- Mutual follow acceptance passed in both directions with visible `following`
+  and friend states. Bidirectional manual DM delivery also passed and remained
+  visible after reopening the conversations. No message body or destination was
+  retained in this checkpoint.
+- The live TikTok DOM required Messages-frame injection, Business Suite path
+  recognition, current conversation/message selectors, geometry-based message
+  direction, row-level conversation opening, and hashed preview signatures.
+  The focused Chrome extension regression passes `67/67` tests.
+- Account-scoped AI reply controls are enabled and automatic follow-back remains
+  paused. No remote model environment variables are configured, so a successful
+  automatic plan would use the configured per-account fallback acknowledgement.
+- The final existing inbound acceptance message was visible, but it was recorded
+  as the initial DM baseline while identity binding recovered. Aggregate durable
+  state remained at zero reply plans and zero DM action leases, so no automatic
+  reply or duplicate send was claimed. Automatic reply acceptance remains open.
 - The retained debug round failed capacity promotion: mean 170.718 seconds,
   P90 15.572 seconds, projected 421 targets per 20-hour day, with historical
   identity mismatch evidence. A fresh calibration-free round is still required.
-- Last fresh full Python verification: `597 passed`; Chrome Node verification:
-  `46 passed`; Android bridge build passed with the portable build-root fix.
-- Full-repository Ruff format check has a pre-existing 14-file formatting
+- Last fresh full Python verification: `603 passed`; Chrome Node verification:
+  `67 passed`; Android bridge build and Ruff check passed.
+- Full-repository Ruff format check has a pre-existing 8-file formatting
   baseline; do not reformat those unrelated files as part of a narrow task.
 
 Outstanding at the current checkpoint:
 
 1. Run the fresh 500-target slot-1 pacing/performance gate and record measured
    stage mean/P90 separately from projections.
-2. Complete the Multi-account Browser Task 6 two-account live follow-back/reply
-   acceptance after Chrome control reconnects. Notify the user again before the
-   first real action.
+2. Complete the remaining Multi-account Browser Task 6 automatic fallback-reply,
+   reload-idempotency, contact-stage, and human-handoff live gates. Mutual follow,
+   bidirectional manual DM delivery, and `4/4` browser health already passed; do
+   not repeat them or send another copy of the completed acceptance message.
 3. Execute the remaining Mobile Task 10 two-device live gate on slots 1 and 2.
 4. Finish full regression, two-device calibration, four-/eight-hour
    endurance tests, seven-device benchmark, runbooks, branch integration, and

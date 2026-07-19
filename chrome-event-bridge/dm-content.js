@@ -16,14 +16,51 @@
   const optionsCore = globalThis.TikPocOptionsCore ||
     (typeof require === "function" ? require("./options-core.js") : null);
   const SETTINGS_KEY = "tikpocSettings";
+  const BINDING_STATUS_KEY = "tikpocBindingStatus";
   const BASELINES_KEY = "tikpocDmBaselines";
   const PROCESSED_KEY = "tikpocDmProcessed";
   const HEALTH_TICK = "TIKPOC_HEALTH_TICK";
   const MAX_PROCESSED = 1000;
+  const BINDING_EVIDENCE_MAX_AGE_MS = 120 * 1000;
 
   function pageRole(locationValue) {
     const path = String(locationValue && locationValue.pathname || "");
-    return path === "/messages" || path.startsWith("/messages/") ? "messages" : "other";
+    return path === "/messages" ||
+      path.startsWith("/messages/") ||
+      path === "/business-suite/messages" ||
+      path.startsWith("/business-suite/messages/")
+      ? "messages"
+      : "other";
+  }
+
+  function resolveBinding(settings, directResult, cachedStatus, now = Date.now()) {
+    const direct = {
+      state: directResult && directResult.state || "unverified",
+      observedUsername: directResult && directResult.observedUsername || "",
+      source: "direct",
+    };
+    if (direct.state === "ready") {
+      return direct;
+    }
+    const sameAccount = String(cachedStatus && cachedStatus.accountId || "")
+      .trim().toLowerCase() === String(settings && settings.accountId || "")
+      .trim().toLowerCase();
+    const expected = binding.normalizeUsername(
+      settings && settings.expectedTikTokUsername,
+    );
+    const observed = binding.normalizeUsername(
+      cachedStatus && cachedStatus.observedUsername,
+    );
+    const age = Number(now) - Number(cachedStatus && cachedStatus.observedAt || 0);
+    if (
+      sameAccount &&
+      cachedStatus && cachedStatus.state === "ready" &&
+      expected && observed === expected &&
+      age >= 0 && age <= BINDING_EVIDENCE_MAX_AGE_MS
+    ) {
+      return { state: "ready", observedUsername: observed, source: "cached" };
+    }
+    return direct;
   }
 
   function visible(element) {
@@ -71,8 +108,9 @@
 
   function conversationRows(documentValue = document) {
     const selectors = [
-      "[data-e2e*='conversation']",
-      "[data-e2e*='chat-item']",
+      "[data-e2e='dm-new-conversation-item']",
+      "[data-e2e='conversation-item']",
+      "[data-e2e='chat-item']",
       "[role='listitem'] a[href*='/messages/']",
     ];
     const candidates = Array.from(documentValue.querySelectorAll(selectors.join(", ")));
@@ -95,27 +133,43 @@
       ? row
       : row.querySelector("a[href*='/messages/']");
     const stableId = firstAttribute(row, [
+      "data-conv-id",
       "data-conversation-id",
       "data-chat-id",
       "data-thread-id",
       "data-id",
     ]);
     const href = link && link.href || "";
-    const username = firstAttribute(row, ["data-username", "data-user-name"]);
-    const key = core.conversationKey(href, username) || stableId || href;
+    const nickname = row.querySelector("[data-e2e='dm-new-conversation-nickname']");
+    const username = firstAttribute(row, ["data-username", "data-user-name"]) ||
+      elementLabel(nickname);
+    const hrefKey = href ? core.conversationKey(href, "") : null;
+    const key = hrefKey ||
+      (stableId ? `conv:${stableId}` : null) ||
+      core.conversationKey("", username) || href;
     const messageId = firstAttribute(row, ["data-message-id", "data-last-message-id"]);
     const unread = Boolean(
       row.matches && row.matches("[data-unread='true']") ||
       row.querySelector("[aria-label*='unread' i], [data-e2e*='unread'], [data-unread='true']"),
     );
-    const signature = core.normalizeText(
-      [stableId, messageId, unread ? "unread" : "read", elementLabel(row)].join("|"),
-    );
+    const preview = core.normalizeText(elementLabel(row));
+    let previewHash = 2166136261;
+    for (let index = 0; index < preview.length; index += 1) {
+      previewHash = Math.imul(previewHash ^ preview.charCodeAt(index), 16777619);
+    }
+    const signature = [
+      stableId,
+      messageId,
+      unread ? "unread" : "read",
+      `${preview.length}:${(previewHash >>> 0).toString(16)}`,
+    ].join("|");
     return { key, signature, unread };
   }
 
   async function openConversation(row) {
-    const target = row.matches && row.matches("a[href*='/messages/'], button, [role='button']")
+    const target = row.matches && row.matches(
+      "[data-e2e='dm-new-conversation-item'], a[href*='/messages/'], button, [role='button']",
+    )
       ? row
       : row.querySelector("a[href*='/messages/'], button, [role='button']");
     if (!target || !visible(target)) {
@@ -126,7 +180,7 @@
     return true;
   }
 
-  function bubbleDirection(bubble) {
+  function bubbleDirection(bubble, textNode) {
     const signal = firstAttribute(bubble, [
       "data-direction",
       "data-message-direction",
@@ -138,6 +192,18 @@
     }
     if (/inbound|incoming|received|other/.test(signal)) {
       return "inbound";
+    }
+    if (
+      bubble && typeof bubble.getBoundingClientRect === "function" &&
+      textNode && typeof textNode.getBoundingClientRect === "function"
+    ) {
+      const bubbleRect = bubble.getBoundingClientRect();
+      const textRect = textNode.getBoundingClientRect();
+      const bubbleCenter = (Number(bubbleRect.left) + Number(bubbleRect.right)) / 2;
+      const textCenter = (Number(textRect.left) + Number(textRect.right)) / 2;
+      if (Number.isFinite(bubbleCenter) && Number.isFinite(textCenter)) {
+        return textCenter > bubbleCenter ? "outbound" : "inbound";
+      }
     }
     return "unknown";
   }
@@ -157,7 +223,7 @@
     if (!Number.isFinite(timestampMs) || timestampMs < 0) {
       timestampMs = Date.now();
     }
-    const direction = bubbleDirection(bubble);
+    const direction = bubbleDirection(bubble, textNode);
     return {
       sender: direction === "inbound"
         ? firstAttribute(bubble, ["data-sender", "data-username"]) || participant
@@ -174,7 +240,8 @@
     const scope = documentValue.querySelector("main, [role='main']") || documentValue;
     const participantNode = scope.querySelector(
       "[data-e2e*='chat-header'][data-username], [data-e2e*='chat-header'] a[href*='/@'], " +
-      "[role='heading'][data-username], [role='heading'] a[href*='/@']",
+      "[role='heading'][data-username], [role='heading'] a[href*='/@'], " +
+      "[data-e2e='chat-uniqueid']",
     );
     let participant = firstAttribute(participantNode, ["data-username", "data-user-name"]);
     if (!participant && participantNode && participantNode.href) {
@@ -183,15 +250,27 @@
     }
     participant = participant || elementLabel(participantNode);
     const bubbles = Array.from(scope.querySelectorAll(
-      "[data-e2e*='message-item'], [data-e2e*='chat-message'], [data-message-id]",
+      "[data-e2e='dm-new-chat-item'], [data-e2e*='message-item'], " +
+      "[data-e2e*='chat-message'], [data-message-id]",
     )).filter(visible);
     const messages = bubbles.map((bubble) => messageFromBubble(bubble, participant));
     const latest = messages.at(-1);
     if (!latest) {
       return null;
     }
+    const selectedRow = documentValue.querySelector(
+      "[data-e2e='dm-new-conversation-item'][aria-selected='true']",
+    );
+    const selectedId = firstAttribute(selectedRow, [
+      "data-conv-id",
+      "data-conversation-id",
+      "data-chat-id",
+      "data-thread-id",
+    ]);
     const href = globalThis.location && globalThis.location.href || "";
-    const conversationId = core.conversationKey(href, participant);
+    const conversationId = selectedId
+      ? `conv:${selectedId}`
+      : core.conversationKey(href, participant);
     if (!conversationId) {
       return null;
     }
@@ -487,20 +566,37 @@
     });
     let timer = null;
     async function loadSettings() {
-      settings = await storageGet(SETTINGS_KEY) || {};
+      const [value, cachedStatus] = await Promise.all([
+        storageGet(SETTINGS_KEY),
+        storageGet(BINDING_STATUS_KEY),
+      ]);
+      const current = value || {};
+      const result = resolveBinding(
+        current,
+        binding.evaluateBinding(document, current.expectedTikTokUsername),
+        cachedStatus,
+      );
+      settings = {
+        ...current,
+        bindingState: result.state,
+        observedUsername: result.observedUsername,
+        bindingSource: result.source,
+      };
       return settings;
     }
     function bound(value) {
-      const result = binding.evaluateBinding(document, value.expectedTikTokUsername);
       return {
         ...value,
-        bindingState: result.state,
-        observedUsername: result.observedUsername,
+        bindingState: value.bindingState,
+        observedUsername: value.observedUsername,
       };
     }
     async function persistBinding(value) {
+      if (value.bindingSource !== "direct") {
+        return;
+      }
       await storageSet(
-        "tikpocBindingStatus",
+        BINDING_STATUS_KEY,
         optionsCore.bindingObservation(
           value.accountId,
           { state: value.bindingState, observedUsername: value.observedUsername },
@@ -514,7 +610,7 @@
         return;
       }
       await persistBinding(current);
-      const signedIn = Boolean(document.querySelector(
+      const signedIn = current.bindingState === "ready" || Boolean(document.querySelector(
         "[data-e2e*='avatar'], [data-e2e*='profile-icon'], nav a[href^='/@']",
       ));
       await transport(
@@ -568,6 +664,7 @@
     findSendButton,
     openConversation,
     pageRole,
+    resolveBinding,
     readActiveConversation,
     rowSnapshot,
     setComposerText,

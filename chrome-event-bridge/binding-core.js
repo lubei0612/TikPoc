@@ -46,7 +46,11 @@
   }
 
   function evaluateBinding(documentValue, expectedValue) {
-    const text = String(documentValue && documentValue.body && documentValue.body.textContent || "")
+    const body = documentValue && documentValue.body;
+    const visibleText = body && typeof body.innerText === "string"
+      ? body.innerText
+      : body && body.textContent;
+    const text = String(visibleText || "")
       .normalize("NFKC")
       .replace(/\s+/g, " ")
       .trim();

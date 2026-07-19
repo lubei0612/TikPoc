@@ -99,6 +99,7 @@ function harness({
 
 test("page adapter exposes semantic role, visibility, and labels", () => {
   assert.equal(dmContent.pageRole({ pathname: "/messages/thread/one" }), "messages");
+  assert.equal(dmContent.pageRole({ pathname: "/business-suite/messages" }), "messages");
   assert.equal(dmContent.pageRole({ pathname: "/foryou" }), "other");
   const element = {
     textContent: "ignored",
@@ -125,6 +126,121 @@ test("row identity uses the Messages URL when a DOM data id is also present", ()
     },
   };
   assert.equal(dmContent.rowSnapshot(row).key, link.href);
+});
+
+test("current TikTok conversation rows use a stable id without storing preview text", () => {
+  const row = {
+    textContent: "private preview body",
+    hidden: false,
+    matches() { return false; },
+    getAttribute(name) {
+      return {
+        "data-conv-id": "conversation-1",
+        "aria-selected": "true",
+      }[name] || null;
+    },
+    getClientRects() { return [{}]; },
+    closest() { return null; },
+    querySelector(selector) {
+      return selector.includes("dm-new-conversation-nickname")
+        ? { textContent: "buyer", getAttribute() { return null; } }
+        : null;
+    },
+    ownerDocument: {
+      defaultView: {
+        getComputedStyle() { return { display: "block", visibility: "visible" }; },
+      },
+    },
+  };
+  const documentValue = {
+    querySelectorAll(selector) {
+      assert.match(selector, /dm-new-conversation-item/);
+      return [row];
+    },
+  };
+
+  assert.deepEqual(dmContent.conversationRows(documentValue), [row]);
+  const snapshot = dmContent.rowSnapshot(row);
+  assert.equal(snapshot.key, "conv:conversation-1");
+  assert.equal(snapshot.signature.includes("private preview body"), false);
+});
+
+test("reads the current TikTok inbound bubble from visible geometry", () => {
+  const textNode = {
+    textContent: "Hello",
+    getBoundingClientRect() { return { left: 10, right: 30 }; },
+  };
+  const bubble = {
+    textContent: "Hello",
+    hidden: false,
+    getAttribute() { return null; },
+    getBoundingClientRect() { return { left: 0, right: 100 }; },
+    getClientRects() { return [{}]; },
+    closest() { return null; },
+    querySelector(selector) {
+      return selector.includes("message-text") ? textNode : null;
+    },
+    ownerDocument: {
+      defaultView: {
+        getComputedStyle() { return { display: "block", visibility: "visible" }; },
+      },
+    },
+  };
+  const participant = {
+    textContent: "buyer",
+    getAttribute() { return null; },
+  };
+  const selected = {
+    getAttribute(name) { return name === "data-conv-id" ? "conversation-1" : null; },
+  };
+  const scope = {
+    querySelector(selector) {
+      return selector.includes("chat-uniqueid") ? participant : null;
+    },
+    querySelectorAll(selector) {
+      assert.match(selector, /dm-new-chat-item/);
+      return [bubble];
+    },
+  };
+  const documentValue = {
+    querySelector(selector) {
+      if (selector === "main, [role='main']") return scope;
+      if (selector.includes("aria-selected='true'")) return selected;
+      return null;
+    },
+  };
+
+  const active = dmContent.readActiveConversation(documentValue, "account-01");
+  assert.equal(active.conversationId, "conv:conversation-1");
+  assert.equal(active.direction, "inbound");
+  assert.equal(active.text, "Hello");
+});
+
+test("opens the current TikTok conversation by clicking its row", async () => {
+  let rowClicks = 0;
+  let childClicks = 0;
+  const child = {
+    click() { childClicks += 1; },
+    getClientRects() { return [{}]; },
+  };
+  const row = {
+    hidden: false,
+    matches(selector) { return selector.includes("dm-new-conversation-item"); },
+    querySelector() { return child; },
+    click() { rowClicks += 1; },
+    getAttribute() { return null; },
+    getClientRects() { return [{}]; },
+    closest() { return null; },
+    ownerDocument: {
+      defaultView: {
+        getComputedStyle() { return { display: "block", visibility: "visible" }; },
+      },
+    },
+  };
+
+  assert.equal(await dmContent.openConversation(row), true);
+  assert.equal(rowClicks, 1);
+  assert.equal(childClicks, 0);
 });
 
 test("startup establishes an account baseline without requesting a plan", async () => {
@@ -312,4 +428,32 @@ test("disabled DM automation still reports binding health without running workfl
 
   assert.equal(dmContent.canReportHealth(disabled), true);
   assert.equal(dmContent.canRunWorkflow(disabled), false);
+});
+
+test("uses only fresh account-scoped activity binding evidence in a Messages frame", () => {
+  const direct = { state: "unverified", observedUsername: "" };
+  const cached = {
+    accountId: SETTINGS.accountId,
+    state: "ready",
+    observedUsername: SETTINGS.observedUsername,
+    observedAt: 1_000,
+  };
+
+  assert.deepEqual(
+    dmContent.resolveBinding(SETTINGS, direct, cached, 2_000),
+    { state: "ready", observedUsername: "shop_one", source: "cached" },
+  );
+  assert.deepEqual(
+    dmContent.resolveBinding(SETTINGS, direct, cached, 122_001),
+    { ...direct, source: "direct" },
+  );
+  assert.deepEqual(
+    dmContent.resolveBinding(
+      SETTINGS,
+      direct,
+      { ...cached, accountId: "account-02" },
+      2_000,
+    ),
+    { ...direct, source: "direct" },
+  );
 });
