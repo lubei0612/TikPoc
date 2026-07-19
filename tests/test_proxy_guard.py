@@ -121,6 +121,54 @@ def test_proxy_guard_repeated_healthy_cycles_are_idempotent() -> None:
     assert not any("put" in command for command in runner.commands)
 
 
+def test_proxy_guard_uses_a_device_specific_proxy_port() -> None:
+    config = _config()
+    devices = (
+        config.devices[0],
+        FleetDevice(
+            device_id="phone-02",
+            account_id="account-02",
+            myt_slot=2,
+            adb_endpoint="192.0.2.10:30100",
+            appium_url="http://127.0.0.1:4723",
+            order_seed="seed-02",
+            proxy_port=7899,
+        ),
+    )
+    runner = FakeRunner()
+    guard = ProxyGuard(
+        FleetConfig(
+            myt_host=config.myt_host,
+            myt_sdk_port=config.myt_sdk_port,
+            relay_bind_host=config.relay_bind_host,
+            relay_bind_port=config.relay_bind_port,
+            relay_upstream_host=config.relay_upstream_host,
+            relay_upstream_port=config.relay_upstream_port,
+            relay_allowed_sources=config.relay_allowed_sources,
+            devices=devices,
+        ),
+        adb_path=Path("/sdk/adb"),
+        source_address=lambda _host: "192.0.2.20",
+        listener_probe=lambda _host, _port: True,
+        runner=runner,
+    )
+
+    rows = guard.reconcile()
+
+    assert [row.proxy_state for row in rows] == ["healthy", "corrected"]
+    assert runner.proxy["192.0.2.10:30100"] == (
+        "192.0.2.20:7899",
+        "192.0.2.20",
+        "7899",
+    )
+    slot_two_probe = next(
+        command
+        for command in runner.commands
+        if command[2] == "192.0.2.10:30100" and "curl" in command
+    )
+    assert "http://192.0.2.20:7899" in slot_two_probe
+
+
 def test_proxy_guard_opens_clash_once_when_listener_recovers() -> None:
     runner = FakeRunner()
     listener_results = iter((False, True))
@@ -240,3 +288,31 @@ def test_proxy_guard_distinguishes_http_failure_from_missing_curl(
     assert rows[0].http_state == expected_state
     assert rows[0].http_status == expected_status
     assert rows[0].observed_at_ms == 123456789
+
+
+def test_proxy_guard_retries_one_transient_http_probe_failure() -> None:
+    runner = FakeRunner()
+    runner.proxy["192.0.2.10:30100"] = runner.proxy["192.0.2.10:30000"]
+    attempts = 0
+
+    def transient_runner(command, **kwargs):
+        nonlocal attempts
+        if "curl" in command:
+            attempts += 1
+            if attempts == 1:
+                raise subprocess.CalledProcessError(35, command)
+        return runner(command, **kwargs)
+
+    guard = ProxyGuard(
+        _config(),
+        adb_path=Path("/sdk/adb"),
+        source_address=lambda _host: "192.0.2.20",
+        listener_probe=lambda _host, _port: True,
+        runner=transient_runner,
+    )
+
+    rows = guard.reconcile()
+
+    assert rows[0].http_state == "ok"
+    assert rows[0].http_status == 200
+    assert attempts == 3

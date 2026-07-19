@@ -18,6 +18,11 @@ The expected healthy summary for the current six-device fleet is:
 devices=6 healthy=6 corrected=0 failed=0 http_200=6 http_unknown=0
 ```
 
+Set an optional `proxy_port` on a device entry when Clash exposes a dedicated
+mixed listener for that account. Devices without the field continue to use
+`proxy_relay.upstream_port`. The guard checks every configured listener and
+keeps each Android global proxy pinned to its assigned port.
+
 The installed user LaunchAgent runs every 30 seconds after Mac login:
 
 ```bash
@@ -63,3 +68,7 @@ On 2026-07-19, the baseline reported six healthy devices and six TikTok HTTP
 `200` results. Slot 6 was then changed to a synthetic stale proxy address. The
 LaunchAgent restored it to the current Mac LAN address and port `7897`; the next
 cycle again reported six healthy devices and six HTTP `200` results.
+
+On 2026-07-20, six dedicated Clash listeners were assigned to the six MYT
+slots. Live checks confirmed six distinct egress addresses, six TikTok HTTP
+`200` responses, and a final guard cycle with `healthy=6`.

@@ -72,6 +72,7 @@ class FleetDevice:
     adb_endpoint: str
     appium_url: str
     order_seed: str
+    proxy_port: int | None = None
 
 
 @dataclass(frozen=True)
@@ -123,6 +124,11 @@ class FleetConfig:
                 adb_endpoint=str(item.get("adb_endpoint") or "").strip(),
                 appium_url=str(item.get("appium_url") or "").strip(),
                 order_seed=str(item.get("order_seed") or "").strip(),
+                proxy_port=(
+                    _configured_port(item.get("proxy_port"), 0, "device proxy port")
+                    if item.get("proxy_port") is not None
+                    else None
+                ),
             )
             for item in raw_devices
         )

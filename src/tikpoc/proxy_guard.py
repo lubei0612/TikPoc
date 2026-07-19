@@ -82,29 +82,38 @@ class ProxyGuard:
                 )
                 for device in self.config.devices
             )
-        proxy_port = self.config.relay_upstream_port
-        listener_ready = self.listener_probe("127.0.0.1", proxy_port)
-        if not listener_ready:
+        default_proxy_port = self.config.relay_upstream_port
+        proxy_ports = {
+            device.proxy_port or default_proxy_port for device in self.config.devices
+        }
+        listener_ready = {
+            port: self.listener_probe("127.0.0.1", port) for port in proxy_ports
+        }
+        if not all(listener_ready.values()):
             try:
                 self._run(("open", "-gja", "-a", "Clash Verge"))
                 self.sleeper(self.recovery_wait_seconds)
             except (OSError, subprocess.SubprocessError):
                 pass
-            listener_ready = self.listener_probe("127.0.0.1", proxy_port)
-        if not listener_ready:
-            return tuple(
-                ProxyHealth(
-                    device.device_id,
-                    "unknown",
-                    "listener_unavailable",
-                    None,
-                    "unknown",
-                    observed_at_ms,
-                )
-                for device in self.config.devices
-            )
+            listener_ready = {
+                port: self.listener_probe("127.0.0.1", port) for port in proxy_ports
+            }
         return tuple(
-            self._reconcile_device(device, proxy_host, proxy_port, observed_at_ms)
+            self._reconcile_device(
+                device,
+                proxy_host,
+                device.proxy_port or default_proxy_port,
+                observed_at_ms,
+            )
+            if listener_ready[device.proxy_port or default_proxy_port]
+            else ProxyHealth(
+                device.device_id,
+                "unknown",
+                "listener_unavailable",
+                None,
+                "unknown",
+                observed_at_ms,
+            )
             for device in self.config.devices
         )
 
@@ -196,34 +205,40 @@ class ProxyGuard:
     def _http_probe(
         self, device: FleetDevice, proxy_host: str, proxy_port: int
     ) -> tuple[int | None, str]:
-        try:
-            output = self._run(
-                (
-                    str(self.adb_path),
-                    "-s",
-                    device.adb_endpoint,
-                    "shell",
-                    "curl",
-                    "-sS",
-                    "-x",
-                    f"http://{proxy_host}:{proxy_port}",
-                    "--connect-timeout",
-                    "5",
-                    "--max-time",
-                    "12",
-                    "-o",
-                    "/dev/null",
-                    "-w",
-                    "%{http_code}",
-                    "https://www.tiktok.com/",
+        for attempt in range(2):
+            try:
+                output = self._run(
+                    (
+                        str(self.adb_path),
+                        "-s",
+                        device.adb_endpoint,
+                        "shell",
+                        "curl",
+                        "-sS",
+                        "-x",
+                        f"http://{proxy_host}:{proxy_port}",
+                        "--connect-timeout",
+                        "5",
+                        "--max-time",
+                        "12",
+                        "-o",
+                        "/dev/null",
+                        "-w",
+                        "%{http_code}",
+                        "https://www.tiktok.com/",
+                    )
                 )
-            )
-            status = int(output) if output.isdigit() else None
-            return status, "ok" if status == 200 else "failed"
-        except subprocess.CalledProcessError as error:
-            return None, "unknown" if error.returncode == 127 else "failed"
-        except (OSError, subprocess.TimeoutExpired, ValueError):
-            return None, "failed"
+                status = int(output) if output.isdigit() else None
+                return status, "ok" if status == 200 else "failed"
+            except subprocess.CalledProcessError as error:
+                if error.returncode == 127:
+                    return None, "unknown"
+                if attempt == 1:
+                    return None, "failed"
+            except (OSError, subprocess.TimeoutExpired, ValueError):
+                if attempt == 1:
+                    return None, "failed"
+        return None, "failed"
 
     def _run(self, command: Sequence[str]) -> str:
         completed = self.runner(
