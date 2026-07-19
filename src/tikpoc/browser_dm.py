@@ -205,6 +205,13 @@ class BrowserDmService:
                 ConversationStage.CLOSED,
                 ConversationStage.HUMAN_REQUIRED,
             }:
+                if assessment.stop_contact_reason:
+                    self.database.suppress_browser_contact(
+                        account.account_id,
+                        plan.participant_username,
+                        reason=assessment.stop_contact_reason,
+                        now_ms=now_ms,
+                    )
                 completed = self.database.finalize_browser_reply_plan(
                     plan.id,
                     reply_text="",

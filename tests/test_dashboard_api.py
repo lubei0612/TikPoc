@@ -814,6 +814,40 @@ def test_browser_welcome_service_is_built_from_registry(tmp_path: Path) -> None:
     assert isinstance(client.app.state.browser_welcome_service, BrowserWelcomeService)
 
 
+def test_suppressed_follower_cannot_claim_followback_action(tmp_path: Path) -> None:
+    database_path = tmp_path / "suppressed-followback.db"
+    database = Database(database_path)
+    database.migrate()
+    assert database.enqueue_web_event(
+        "account-01",
+        "new_follower",
+        "follower:suppressed",
+        {"username": "buyer.one"},
+    )
+    assert database.suppress_browser_contact(
+        "account-01",
+        "buyer.one",
+        reason="explicit_opt_out",
+        now_ms=1_000,
+    )
+    client = TestClient(create_app(database_path, registry=_registry(tmp_path)))
+
+    response = client.post(
+        "/api/browser-actions/claim",
+        headers={"Origin": "https://www.tiktok.com"},
+        json={
+            **_browser_identity(),
+            "action_type": "followback",
+            "action_key": "follower:suppressed",
+            "owner_id": "activity-tab",
+            "timestamp_ms": 2_000,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"claimed": False}
+
+
 def test_completed_followback_triggers_welcome_and_messages_api_reconciles_it(
     tmp_path: Path,
 ) -> None:

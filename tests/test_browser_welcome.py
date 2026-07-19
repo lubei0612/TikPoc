@@ -161,6 +161,27 @@ def test_equal_follower_usernames_remain_isolated_between_accounts(
     assert second.account_id == "account-02"
 
 
+def test_suppressed_follower_never_creates_a_future_welcome(tmp_path: Path) -> None:
+    database = Database(tmp_path / "db.sqlite")
+    database.migrate()
+    assert database.suppress_browser_contact(
+        "account-01",
+        "buyer.one",
+        reason="explicit_opt_out",
+        now_ms=500,
+    )
+    _record_followback(database, "account-01", "follower:key", "Buyer.One")
+    ai = FakeReplyClient()
+
+    service = BrowserWelcomeService(database, _registry(), ai)
+
+    assert (
+        service.plan_after_followback("account-01", "phone-01", "follower:key") is None
+    )
+    assert service.next_plan("account-01", "phone-01") is None
+    assert ai.calls == []
+
+
 def test_welcome_send_lease_requires_matching_planned_account_plan(
     tmp_path: Path,
 ) -> None:

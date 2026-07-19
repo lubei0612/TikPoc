@@ -606,6 +606,17 @@ class Database:
             )
             connection.execute(
                 """
+                CREATE TABLE IF NOT EXISTS browser_contact_suppressions (
+                    account_id TEXT NOT NULL,
+                    participant_username TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    created_at_ms INTEGER NOT NULL,
+                    PRIMARY KEY(account_id, participant_username)
+                )
+                """
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS browser_action_leases (
                     account_id TEXT NOT NULL,
                     action_type TEXT NOT NULL,
@@ -3029,6 +3040,78 @@ class Database:
         username = payload.get("username")
         return str(username).strip() if isinstance(username, str) else None
 
+    def browser_follower_username(
+        self, account_id: str, follower_key: str
+    ) -> str | None:
+        _require_identity(account_id, follower_key)
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT payload_json FROM web_events
+                WHERE account_id=? AND dedup_key=?
+                  AND event_type IN ('new_follower', 'followback_completed')
+                ORDER BY id DESC LIMIT 1
+                """,
+                (account_id, follower_key),
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            payload = json.loads(str(row["payload_json"]))
+        except (TypeError, json.JSONDecodeError):
+            return None
+        username = payload.get("username") if isinstance(payload, dict) else None
+        return str(username).strip() if isinstance(username, str) else None
+
+    def suppress_browser_contact(
+        self,
+        account_id: str,
+        participant_username: str,
+        *,
+        reason: str,
+        now_ms: int,
+    ) -> bool:
+        username = str(participant_username).strip().removeprefix("@").casefold()
+        _require_identity(account_id, username, reason)
+        if int(now_ms) < 0:
+            raise ValueError(
+                "browser contact suppression timestamp must be nonnegative"
+            )
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            inserted = connection.execute(
+                """
+                INSERT OR IGNORE INTO browser_contact_suppressions(
+                    account_id, participant_username, reason, created_at_ms
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (account_id, username, reason, int(now_ms)),
+            ).rowcount
+            connection.execute(
+                """
+                UPDATE browser_welcome_plans
+                SET state='superseded', updated_at_ms=?
+                WHERE account_id=? AND follower_username=? AND state='planned'
+                """,
+                (int(now_ms), account_id, username),
+            )
+            return bool(inserted)
+
+    def browser_contact_allowed(
+        self, account_id: str, participant_username: str
+    ) -> bool:
+        username = str(participant_username).strip().removeprefix("@").casefold()
+        _require_identity(account_id, username)
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM browser_contact_suppressions
+                WHERE account_id=? AND participant_username=?
+                """,
+                (account_id, username),
+            ).fetchone()
+        return row is None
+
     def browser_welcome_plan(
         self, account_id: str, follower_username: str
     ) -> BrowserWelcomePlan | None:
@@ -3090,6 +3173,12 @@ class Database:
                 """
                 SELECT * FROM browser_welcome_plans
                 WHERE account_id=? AND state='planned'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM browser_contact_suppressions AS suppression
+                    WHERE suppression.account_id=browser_welcome_plans.account_id
+                      AND suppression.participant_username=
+                          browser_welcome_plans.follower_username
+                  )
                 ORDER BY id LIMIT 1
                 """,
                 (account_id,),

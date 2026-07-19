@@ -1518,3 +1518,49 @@ def test_uncertain_and_superseded_browser_actions_can_be_reclaimed_after_expiry(
     assert database.claim_browser_action(
         "account-01", "dm_send", "plan-1", "tab-c", 3_000, 1
     )
+
+
+def test_browser_contact_suppression_is_durable_and_account_scoped(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "tasks.db")
+    database.migrate()
+    planned = database.create_browser_welcome_plan(
+        "account-01", "buyer.one", "follower:one", "Welcome", now_ms=1_000
+    )
+    uncertain = database.create_browser_welcome_plan(
+        "account-01", "buyer.two", "follower:two", "Welcome", now_ms=1_000
+    )
+    other_account = database.create_browser_welcome_plan(
+        "account-02", "buyer.one", "follower:one", "Welcome", now_ms=1_000
+    )
+    assert database.record_browser_welcome_result(
+        "account-01", uncertain.id, "uncertain", now_ms=1_500
+    )
+
+    assert database.suppress_browser_contact(
+        "account-01",
+        "@Buyer.One",
+        reason="explicit_opt_out",
+        now_ms=2_000,
+    )
+    assert not database.suppress_browser_contact(
+        "account-01",
+        "buyer.one",
+        reason="explicit_opt_out",
+        now_ms=2_001,
+    )
+
+    assert database.browser_contact_allowed("account-01", "buyer.one") is False
+    assert database.browser_contact_allowed("account-02", "buyer.one") is True
+    assert database.browser_welcome_plan("account-01", "buyer.one").state == (
+        "superseded"
+    )
+    assert database.browser_welcome_plan("account-01", "buyer.two").state == (
+        "uncertain"
+    )
+    assert database.browser_welcome_plan("account-02", "buyer.one") == other_account
+    assert database.browser_welcome_plan("account-01", "buyer.one").id == planned.id
+
+    reopened = Database(database.path)
+    assert reopened.browser_contact_allowed("account-01", "buyer.one") is False

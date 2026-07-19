@@ -521,6 +521,14 @@ def create_app(
                     and not settings["followback_enabled"]
                 ):
                     return _json({"claimed": False})
+                if body.action_type == "followback":
+                    follower_username = database.browser_follower_username(
+                        body.account_id, body.action_key
+                    )
+                    if follower_username and not database.browser_contact_allowed(
+                        body.account_id, follower_username
+                    ):
+                        return _json({"claimed": False})
                 claimed = database.claim_browser_action(
                     body.account_id,
                     body.action_type,

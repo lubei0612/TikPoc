@@ -58,6 +58,8 @@ class BrowserWelcomeService:
             username = _normalized_username(raw_username or "")
             if not username:
                 return None
+            if not self.database.browser_contact_allowed(account.account_id, username):
+                return None
             existing = self.database.browser_welcome_plan(account.account_id, username)
             if existing is not None:
                 return existing

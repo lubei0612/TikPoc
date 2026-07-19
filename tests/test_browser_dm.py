@@ -271,6 +271,7 @@ def test_stop_contact_plan_is_empty_and_does_not_call_ai(tmp_path: Path) -> None
     assert reply.stage == "closed"
     assert reply.reply_text == ""
     assert ai.calls == []
+    assert database.browser_contact_allowed("account-01", "buyer") is False
 
 
 def test_profile_contact_route_needs_no_direct_destination_configuration(
