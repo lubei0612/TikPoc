@@ -48,6 +48,7 @@ from .webhooks import (
 
 
 _BROWSER_PATHS = {
+    "/api/browser-bindings",
     "/api/browser-events",
     "/api/browser-dm/reply-plan",
     "/api/browser-dm/reply-result",
@@ -149,7 +150,9 @@ def create_app(
             if allowed_origin is None:
                 return Response(status_code=404)
             response: Response = Response(status_code=204)
-            response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+            response.headers["Access-Control-Allow-Methods"] = (
+                "GET, OPTIONS" if path == "/api/browser-bindings" else "POST, OPTIONS"
+            )
             response.headers["Access-Control-Allow-Headers"] = "Content-Type"
         elif request.method == "POST":
             if allowed_origin is None:
@@ -161,6 +164,8 @@ def create_app(
                 )
             else:
                 response = await call_next(request)
+        elif request.method == "GET" and origin is not None and allowed_origin is None:
+            return _json({"error": "browser origin is not allowed"}, 403)
         else:
             response = await call_next(request)
         if allowed_origin is not None:
@@ -221,6 +226,27 @@ def create_app(
             payload,
         )
         return _json({"accepted": accepted})
+
+    @app.get("/api/browser-bindings")
+    def browser_bindings() -> JSONResponse:
+        accounts = () if registry is None else registry.accounts
+        return _json(
+            {
+                "accounts": [
+                    {
+                        "account_id": account.account_id,
+                        "device_id": account.device_id,
+                        "expected_tiktok_username": account.expected_tiktok_username,
+                        "browser_profile_label": account.browser_profile_label,
+                        "enabled": account.enabled,
+                        "browser_followback_enabled": account.browser_followback_enabled,
+                        "browser_dm_enabled": account.browser_dm_enabled,
+                        "binding_ready": bool(account.expected_tiktok_username),
+                    }
+                    for account in accounts
+                ]
+            }
+        )
 
     @app.post("/api/browser-dm/reply-plan")
     async def browser_reply_plan(request: Request) -> JSONResponse:

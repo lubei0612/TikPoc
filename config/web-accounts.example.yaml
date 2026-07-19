@@ -2,6 +2,8 @@ accounts:
   - account_id: account-01
     device_id: phone-01
     mode: browser
+    expected_tiktok_username: replace-with-tiktok-username
+    browser_profile_label: TikPoc 01
     private_channel_hint: "WhatsApp: replace-with-your-contact"
     offer_context: "Products from the account-01 catalog"
     faq_file: ""
@@ -16,6 +18,8 @@ accounts:
   - account_id: account-02
     device_id: phone-02
     mode: browser
+    expected_tiktok_username: replace-with-second-tiktok-username
+    browser_profile_label: TikPoc 02
     browser_followback_enabled: false
     browser_dm_enabled: false
     enabled: false

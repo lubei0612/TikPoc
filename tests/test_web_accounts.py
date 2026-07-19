@@ -51,9 +51,7 @@ def test_browser_account_does_not_require_business_credentials(tmp_path: Path) -
         "    browser_dm_enabled: true\n",
         encoding="utf-8",
     )
-    (tmp_path / "faq.md").write_text(
-        "Shipping takes 5-7 days.", encoding="utf-8"
-    )
+    (tmp_path / "faq.md").write_text("Shipping takes 5-7 days.", encoding="utf-8")
 
     account = WebAccountRegistry.from_path(config).by_account_id("account-01")
 
@@ -348,3 +346,58 @@ def test_business_token_expiry_uses_refresh_skew() -> None:
     assert token.access_expired(now=1_000, skew_seconds=60) is False
     assert token.access_expired(now=1_041, skew_seconds=60) is True
     assert token.refresh_expired(now=2_001) is True
+
+
+def test_browser_registry_supports_arbitrary_account_counts(tmp_path: Path) -> None:
+    config = tmp_path / "accounts.yaml"
+    config.write_text(
+        "accounts:\n"
+        + "".join(
+            f"  - account_id: account-{index:02d}\n"
+            f"    device_id: phone-{index:02d}\n"
+            f"    expected_tiktok_username: shop_{index:02d}\n"
+            f"    browser_profile_label: TikPoc {index:02d}\n"
+            for index in range(1, 13)
+        ),
+        encoding="utf-8",
+    )
+    registry = WebAccountRegistry.from_path(config)
+    assert len(registry.accounts) == 12
+    assert registry.accounts[-1].expected_tiktok_username == "shop_12"
+    assert registry.accounts[-1].browser_profile_label == "TikPoc 12"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("account_id", "ACCOUNT-01", "duplicate account_id"),
+        ("device_id", "PHONE-01", "duplicate device_id"),
+        (
+            "expected_tiktok_username",
+            "@SHOP_ONE",
+            "duplicate expected_tiktok_username",
+        ),
+    ],
+)
+def test_browser_registry_rejects_case_insensitive_mapping_duplicates(
+    tmp_path: Path, field: str, value: str, message: str
+) -> None:
+    second = {
+        "account_id": "account-02",
+        "device_id": "phone-02",
+        "expected_tiktok_username": "shop_two",
+    }
+    second[field] = value
+    config = tmp_path / "accounts.yaml"
+    config.write_text(
+        "accounts:\n"
+        "  - account_id: account-01\n"
+        "    device_id: phone-01\n"
+        "    expected_tiktok_username: shop_one\n"
+        f"  - account_id: {second['account_id']}\n"
+        f"    device_id: {second['device_id']}\n"
+        f'    expected_tiktok_username: "{second["expected_tiktok_username"]}"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=message):
+        WebAccountRegistry.from_path(config)

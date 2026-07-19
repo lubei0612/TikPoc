@@ -19,11 +19,11 @@
 - Modify: `tests/test_acquisition_api.py`
 - Modify: `config/web-accounts.example.yaml`
 
-- [ ] Add registry tests loading 1, 2, and 12 browser accounts and rejecting case-insensitive duplicate account IDs, device IDs, and expected TikTok usernames.
-- [ ] Add `expected_tiktok_username` and `browser_profile_label` to `WebAccount`; normalize usernames by trimming whitespace and one leading `@` without changing display case in the label.
-- [ ] Add `GET /api/browser-bindings` tests requiring only `account_id`, `device_id`, `expected_tiktok_username`, `browser_profile_label`, `enabled`, `browser_followback_enabled`, `browser_dm_enabled`, and `binding_ready`.
-- [ ] Implement the endpoint from `registry.accounts`; exclude offer, FAQ, private destination, message, token, cookie, and profile-path data.
-- [ ] Run `uv run pytest tests/test_web_accounts.py tests/test_acquisition_api.py -q` and commit `feat: expose browser account bindings`.
+- [x] Add registry tests loading 1, 2, and 12 browser accounts and rejecting case-insensitive duplicate account IDs, device IDs, and expected TikTok usernames.
+- [x] Add `expected_tiktok_username` and `browser_profile_label` to `WebAccount`; normalize usernames by trimming whitespace and one leading `@` without changing display case in the label.
+- [x] Add `GET /api/browser-bindings` tests requiring only `account_id`, `device_id`, `expected_tiktok_username`, `browser_profile_label`, `enabled`, `browser_followback_enabled`, `browser_dm_enabled`, and `binding_ready`.
+- [x] Implement the endpoint from `registry.accounts`; exclude offer, FAQ, private destination, message, token, cookie, and profile-path data.
+- [x] Run `uv run pytest tests/test_web_accounts.py tests/test_acquisition_api.py -q` and commit `feat: expose browser account bindings`.
 
 ### Task 2: Pure Visible-Account Identity Gate
 

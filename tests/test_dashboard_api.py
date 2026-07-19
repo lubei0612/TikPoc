@@ -1056,3 +1056,62 @@ def test_fastapi_tiktok_webhook_verifies_and_deduplicates(tmp_path: Path) -> Non
 
     assert first.json() == {"accepted": True}
     assert duplicate.json() == {"accepted": False}
+
+
+def test_browser_bindings_expose_only_nonsecret_profile_mapping(
+    tmp_path: Path,
+) -> None:
+    registry = WebAccountRegistry(
+        (
+            WebAccount(
+                account_id="account-01",
+                device_id="phone-01",
+                expected_tiktok_username="shop_one",
+                browser_profile_label="TikPoc 01",
+                private_channel_hint="SYNTHETIC_PRIVATE_DESTINATION",
+                offer_context="Synthetic private offer",
+                faq_text="Synthetic private FAQ",
+            ),
+            WebAccount(
+                account_id="account-02",
+                device_id="phone-02",
+                expected_tiktok_username="",
+                browser_profile_label="TikPoc 02",
+                enabled=False,
+            ),
+        )
+    )
+    client = TestClient(create_app(tmp_path / "bindings.db", registry=registry))
+    response = client.get(
+        "/api/browser-bindings",
+        headers={"Origin": "https://www.tiktok.com"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "accounts": [
+            {
+                "account_id": "account-01",
+                "device_id": "phone-01",
+                "expected_tiktok_username": "shop_one",
+                "browser_profile_label": "TikPoc 01",
+                "enabled": True,
+                "browser_followback_enabled": True,
+                "browser_dm_enabled": True,
+                "binding_ready": True,
+            },
+            {
+                "account_id": "account-02",
+                "device_id": "phone-02",
+                "expected_tiktok_username": "",
+                "browser_profile_label": "TikPoc 02",
+                "enabled": False,
+                "browser_followback_enabled": True,
+                "browser_dm_enabled": True,
+                "binding_ready": False,
+            },
+        ]
+    }
+    serialized = json.dumps(response.json())
+    assert "SYNTHETIC_PRIVATE_DESTINATION" not in serialized
+    assert "Synthetic private offer" not in serialized
+    assert "Synthetic private FAQ" not in serialized

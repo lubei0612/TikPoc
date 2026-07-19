@@ -30,11 +30,11 @@ class WebAccount:
     reply_language: str = "auto"
     max_auto_replies: int = 12
     invite_after_meaningful_turns: int = 2
-    fallback_acknowledgement: str = (
-        "Thanks for your message. What are you looking for?"
-    )
+    fallback_acknowledgement: str = "Thanks for your message. What are you looking for?"
     browser_followback_enabled: bool = True
     browser_dm_enabled: bool = True
+    expected_tiktok_username: str = ""
+    browser_profile_label: str = ""
 
     def __post_init__(self) -> None:
         if self.mode is None:
@@ -46,15 +46,40 @@ class WebAccount:
         if mode not in {"browser", "business"}:
             raise ValueError("mode must be browser or business")
         object.__setattr__(self, "mode", mode)
+        object.__setattr__(
+            self,
+            "expected_tiktok_username",
+            str(self.expected_tiktok_username).strip().removeprefix("@"),
+        )
+        object.__setattr__(
+            self, "browser_profile_label", str(self.browser_profile_label).strip()
+        )
 
 
 class WebAccountRegistry:
     def __init__(self, accounts: tuple[WebAccount, ...]) -> None:
         self.accounts = accounts
+        self._validate_unique_browser_mappings(accounts)
         self._by_account_id = {account.account_id: account for account in accounts}
         self._by_business_id = {
             account.business_id: account for account in accounts if account.business_id
         }
+
+    @staticmethod
+    def _validate_unique_browser_mappings(accounts: tuple[WebAccount, ...]) -> None:
+        fields = {
+            "account_id": [account.account_id for account in accounts],
+            "device_id": [account.device_id for account in accounts],
+            "expected_tiktok_username": [
+                account.expected_tiktok_username
+                for account in accounts
+                if account.expected_tiktok_username
+            ],
+        }
+        for field, values in fields.items():
+            normalized = [value.casefold() for value in values]
+            if len(normalized) != len(set(normalized)):
+                raise ValueError(f"duplicate {field}")
 
     @classmethod
     def from_path(cls, path: Path) -> "WebAccountRegistry":
@@ -115,9 +140,7 @@ class WebAccountRegistry:
             max_auto_replies_value = item.get("max_auto_replies", 12)
             if max_auto_replies_value in (None, ""):
                 max_auto_replies_value = 12
-            invite_after_turns_value = item.get(
-                "invite_after_meaningful_turns", 2
-            )
+            invite_after_turns_value = item.get("invite_after_meaningful_turns", 2)
             if invite_after_turns_value in (None, ""):
                 invite_after_turns_value = 2
             accounts.append(
@@ -132,13 +155,9 @@ class WebAccountRegistry:
                     ).strip(),
                     offer_context=str(item.get("offer_context") or "").strip(),
                     faq_text=faq_text,
-                    reply_language=str(
-                        item.get("reply_language") or "auto"
-                    ).strip(),
+                    reply_language=str(item.get("reply_language") or "auto").strip(),
                     max_auto_replies=max(1, int(max_auto_replies_value)),
-                    invite_after_meaningful_turns=max(
-                        1, int(invite_after_turns_value)
-                    ),
+                    invite_after_meaningful_turns=max(1, int(invite_after_turns_value)),
                     fallback_acknowledgement=str(
                         item.get("fallback_acknowledgement")
                         or "Thanks for your message. What are you looking for?"
@@ -151,6 +170,10 @@ class WebAccountRegistry:
                         item.get("browser_dm_enabled", True),
                         field="browser_dm_enabled",
                     ),
+                    expected_tiktok_username=str(
+                        item.get("expected_tiktok_username") or ""
+                    ),
+                    browser_profile_label=str(item.get("browser_profile_label") or ""),
                     enabled=_parse_bool(
                         item.get("enabled", True),
                         field="enabled",
