@@ -66,13 +66,39 @@ uv run tikpoc serve \
 每个账号重复以下步骤：
 
 1. 新建或打开专用 Chrome Profile，并只在该 Profile 登录对应 TikTok 账号。
-2. 打开 `chrome://extensions`，启用开发者模式，加载当前工作树的 `chrome-event-bridge/`。
-3. 打开扩展设置，确认 Dashboard URL 为 `http://127.0.0.1:8766`，点击“测试连接”。
-4. 在“Chrome Profile 对应账号”菜单选择本 Profile 的账号映射并保存。
+2. 打开 `chrome://extensions`，启用开发者模式，点击“加载已解压的扩展程序”。文件夹选择器中按 `Command+Shift+G`，输入当前工作树的 `chrome-event-bridge/` 绝对路径并选择该目录。
+3. 打开已登录的任意 TikTok 页面。扩展默认按页面可见用户名自动匹配服务端唯一账号映射，不需要填写 Account ID 或 Device ID。
+4. 打开扩展设置，确认 Dashboard URL 为 `http://127.0.0.1:8766`，保持“自动识别当前 TikTok 账号”开启，并点击“测试连接”。
 5. 打开 TikTok Activity 和 Messages 页面，检查扩展弹窗中的 Profile、预期用户、页面用户和绑定状态。
-6. 只有显示“已就绪”后，再开启“自动回关”或“私信回复”。
+6. 只有 Activity 和 Messages 都显示“已就绪”并建立新基线后，再开启“自动回关”或“私信回复”。
 
-扩展不会接受自由填写的账号或设备 ID。换绑必须确认；换绑后只清理旧账号在该 Profile 内的关注/私信基线和已处理记录，不影响其他账号。
+自动识别只接受一个可见 TikTok 用户名与一个启用的服务端映射精确匹配。退出、验证、无匹配或歧义状态不会绑定或执行动作。需要人工处理时，关闭“自动识别当前 TikTok 账号”，从服务端菜单选择映射并保存；换绑必须确认，且只清理旧账号在该 Profile 内的关注/私信基线和已处理记录。
+
+### 4.1 CLI 连接与状态
+
+```bash
+uv run tikpoc browser guide
+uv run tikpoc browser status --dashboard-url http://127.0.0.1:8766
+uv run tikpoc browser connect \
+  --web-accounts config/web-accounts.yaml \
+  --dashboard-url http://127.0.0.1:8766 \
+  --timeout 60
+```
+
+`browser connect` 校验本地注册表与服务端脱敏映射完全一致，并等待每个启用账号的 Activity、Messages 两条健康状态。成功输出 `ready=N/N`；状态输出只含账号、Profile、预期/页面用户名、页面角色、绑定状态和心跳年龄。
+
+### 4.2 AI 连接指令
+
+对 AI 说“连接这个 Chrome”时，按以下固定流程执行：
+
+1. 读取当前 TikTok 页面可见用户名，不读取 Cookie、Token 或 Chrome Profile 存储。
+2. 检查或启动 loopback TikPoc 服务和本地账号注册表。
+3. 扩展或服务更新后重载 TikTok 页面。
+4. 运行 `tikpoc browser connect`，等待对应 Activity、Messages 状态均为“已就绪”。
+5. 如出现已退出、需验证、无匹配、歧义或身份不符，报告具体状态并保持动作关闭。
+6. 已获得真实动作批准且新基线完成后，才开启对应账号的自动回关和 AI 回复。
+
+扩展源码更新后，在 `chrome://extensions` 点击 `TikPoc Event Bridge` 的重新加载按钮，再重载 TikTok 页面。日常新增已配置账号只需在新 Profile 手动加载扩展一次，之后使用自动识别或上述 AI 指令连接。
 
 ## 5. 基线与去重
 
