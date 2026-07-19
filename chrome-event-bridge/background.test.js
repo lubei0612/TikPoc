@@ -169,3 +169,56 @@ test("browser transports reject non-local dashboard origins", async () => {
   assert.equal(response.ok, false);
   assert.equal(fetched, false);
 });
+
+test("browser binding transport reads only the loopback binding endpoint", async () => {
+  let messageListener;
+  let request;
+  const context = {
+    URL,
+    Set,
+    chrome: {
+      runtime: {
+        onMessage: { addListener(listener) { messageListener = listener; } },
+        onInstalled: { addListener() {} },
+        onStartup: { addListener() {} },
+        openOptionsPage() {},
+      },
+      alarms: { create() {}, onAlarm: { addListener() {} } },
+      tabs: { query: async () => [], sendMessage: async () => {} },
+    },
+    async fetch(url, options) {
+      request = { url, options };
+      return {
+        ok: true,
+        async json() { return { accounts: [{ account_id: "account-01" }] }; },
+      };
+    },
+  };
+  vm.runInNewContext(
+    fs.readFileSync(path.join(__dirname, "background.js"), "utf8"),
+    context,
+  );
+
+  const response = await new Promise((resolve) => {
+    assert.equal(messageListener({
+      type: "TIKPOC_GET_BINDINGS",
+      dashboardUrl: "http://127.0.0.1:8766/path",
+    }, {}, resolve), true);
+  });
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.accounts[0].account_id, "account-01");
+  assert.equal(request.url, "http://127.0.0.1:8766/api/browser-bindings");
+  assert.equal(request.options.method, "GET");
+  assert.equal(Object.hasOwn(request.options, "body"), false);
+
+  request = null;
+  const rejected = await new Promise((resolve) => {
+    assert.equal(messageListener({
+      type: "TIKPOC_GET_BINDINGS",
+      dashboardUrl: "https://example.com",
+    }, {}, resolve), true);
+  });
+  assert.equal(rejected.ok, false);
+  assert.equal(request, null);
+});

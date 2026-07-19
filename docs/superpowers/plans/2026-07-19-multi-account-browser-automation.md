@@ -51,11 +51,11 @@
 - Modify: `chrome-event-bridge/popup.html`
 - Modify: `chrome-event-bridge/popup.js`
 
-- [ ] Add background transport tests for a same-origin `GET /api/browser-bindings` message and rejection of non-loopback URLs.
-- [ ] Replace free-text account/device inputs with a Chinese account menu populated from the binding response; selecting an account stores the server-provided account, device, expected username, and profile label together.
-- [ ] Require an explicit Chinese confirmation before rebinding. On confirmation delete only the old account keys from `tikpocFollowerBaselines`, `tikpocProcessedFollowers`, `tikpocDmBaselines`, and `tikpocDmProcessed`.
-- [ ] Show profile label, account, expected username, observed username, and localized binding state in the popup with stable wrapping at 260 px.
-- [ ] Run Node tests and Playwright screenshot checks for populated, empty, and mismatch states; commit `feat: bind each Chrome profile to one account`.
+- [x] Add background transport tests for a same-origin `GET /api/browser-bindings` message and rejection of non-loopback URLs.
+- [x] Replace free-text account/device inputs with a Chinese account menu populated from the binding response; selecting an account stores the server-provided account, device, expected username, and profile label together.
+- [x] Require an explicit Chinese confirmation before rebinding. On confirmation delete only the old account keys from `tikpocFollowerBaselines`, `tikpocProcessedFollowers`, `tikpocDmBaselines`, and `tikpocDmProcessed`.
+- [x] Show profile label, account, expected username, observed username, and localized binding state in the popup with stable wrapping at 260 px.
+- [x] Run Node tests and Playwright screenshot checks for populated, empty, and mismatch states; commit `feat: bind each Chrome profile to one account`.
 
 ### Task 4: Server-Side Binding Enforcement
 

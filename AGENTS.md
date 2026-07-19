@@ -330,11 +330,24 @@ Completed on `feat/web-lead-conversion`:
   the unchanged-build 500-unique-target gate remains open.
 - Stable-ID routes that remain blank after baseline and one restart now fall
   back to the public username URL and require exact visible username matching.
+- Multi-account Browser Tasks 1-3 are complete: the localhost service exposes
+  redacted arbitrary-account bindings, visible TikTok identity gates Activity
+  and Messages actions, and each Chrome Profile selects one server mapping from
+  the Chinese extension settings page.
+- Rebinding requires explicit confirmation and clears only the old account's
+  follower/DM baselines and processed records. Legacy DM records without an
+  account owner remain intact.
+- The extension popup shows Profile label, configured account, expected and
+  observed TikTok usernames, and localized binding readiness at a stable 260px
+  width. Desktop, 390px mobile, empty-list, mismatch, and page-level rebind
+  Playwright checks passed without overflow.
+- Multi-account Browser Task 3 specification and quality reviews passed after
+  preventing binding-status writes from self-triggering Activity/DM scans.
 - The retained debug round failed capacity promotion: mean 170.718 seconds,
   P90 15.572 seconds, projected 421 targets per 20-hour day, with historical
   identity mismatch evidence. A fresh calibration-free round is still required.
 - Last fresh full Python verification: `582 passed`; Chrome Node verification:
-  `36 passed`; Android bridge build passed with the portable build-root fix.
+  `46 passed`; Android bridge build passed with the portable build-root fix.
 - Full-repository Ruff format check has a pre-existing 14-file formatting
   baseline; do not reformat those unrelated files as part of a narrow task.
 
@@ -342,8 +355,8 @@ Outstanding at the current checkpoint:
 
 1. Run the fresh 500-target slot-1 pacing/performance gate and record measured
    stage mean/P90 separately from projections.
-2. Implement and calibrate configurable multi-account web follow-back/reply,
-   notifying the user before the first two-account live acceptance.
+2. Complete Multi-account Browser Tasks 4-6 and notify the user before the
+   first two-account live follow-back/reply acceptance.
 3. Execute the remaining Mobile Task 10 two-device live gate on slots 1 and 2.
 4. Finish full regression, two-device calibration, four-/eight-hour
    endurance tests, seven-device benchmark, runbooks, branch integration, and

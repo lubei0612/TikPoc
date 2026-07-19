@@ -1,7 +1,8 @@
 (function startFollowerBridge() {
   const core = globalThis.TikPocFollowerCore;
   const binding = globalThis.TikPocBindingCore;
-  if (!core || !binding) {
+  const optionsCore = globalThis.TikPocOptionsCore;
+  if (!core || !binding || !optionsCore) {
     return;
   }
 
@@ -329,18 +330,26 @@
     try {
       const stored = await storageGet([SETTINGS_KEY, PROCESSED_KEY, BASELINE_KEY]);
       const settings = stored[SETTINGS_KEY] || {};
-      if (
-        !core.browserFeatureEnabled(settings, "browserFollowbackEnabled") ||
-        !settings.accountId ||
-        !settings.deviceId ||
-        !settings.dashboardUrl
-      ) {
+      if (!optionsCore.canObserveBinding(settings)) {
         return;
       }
       const bindingResult = binding.evaluateBinding(
         document,
         settings.expectedTikTokUsername,
       );
+      await storageSet({
+        tikpocBindingStatus: optionsCore.bindingObservation(
+          settings.accountId,
+          bindingResult,
+        ),
+      });
+      if (
+        !core.browserFeatureEnabled(settings, "browserFollowbackEnabled") ||
+        !settings.deviceId ||
+        !settings.dashboardUrl
+      ) {
+        return;
+      }
       if (bindingResult.state !== "ready") {
         return;
       }
@@ -383,6 +392,10 @@
     subtree: true,
     characterData: true,
   });
-  chrome.storage.onChanged.addListener(scheduleScan);
+  chrome.storage.onChanged.addListener((changes) => {
+    if (optionsCore.shouldScheduleForStorageChanges(changes)) {
+      scheduleScan();
+    }
+  });
   scheduleScan();
 })();

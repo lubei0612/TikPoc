@@ -18,12 +18,11 @@
         <section aria-labelledby="identity-heading">
           <h2 id="identity-heading">账号绑定</h2>
           <label>
-            <span>Account ID</span>
-            <input id="account-id" name="accountId" autocomplete="off" required />
-          </label>
-          <label>
-            <span>Device ID</span>
-            <input id="device-id" name="deviceId" autocomplete="off" required />
+            <span>Chrome Profile 对应账号</span>
+            <select id="account-binding" name="accountBinding" required disabled>
+              <option value="">请先连接本机服务</option>
+            </select>
+            <small id="binding-detail">连接成功后从服务端账号配置中选择。</small>
           </label>
         </section>
 
@@ -84,6 +83,7 @@
         </footer>
       </form>
     </main>
+    <script src="options-core.js"></script>
     <script src="options.js"></script>
   </body>
 </html>

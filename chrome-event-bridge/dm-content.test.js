@@ -140,6 +140,9 @@ test("one inbound fingerprint is planned and sent only once", async () => {
   assert.equal(await run.workflow.scan(SETTINGS), "duplicate");
   assert.equal(run.clicks, 1);
   assert.equal(run.calls.filter((call) => call.type === "TIKPOC_DM_PLAN").length, 1);
+  const processed = Object.values(run.storage.values.tikpocDmProcessed);
+  assert.equal(processed.length, 1);
+  assert.equal(processed[0].accountId, SETTINGS.accountId);
   for (const call of run.calls) {
     assert.equal(call.body.observed_username, "shop_one");
     assert.equal(call.body.binding_state, "ready");

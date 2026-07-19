@@ -14,7 +14,7 @@
   "content_scripts": [
     {
       "matches": ["https://www.tiktok.com/*"],
-      "js": ["core.js", "dm-core.js", "binding-core.js", "content.js", "dm-content.js"],
+      "js": ["core.js", "dm-core.js", "binding-core.js", "options-core.js", "content.js", "dm-content.js"],
       "run_at": "document_idle"
     }
   ],

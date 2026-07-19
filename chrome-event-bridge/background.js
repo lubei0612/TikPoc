@@ -1,5 +1,6 @@
 const REPORT_EVENT = "TIKPOC_REPORT_EVENT";
 const PING_DASHBOARD = "TIKPOC_PING_DASHBOARD";
+const GET_BINDINGS = "TIKPOC_GET_BINDINGS";
 const HEALTH_ALARM = "tikpoc-browser-health";
 const HEALTH_TICK = "TIKPOC_HEALTH_TICK";
 const POST_ROUTES = new Map([
@@ -42,6 +43,19 @@ async function postLocal(dashboardUrlValue, path, payload) {
   return body;
 }
 
+async function getLocal(dashboardUrlValue, path) {
+  const dashboardUrl = localDashboardUrl(dashboardUrlValue);
+  if (!dashboardUrl) {
+    throw new Error("Dashboard URL must use http://127.0.0.1 or http://localhost");
+  }
+  const response = await fetch(`${dashboardUrl}${path}`, { method: "GET" });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(body.error || `Dashboard returned HTTP ${response.status}`);
+  }
+  return body;
+}
+
 async function reportEvent(message) {
   return postLocal(message.dashboardUrl, POST_ROUTES.get(REPORT_EVENT), message.event);
 }
@@ -59,12 +73,19 @@ async function pingDashboard(message) {
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (!message || (!POST_ROUTES.has(message.type) && message.type !== PING_DASHBOARD)) {
+  if (
+    !message ||
+    (!POST_ROUTES.has(message.type) &&
+      message.type !== PING_DASHBOARD &&
+      message.type !== GET_BINDINGS)
+  ) {
     return false;
   }
   let task;
   if (message.type === PING_DASHBOARD) {
     task = pingDashboard(message);
+  } else if (message.type === GET_BINDINGS) {
+    task = getLocal(message.dashboardUrl, "/api/browser-bindings");
   } else if (message.type === REPORT_EVENT) {
     task = reportEvent(message);
   } else {

@@ -1,7 +1,18 @@
 const SETTINGS_KEY = "tikpocSettings";
+const STATE_KEYS = [
+  "tikpocFollowerBaselines",
+  "tikpocProcessedFollowers",
+  "tikpocDmBaselines",
+  "tikpocDmProcessed",
+  "tikpocBindingStatus",
+];
 const form = document.querySelector("#settings-form");
 const status = document.querySelector("#status");
+const bindingSelect = document.querySelector("#account-binding");
+const bindingDetail = document.querySelector("#binding-detail");
 let lastConnectionTest = null;
+let currentSettings = {};
+let bindings = [];
 
 function showStatus(message, state = "") {
   status.textContent = message;
@@ -10,8 +21,6 @@ function showStatus(message, state = "") {
 
 function values() {
   return {
-    accountId: document.querySelector("#account-id").value.trim(),
-    deviceId: document.querySelector("#device-id").value.trim(),
     dashboardUrl: document.querySelector("#dashboard-url").value.trim().replace(/\/$/, ""),
     enabled: document.querySelector("#enabled").checked,
     browserFollowbackEnabled: document.querySelector("#browser-followback-enabled").checked,
@@ -21,11 +30,66 @@ function values() {
   };
 }
 
+function selectedBinding() {
+  return bindings.find((binding) => binding.account_id === bindingSelect.value) || null;
+}
+
+function updateBindingDetail() {
+  const binding = selectedBinding();
+  bindingDetail.textContent = binding
+    ? `设备：${binding.device_id} · TikTok：@${binding.expected_tiktok_username || "未配置"}`
+    : "请选择此 Chrome Profile 唯一对应的账号。";
+}
+
+function renderBindings(accounts, selectedAccountId = "") {
+  bindings = Array.isArray(accounts) ? accounts : [];
+  bindingSelect.replaceChildren();
+  if (bindings.length === 0) {
+    bindingSelect.append(new Option("没有可用账号", ""));
+    bindingSelect.disabled = true;
+    updateBindingDetail();
+    return;
+  }
+  bindingSelect.append(new Option("请选择账号", ""));
+  for (const binding of bindings) {
+    const username = binding.expected_tiktok_username
+      ? `@${binding.expected_tiktok_username}`
+      : "未配置 TikTok 用户名";
+    const option = new Option(
+      `${binding.browser_profile_label || binding.account_id} · ${binding.account_id} · ${username}`,
+      binding.account_id,
+    );
+    option.disabled = !binding.binding_ready;
+    bindingSelect.append(option);
+  }
+  bindingSelect.disabled = false;
+  bindingSelect.value = selectedAccountId;
+  updateBindingDetail();
+}
+
+function loadBindings(dashboardUrl, selectedAccountId = "") {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(
+      { type: "TIKPOC_GET_BINDINGS", dashboardUrl },
+      (response) => {
+        if (chrome.runtime.lastError || !response?.ok) {
+          renderBindings([], "");
+          reject(new Error(
+            response?.error || chrome.runtime.lastError?.message || "账号配置加载失败。",
+          ));
+          return;
+        }
+        renderBindings(response.result?.accounts, selectedAccountId);
+        resolve(response.result?.accounts || []);
+      },
+    );
+  });
+}
+
 chrome.storage.local.get([SETTINGS_KEY], (stored) => {
   const settings = stored[SETTINGS_KEY] || {};
+  currentSettings = settings;
   lastConnectionTest = settings.lastConnectionTest || null;
-  document.querySelector("#account-id").value = settings.accountId || "";
-  document.querySelector("#device-id").value = settings.deviceId || "";
   document.querySelector("#dashboard-url").value =
     settings.dashboardUrl || "http://127.0.0.1:8766";
   document.querySelector("#enabled").checked = Boolean(settings.enabled);
@@ -35,15 +99,62 @@ chrome.storage.local.get([SETTINGS_KEY], (stored) => {
   document.querySelector("#auto-open-activity").checked = Boolean(
     settings.autoOpenActivity,
   );
+  if (settings.lastConnectionTest?.ok) {
+    loadBindings(document.querySelector("#dashboard-url").value, settings.accountId).catch(
+      (error) => showStatus(error.message, "error"),
+    );
+  }
 });
 
 form.addEventListener("submit", (event) => {
   event.preventDefault();
-  const settings = values();
-  chrome.storage.local.set({ [SETTINGS_KEY]: settings }, () => {
-    showStatus("设置已保存。", "success");
+  const binding = selectedBinding();
+  if (!binding) {
+    showStatus("请先选择此 Chrome Profile 对应的账号。", "error");
+    return;
+  }
+  if (
+    TikPocOptionsCore.requiresRebindConfirmation(
+      currentSettings.accountId,
+      binding.account_id,
+    ) &&
+    !confirm(`确认将此 Chrome Profile 从 ${currentSettings.accountId} 换绑到 ${binding.account_id}？`)
+  ) {
+    bindingSelect.value = currentSettings.accountId || "";
+    updateBindingDetail();
+    showStatus("已取消换绑。", "");
+    return;
+  }
+  chrome.storage.local.get(STATE_KEYS, (storedState) => {
+    const isRebind = TikPocOptionsCore.requiresRebindConfirmation(
+      currentSettings.accountId,
+      binding.account_id,
+    );
+    const reset = isRebind
+      ? TikPocOptionsCore.resetForAccount(storedState, currentSettings.accountId)
+      : {};
+    const settings = TikPocOptionsCore.settingsForBinding(values(), binding);
+    const unverifiedStatus = TikPocOptionsCore.bindingObservation(
+      binding.account_id,
+      { state: "unverified", observedUsername: "" },
+    );
+    chrome.storage.local.set(
+      {
+        ...reset,
+        tikpocBindingStatus: isRebind
+          ? unverifiedStatus
+          : storedState.tikpocBindingStatus || unverifiedStatus,
+        [SETTINGS_KEY]: settings,
+      },
+      () => {
+        currentSettings = settings;
+        showStatus("账号绑定与运行设置已保存。", "success");
+      },
+    );
   });
 });
+
+bindingSelect.addEventListener("change", updateBindingDetail);
 
 document.querySelector("#test-connection").addEventListener("click", () => {
   const settings = values();
@@ -56,7 +167,8 @@ document.querySelector("#test-connection").addEventListener("click", () => {
     (response) => {
       if (chrome.runtime.lastError || !response?.ok) {
         lastConnectionTest = { ok: false, testedAt: Date.now() };
-        chrome.storage.local.set({ [SETTINGS_KEY]: values() });
+        currentSettings = TikPocOptionsCore.mergeRuntimeSettings(currentSettings, values());
+        chrome.storage.local.set({ [SETTINGS_KEY]: currentSettings });
         showStatus(
           response?.error || chrome.runtime.lastError?.message || "连接失败。",
           "error",
@@ -64,8 +176,13 @@ document.querySelector("#test-connection").addEventListener("click", () => {
         return;
       }
       lastConnectionTest = { ok: true, testedAt: Date.now() };
-      chrome.storage.local.set({ [SETTINGS_KEY]: values() });
-      showStatus("Dashboard 连接正常。", "success");
+      currentSettings = TikPocOptionsCore.mergeRuntimeSettings(currentSettings, values());
+      chrome.storage.local.set({ [SETTINGS_KEY]: currentSettings });
+      loadBindings(settings.dashboardUrl, currentSettings.accountId)
+        .then((accounts) => {
+          showStatus(`连接正常，已加载 ${accounts.length} 个账号。`, "success");
+        })
+        .catch((error) => showStatus(error.message, "error"));
     },
   );
 });

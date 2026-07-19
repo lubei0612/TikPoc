@@ -13,6 +13,8 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function createDmContent(core) {
   const binding = globalThis.TikPocBindingCore ||
     (typeof require === "function" ? require("./binding-core.js") : null);
+  const optionsCore = globalThis.TikPocOptionsCore ||
+    (typeof require === "function" ? require("./options-core.js") : null);
   const SETTINGS_KEY = "tikpocSettings";
   const BASELINES_KEY = "tikpocDmBaselines";
   const PROCESSED_KEY = "tikpocDmProcessed";
@@ -356,7 +358,11 @@
           plan_id: plan.plan_id,
           state: "superseded",
         });
-        processed[fingerprint] = { state: "superseded", updatedAt: now() };
+        processed[fingerprint] = {
+          accountId: settings.accountId,
+          state: "superseded",
+          updatedAt: now(),
+        };
         await storage.set(PROCESSED_KEY, trimProcessed(processed));
         baseline[candidate.snapshot.key] = candidate.snapshot.signature;
         await storage.set(BASELINES_KEY, baselines);
@@ -383,7 +389,11 @@
       const composer = adapter.findComposer();
       const composed = composer && adapter.setComposerText(composer, plan.reply_text);
       const sendButton = composed && adapter.findSendButton();
-      processed[fingerprint] = { state: "sending", updatedAt: now() };
+      processed[fingerprint] = {
+        accountId: settings.accountId,
+        state: "sending",
+        updatedAt: now(),
+      };
       await storage.set(PROCESSED_KEY, trimProcessed(processed));
       if (sendButton) {
         sendButton.click();
@@ -402,7 +412,11 @@
         ...identity,
         state: confirmed ? "completed" : "uncertain",
       });
-      processed[fingerprint] = { state: resultState, updatedAt: now() };
+      processed[fingerprint] = {
+        accountId: settings.accountId,
+        state: resultState,
+        updatedAt: now(),
+      };
       await storage.set(PROCESSED_KEY, trimProcessed(processed));
       baseline[candidate.snapshot.key] = candidate.snapshot.signature;
       await storage.set(BASELINES_KEY, baselines);
@@ -481,12 +495,22 @@
     function ready(value) {
       return configured(value) && value.bindingState === "ready";
     }
+    async function persistBinding(value) {
+      await storageSet(
+        "tikpocBindingStatus",
+        optionsCore.bindingObservation(
+          value.accountId,
+          { state: value.bindingState, observedUsername: value.observedUsername },
+        ),
+      );
+    }
     async function health() {
       const current = bound(await loadSettings());
       settings = current;
       if (!configured(current)) {
         return;
       }
+      await persistBinding(current);
       const signedIn = Boolean(document.querySelector(
         "[data-e2e*='avatar'], [data-e2e*='profile-icon'], nav a[href^='/@']",
       ));
@@ -499,6 +523,9 @@
     async function run() {
       const current = bound(await loadSettings());
       settings = current;
+      if (configured(current)) {
+        await persistBinding(current);
+      }
       if (ready(current)) {
         await workflow.scan(current);
       }
@@ -512,7 +539,11 @@
       subtree: true,
       characterData: true,
     });
-    chrome.storage.onChanged.addListener(schedule);
+    chrome.storage.onChanged.addListener((changes) => {
+      if (optionsCore.shouldScheduleForStorageChanges(changes)) {
+        schedule();
+      }
+    });
     chrome.runtime.onMessage.addListener((message) => {
       if (message && message.type === HEALTH_TICK) {
         health().catch(() => {});
