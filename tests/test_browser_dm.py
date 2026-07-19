@@ -274,6 +274,50 @@ def test_stop_contact_plan_is_empty_and_does_not_call_ai(tmp_path: Path) -> None
     assert database.browser_contact_allowed("account-01", "buyer") is False
 
 
+def test_stop_contact_supersedes_only_matching_account_welcome(tmp_path: Path) -> None:
+    database = Database(tmp_path / "db.sqlite")
+    database.migrate()
+    first = database.create_browser_welcome_plan(
+        "account-01",
+        "buyer",
+        "follower:first",
+        "First welcome",
+        now_ms=1_000,
+    )
+    second = database.create_browser_welcome_plan(
+        "account-02",
+        "buyer",
+        "follower:second",
+        "Second welcome",
+        now_ms=1_000,
+    )
+    ai = FakeReplyClient()
+    service = BrowserDmService(database, registry_with_browser_account(), ai)
+
+    reply = service.plan(
+        BrowserInbound(
+            "account-01",
+            "phone-01",
+            "conversation-stop",
+            "fp-stop-welcome",
+            "@Buyer",
+            "do not contact me again",
+            99_000,
+        )
+    )
+
+    assert reply.stage == "closed"
+    assert reply.reply_text == ""
+    assert ai.calls == []
+    assert database.browser_welcome_plan("account-01", "buyer").state == "superseded"
+    assert database.next_browser_welcome_plan("account-01") is None
+    assert not database.claim_browser_welcome_action(
+        "account-01", f"welcome_send:{first.id}", "messages-tab", 2_000
+    )
+    assert database.browser_welcome_plan("account-02", "buyer").state == "planned"
+    assert database.next_browser_welcome_plan("account-02") == second
+
+
 def test_profile_contact_route_needs_no_direct_destination_configuration(
     tmp_path: Path,
 ) -> None:
