@@ -934,6 +934,7 @@ def test_same_inbound_key_is_scoped_by_account(tmp_path: Path) -> None:
                 account_id="account-02",
                 device_id="phone-02",
                 mode="browser",
+                private_channel_hint="WhatsApp: +1 555 0100",
                 offer_context="Shoes from the current catalog",
             ),
         )
@@ -943,18 +944,49 @@ def test_same_inbound_key_is_scoped_by_account(tmp_path: Path) -> None:
 
     first = service.plan(
         BrowserInbound(
-            "account-01", "phone-01", "c-1", "same-key", "buyer", "hello one", 1
+            "account-01",
+            "phone-01",
+            "same-conversation",
+            "same-key",
+            "buyer",
+            "I like this style",
+            1,
         )
     )
     second = service.plan(
         BrowserInbound(
-            "account-02", "phone-02", "c-2", "same-key", "buyer", "hello two", 2
+            "account-02",
+            "phone-02",
+            "same-conversation",
+            "same-key",
+            "buyer",
+            "I like this style",
+            1,
         )
+    )
+    first_recorded = service.record_result(
+        "account-01", "phone-01", first.plan_id, "sent"
+    )
+    second_recorded = service.record_result(
+        "account-02", "phone-02", second.plan_id, "sent"
     )
 
     assert first.plan_id != second.plan_id
     assert first.reply_text == "First draft"
     assert second.reply_text == "Second draft"
+    assert first_recorded is True
+    assert second_recorded is True
+    assert database.browser_reply_plan_by_id(first.plan_id).state == "sent"
+    assert database.browser_reply_plan_by_id(second.plan_id).state == "sent"
+    assert database.lead_funnel_snapshot() == {
+        "followers": 0,
+        "dm_inbound": 2,
+        "engaged": 2,
+        "qualified": 0,
+        "invited": 0,
+        "contact_captured": 0,
+        "human_required": 0,
+    }
     assert len(ai.calls) == 2
 
 

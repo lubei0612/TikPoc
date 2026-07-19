@@ -622,6 +622,130 @@ def test_browser_action_and_health_endpoints(tmp_path: Path) -> None:
         server.shutdown()
 
 
+def test_two_browser_accounts_isolate_equal_events_actions_and_health(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "two-accounts.db"
+    registry = WebAccountRegistry(
+        (
+            WebAccount(
+                account_id="account-01",
+                device_id="phone-01",
+                expected_tiktok_username="shop_one",
+            ),
+            WebAccount(
+                account_id="account-02",
+                device_id="phone-02",
+                expected_tiktok_username="shop_two",
+            ),
+        )
+    )
+    client = TestClient(create_app(database_path, registry=registry))
+    identities = (
+        {
+            "account_id": "account-01",
+            "device_id": "phone-01",
+            "observed_username": "shop_one",
+            "binding_state": "ready",
+        },
+        {
+            "account_id": "account-02",
+            "device_id": "phone-02",
+            "observed_username": "shop_two",
+            "binding_state": "ready",
+        },
+    )
+
+    for identity in identities:
+        assert client.post(
+            "/api/browser-events",
+            json={
+                **identity,
+                "event_type": "new_follower",
+                "dedup_key": "follower:same-user:same-event",
+                "payload": {"username": "same.user"},
+            },
+            headers={"Origin": "https://www.tiktok.com"},
+        ).json() == {"accepted": True}
+        assert client.post(
+            "/api/browser-actions/claim",
+            json={
+                **identity,
+                "action_type": "followback",
+                "action_key": "followback:same-user:same-event",
+                "owner_id": f"tab-{identity['account_id']}",
+                "timestamp_ms": 1_000,
+                "lease_seconds": 30,
+            },
+            headers={"Origin": "https://www.tiktok.com"},
+        ).json() == {"claimed": True}
+        assert client.post(
+            "/api/browser-actions/result",
+            json={
+                **identity,
+                "action_type": "followback",
+                "action_key": "followback:same-user:same-event",
+                "owner_id": f"tab-{identity['account_id']}",
+                "state": "completed",
+            },
+            headers={"Origin": "https://www.tiktok.com"},
+        ).json() == {"recorded": True}
+        assert client.post(
+            "/api/browser-health",
+            json={
+                **identity,
+                "page_role": "activity",
+                "path": "/activity",
+                "signed_in": True,
+                "timestamp_ms": 2_000,
+            },
+            headers={"Origin": "https://www.tiktok.com"},
+        ).json() == {"recorded": True}
+
+    database = Database(database_path)
+    first_event = database.claim_web_event("account-01")
+    second_event = database.claim_web_event("account-02")
+    assert (
+        first_event is not None
+        and first_event.dedup_key == "follower:same-user:same-event"
+    )
+    assert (
+        second_event is not None
+        and second_event.dedup_key == "follower:same-user:same-event"
+    )
+    with sqlite3.connect(database_path) as connection:
+        lease_rows = connection.execute(
+            """
+            SELECT account_id, action_key, state
+            FROM browser_action_leases ORDER BY account_id
+            """
+        ).fetchall()
+    assert lease_rows == [
+        ("account-01", "followback:same-user:same-event", "completed"),
+        ("account-02", "followback:same-user:same-event", "completed"),
+    ]
+    assert database.browser_health_snapshot() == [
+        {
+            "account_id": "account-01",
+            "page_role": "activity",
+            "device_id": "phone-01",
+            "status": "ready",
+            "observed_at_ms": 2_000,
+            "detail": "/activity",
+            "observed_username": "shop_one",
+        },
+        {
+            "account_id": "account-02",
+            "page_role": "activity",
+            "device_id": "phone-02",
+            "status": "ready",
+            "observed_at_ms": 2_000,
+            "detail": "/activity",
+            "observed_username": "shop_two",
+        },
+    ]
+
+
 def test_browser_dm_service_is_built_from_registry(tmp_path: Path) -> None:
     server = create_server(
         tmp_path / "db.sqlite",

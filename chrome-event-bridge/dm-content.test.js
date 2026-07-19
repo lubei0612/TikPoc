@@ -37,9 +37,15 @@ function memoryStorage() {
   };
 }
 
-function harness({ reads = [inbound(), inbound()], outbound = true, failResult = false } = {}) {
+function harness({
+  reads = [inbound(), inbound()],
+  outbound = true,
+  failResult = false,
+  settings = SETTINGS,
+  storage = memoryStorage(),
+  planId = 17,
+} = {}) {
   const calls = [];
-  const storage = memoryStorage();
   let currentRows = [{ key: inbound().conversationId, signature: "old", unread: false }];
   let readIndex = 0;
   let clicks = 0;
@@ -62,7 +68,7 @@ function harness({ reads = [inbound(), inbound()], outbound = true, failResult =
     }
     if (type === "TIKPOC_DM_PLAN") {
       return {
-        plan_id: 17,
+        plan_id: planId,
         conversation_id: body.conversation_id,
         inbound_fingerprint: body.fingerprint,
         reply_text: "Reply draft",
@@ -79,7 +85,7 @@ function harness({ reads = [inbound(), inbound()], outbound = true, failResult =
     transport,
     adapter,
     now: () => 1_720_000_000_500,
-    ownerId: "tab-01",
+    ownerId: `tab-${settings.accountId}`,
   });
   return {
     adapter,
@@ -147,6 +153,76 @@ test("one inbound fingerprint is planned and sent only once", async () => {
     assert.equal(call.body.observed_username, "shop_one");
     assert.equal(call.body.binding_state, "ready");
   }
+});
+
+test("two accounts isolate equal inbound workflows in shared extension storage", async () => {
+  const storage = memoryStorage();
+  const settingsOne = SETTINGS;
+  const settingsTwo = {
+    ...SETTINGS,
+    accountId: "account-02",
+    deviceId: "phone-02",
+    expectedTikTokUsername: "shop_two",
+    observedUsername: "shop_two",
+  };
+  const sameInbound = {
+    conversationId: inbound().conversationId,
+    sender: "buyer",
+    messageId: "message-1",
+    timestamp: "10:30",
+    timestampMs: 1_720_000_000_000,
+    text: "Hello",
+  };
+  const first = harness({
+    reads: [inbound({ ...sameInbound, accountId: settingsOne.accountId })],
+    settings: settingsOne,
+    storage,
+    planId: 17,
+  });
+  const second = harness({
+    reads: [inbound({ ...sameInbound, accountId: settingsTwo.accountId })],
+    settings: settingsTwo,
+    storage,
+    planId: 18,
+  });
+
+  assert.equal(await first.workflow.scan(settingsOne), "baseline");
+  assert.equal(await second.workflow.scan(settingsTwo), "baseline");
+  first.setRows([{ key: sameInbound.conversationId, signature: "new", unread: true }]);
+  second.setRows([{ key: sameInbound.conversationId, signature: "new", unread: true }]);
+  assert.equal(await first.workflow.scan(settingsOne), "sent");
+  assert.equal(await second.workflow.scan(settingsTwo), "sent");
+
+  assert.deepEqual(Object.keys(storage.values.tikpocDmBaselines).sort(), [
+    "account-01",
+    "account-02",
+  ]);
+  const processed = Object.entries(storage.values.tikpocDmProcessed);
+  assert.equal(processed.length, 2);
+  assert.notEqual(processed[0][0], processed[1][0]);
+  assert.deepEqual(
+    processed.map(([, value]) => value.accountId).sort(),
+    ["account-01", "account-02"],
+  );
+  const calls = [...first.calls, ...second.calls];
+  for (const type of [
+    "TIKPOC_DM_PLAN",
+    "TIKPOC_ACTION_CLAIM",
+    "TIKPOC_DM_RESULT",
+    "TIKPOC_ACTION_RESULT",
+  ]) {
+    assert.deepEqual(
+      calls.filter((call) => call.type === type).map((call) => call.body.account_id).sort(),
+      ["account-01", "account-02"],
+    );
+  }
+  assert.deepEqual(
+    calls
+      .filter((call) => call.type === "TIKPOC_ACTION_CLAIM")
+      .map((call) => call.body.action_key)
+      .sort(),
+    ["dm_send:17", "dm_send:18"],
+  );
 });
 
 test("a changed active inbound supersedes the plan before claim or send", async () => {

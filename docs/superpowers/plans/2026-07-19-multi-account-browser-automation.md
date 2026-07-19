@@ -98,9 +98,9 @@
 - Modify: `docs/web-engagement-runbook.md`
 - Modify: `AGENTS.md`
 
-- [ ] Add two-account synthetic workflows using equal conversation IDs, message IDs, follower usernames, and timestamps; assert separate fingerprints, plans, baselines, leases, results, funnel events, and health.
-- [ ] Run full Python, Node, frontend, Playwright, Android, Ruff, format-on-touched-files, and `git diff --check` verification.
-- [ ] Document arbitrary account rollout, one Chrome Profile per mapping, baseline behavior, mismatch recovery, per-account stop switches, and the exact two-account checklist.
+- [x] Add two-account synthetic workflows using equal conversation IDs, message IDs, follower usernames, and timestamps; assert separate fingerprints, plans, baselines, leases, results, funnel events, and health.
+- [x] Run full Python, Node, frontend, Playwright, Android, Ruff, format-on-touched-files, and `git diff --check` verification.
+- [x] Document arbitrary account rollout, one Chrome Profile per mapping, baseline behavior, mismatch recovery, per-account stop switches, and the exact two-account checklist.
 - [ ] Notify the user before live actions, open two dedicated Chrome Profiles, and request login only for profiles whose visible identity is absent or mismatched.
 - [ ] Test both directions: new follow, one follow-back, three DMs, one reply per fingerprint, invitation policy, reload/rerender deduplication, contact/human handoff, and independent mobile progress.
 - [ ] Record observed evidence without cookies, tokens, message bodies, private destinations, or screenshots containing personal data; commit `docs: record two-account browser acceptance`.

@@ -364,6 +364,21 @@ Completed on `feat/web-lead-conversion`:
   passed `597` tests, frontend component verification passed `31` tests, Chrome
   Node verification passed `46` tests, and Playwright passed `12` tests at
   1440x1000, 1920x1080, and 390x844 with inspected long-identity screenshots.
+- Multi-account Browser Task 6 synthetic acceptance is complete. Equal
+  follower, conversation, message, timestamp, fingerprint, and action inputs
+  remain isolated across two accounts in extension storage and Python
+  persistence; plans, leases, results, funnel events, and health rows are
+  account-scoped.
+- The Chinese web engagement runbook now documents arbitrary account rollout,
+  one Profile per mapping, baselines, identity recovery, per-account switches,
+  and the exact two-account live checklist.
+- Task 6 synthetic regression passed `598` Python tests, `48` Chrome Node tests,
+  `31` frontend tests, and `12` Playwright tests. Android build, Ruff check,
+  touched-file format, JavaScript syntax, and `git diff --check` passed.
+- Chrome was running and the ChatGPT Chrome Extension was installed and enabled,
+  but browser control discovery returned no window. No real follow, follow-back,
+  or DM action was started; opening/reconnecting a Chrome window is the next
+  live-acceptance prerequisite.
 - The retained debug round failed capacity promotion: mean 170.718 seconds,
   P90 15.572 seconds, projected 421 targets per 20-hour day, with historical
   identity mismatch evidence. A fresh calibration-free round is still required.
@@ -376,8 +391,9 @@ Outstanding at the current checkpoint:
 
 1. Run the fresh 500-target slot-1 pacing/performance gate and record measured
    stage mean/P90 separately from projections.
-2. Complete Multi-account Browser Task 6 and notify the user before the first
-   two-account live follow-back/reply acceptance.
+2. Complete the Multi-account Browser Task 6 two-account live follow-back/reply
+   acceptance after Chrome control reconnects. Notify the user again before the
+   first real action.
 3. Execute the remaining Mobile Task 10 two-device live gate on slots 1 and 2.
 4. Finish full regression, two-device calibration, four-/eight-hour
    endurance tests, seven-device benchmark, runbooks, branch integration, and
