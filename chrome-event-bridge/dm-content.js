@@ -833,23 +833,25 @@
     async function run() {
       const current = bound(await loadSettings());
       settings = current;
-      if (canReportHealth(current)) {
-        await persistBinding(current);
+      if (!canReportHealth(current)) {
+        return;
       }
-      if (canRunWorkflow(current)) {
-        const scanAt = Date.now();
-        scanHealth = { ...scanHealth, lastScanAtMs: scanAt, scanState: "scanning" };
-        try {
-          const scanState = await workflow.scan(current);
-          scanHealth = {
-            lastScanAtMs: scanAt,
-            lastSuccessAtMs: Date.now(),
-            scanState: scanState || "idle",
-          };
-        } catch (error) {
-          scanHealth = { ...scanHealth, scanState: "error" };
-          throw error;
+      const scanAt = Date.now();
+      scanHealth = { ...scanHealth, lastScanAtMs: scanAt, scanState: "scanning" };
+      try {
+        await persistBinding(current);
+        let scanState = "idle";
+        if (canRunWorkflow(current)) {
+          scanState = await workflow.scan(current) || "idle";
         }
+        scanHealth = {
+          lastScanAtMs: scanAt,
+          lastSuccessAtMs: Date.now(),
+          scanState,
+        };
+      } catch (error) {
+        scanHealth = { ...scanHealth, scanState: "error" };
+        throw error;
       }
     }
     function schedule() {

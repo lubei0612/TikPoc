@@ -375,14 +375,14 @@
       return;
     }
     scanning = true;
-    lastScanAtMs = Date.now();
-    scanState = "scanning";
     try {
       const stored = await storageGet([SETTINGS_KEY, PROCESSED_KEY, BASELINE_KEY]);
       const settings = stored[SETTINGS_KEY] || {};
       if (!optionsCore.canObserveBinding(settings)) {
         return;
       }
+      lastScanAtMs = Date.now();
+      scanState = "scanning";
       const bindingResult = binding.evaluateBinding(
         document,
         settings.expectedTikTokUsername,
