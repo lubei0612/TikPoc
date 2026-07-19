@@ -306,3 +306,10 @@ test("health payload reports readiness without message content", () => {
   assert.equal(JSON.stringify(payload).includes("Hello"), false);
   assert.equal(Object.hasOwn(payload, "text"), false);
 });
+
+test("disabled DM automation still reports binding health without running workflow", () => {
+  const disabled = { ...SETTINGS, browserDmEnabled: false };
+
+  assert.equal(dmContent.canReportHealth(disabled), true);
+  assert.equal(dmContent.canRunWorkflow(disabled), false);
+});

@@ -9,6 +9,7 @@
   const SETTINGS_KEY = "tikpocSettings";
   const PROCESSED_KEY = "tikpocProcessedFollowers";
   const BASELINE_KEY = "tikpocFollowerBaselines";
+  const HEALTH_TICK = "TIKPOC_HEALTH_TICK";
   const MAX_PROCESSED = 1000;
   const RETRY_AFTER_MS = 30 * 60 * 1000;
   const MAX_ATTEMPTS = 2;
@@ -124,6 +125,46 @@
       .sort((left, right) => Number(right[1].updatedAt || 0) - Number(left[1].updatedAt || 0))
       .slice(0, MAX_PROCESSED);
     await storageSet({ [PROCESSED_KEY]: Object.fromEntries(entries) });
+  }
+
+  async function reportHealth() {
+    const stored = await storageGet([SETTINGS_KEY]);
+    const settings = stored[SETTINGS_KEY] || {};
+    if (
+      !settings.enabled ||
+      !optionsCore.canObserveBinding(settings) ||
+      !settings.deviceId ||
+      !settings.dashboardUrl
+    ) {
+      return;
+    }
+    const bindingResult = binding.evaluateBinding(
+      document,
+      settings.expectedTikTokUsername,
+    );
+    await storageSet({
+      tikpocBindingStatus: optionsCore.bindingObservation(
+        settings.accountId,
+        bindingResult,
+      ),
+    });
+    const signedIn = Boolean(document.querySelector(
+      "[data-e2e*='avatar'], [data-e2e*='profile-icon'], nav a[href^='/@']",
+    ));
+    await sendMessage({
+      type: "TIKPOC_BROWSER_HEALTH",
+      dashboardUrl: settings.dashboardUrl,
+      body: {
+        account_id: settings.accountId,
+        device_id: settings.deviceId,
+        page_role: "activity",
+        path: String(globalThis.location && globalThis.location.pathname || ""),
+        signed_in: signedIn,
+        observed_username: bindingResult.observedUsername,
+        binding_state: bindingResult.state,
+        timestamp_ms: Date.now(),
+      },
+    });
   }
 
   async function handleCandidate(candidate, settings, processed) {
@@ -397,5 +438,12 @@
       scheduleScan();
     }
   });
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message && message.type === HEALTH_TICK) {
+      reportHealth().catch(() => {});
+    }
+    return false;
+  });
+  reportHealth().catch(() => {});
   scheduleScan();
 })();

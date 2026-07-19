@@ -272,6 +272,21 @@
     };
   }
 
+  function canReportHealth(value) {
+    return Boolean(
+      value.enabled &&
+      value.accountId &&
+      value.deviceId &&
+      value.dashboardUrl
+    );
+  }
+
+  function canRunWorkflow(value) {
+    return canReportHealth(value) &&
+      value.browserDmEnabled !== false &&
+      value.bindingState === "ready";
+  }
+
   function trimProcessed(processed) {
     return Object.fromEntries(
       Object.entries(processed)
@@ -475,15 +490,6 @@
       settings = await storageGet(SETTINGS_KEY) || {};
       return settings;
     }
-    function configured(value) {
-      return Boolean(
-        value.enabled &&
-        value.browserDmEnabled !== false &&
-        value.accountId &&
-        value.deviceId &&
-        value.dashboardUrl
-      );
-    }
     function bound(value) {
       const result = binding.evaluateBinding(document, value.expectedTikTokUsername);
       return {
@@ -491,9 +497,6 @@
         bindingState: result.state,
         observedUsername: result.observedUsername,
       };
-    }
-    function ready(value) {
-      return configured(value) && value.bindingState === "ready";
     }
     async function persistBinding(value) {
       await storageSet(
@@ -507,7 +510,7 @@
     async function health() {
       const current = bound(await loadSettings());
       settings = current;
-      if (!configured(current)) {
+      if (!canReportHealth(current)) {
         return;
       }
       await persistBinding(current);
@@ -523,10 +526,10 @@
     async function run() {
       const current = bound(await loadSettings());
       settings = current;
-      if (configured(current)) {
+      if (canReportHealth(current)) {
         await persistBinding(current);
       }
-      if (ready(current)) {
+      if (canRunWorkflow(current)) {
         await workflow.scan(current);
       }
     }
@@ -556,6 +559,8 @@
 
   return {
     buildHealthPayload,
+    canReportHealth,
+    canRunWorkflow,
     conversationRows,
     createSerializedWorkflow,
     elementLabel,
