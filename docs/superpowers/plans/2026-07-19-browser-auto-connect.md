@@ -158,3 +158,11 @@ baselined while identity binding recovered, so aggregate persistence remained at
 zero reply plans and zero DM action leases. No automatic reply was observed.
 Remote model credentials and a private destination were not configured;
 follow-back remains paused and the remaining automatic-reply gates stay open.
+
+Later acceptance configured an ignored local OpenAI-compatible provider and
+proved one `ai` plan plus one exclusive `dm_send` claim. Automatic binding now
+synchronizes server action settings, and stable `conv:<id>` navigation has
+regression coverage. The controlled TikTok conversation then became restricted:
+outgoing bubbles displayed a warning and did not reach the other Profile. The
+unsent plan was superseded and the lease recorded uncertain. Visible AI send and
+reload idempotency remain open for another message-capable controlled account.

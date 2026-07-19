@@ -44,7 +44,10 @@
       current.deviceId !== binding.device_id ||
       bindingCore.normalizeUsername(current.expectedTikTokUsername) !==
         bindingCore.normalizeUsername(binding.expected_tiktok_username) ||
-      current.browserProfileLabel !== binding.browser_profile_label;
+      current.browserProfileLabel !== binding.browser_profile_label ||
+      current.browserFollowbackEnabled !==
+        (binding.browser_followback_enabled === true) ||
+      current.browserDmEnabled !== (binding.browser_dm_enabled === true);
   }
 
   function autoBindingStorageUpdate(
@@ -68,8 +71,8 @@
       browserProfileLabel: binding.browser_profile_label,
       dashboardUrl: current.dashboardUrl || DEFAULT_DASHBOARD_URL,
       enabled: current.enabled !== false,
-      browserFollowbackEnabled: current.browserFollowbackEnabled === true,
-      browserDmEnabled: current.browserDmEnabled === true,
+      browserFollowbackEnabled: binding.browser_followback_enabled === true,
+      browserDmEnabled: binding.browser_dm_enabled === true,
       autoOpenActivity: current.autoOpenActivity === true,
       bindingMode: "auto",
     };

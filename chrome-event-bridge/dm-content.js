@@ -413,7 +413,7 @@
         await storage.set(BASELINES_KEY, baselines);
         return "ignored";
       }
-      const activeKey = core.conversationKey(inbound.conversationId, inbound.sender);
+      const activeKey = core.normalizeText(inbound.conversationId);
       if (activeKey !== candidate.snapshot.key) {
         return "navigation_pending";
       }

@@ -271,6 +271,20 @@ test("one inbound fingerprint is planned and sent only once", async () => {
   }
 });
 
+test("a stable TikTok conversation id reaches planning after navigation", async () => {
+  const stableInbound = inbound({ conversationId: "conv:conversation-1" });
+  const run = harness({ reads: [stableInbound, stableInbound] });
+  await run.workflow.scan(SETTINGS);
+  run.setRows([{
+    key: stableInbound.conversationId,
+    signature: "new",
+    unread: true,
+  }]);
+
+  assert.equal(await run.workflow.scan(SETTINGS), "sent");
+  assert.equal(run.calls.filter((call) => call.type === "TIKPOC_DM_PLAN").length, 1);
+});
+
 test("two accounts isolate equal inbound workflows in shared extension storage", async () => {
   const storage = memoryStorage();
   const settingsOne = SETTINGS;

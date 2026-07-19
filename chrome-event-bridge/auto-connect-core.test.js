@@ -11,6 +11,8 @@ function binding(overrides = {}) {
     browser_profile_label: "TikPoc 01",
     enabled: true,
     binding_ready: true,
+    browser_followback_enabled: false,
+    browser_dm_enabled: true,
     ...overrides,
   };
 }
@@ -62,10 +64,24 @@ test("same server-owned identity needs no storage update", () => {
     deviceId: "phone-01",
     expectedTikTokUsername: "shop_one",
     browserProfileLabel: "TikPoc 01",
+    browserFollowbackEnabled: false,
+    browserDmEnabled: true,
   }, binding()), false);
 });
 
-test("automatic rebind preserves runtime choices and resets only the old account", () => {
+test("server action settings update an existing automatic binding", () => {
+  assert.equal(core.needsBindingUpdate({
+    bindingMode: "auto",
+    accountId: "account-01",
+    deviceId: "phone-01",
+    expectedTikTokUsername: "shop_one",
+    browserProfileLabel: "TikPoc 01",
+    browserFollowbackEnabled: false,
+    browserDmEnabled: false,
+  }, binding()), true);
+});
+
+test("automatic rebind applies server action settings and resets only the old account", () => {
   const stored = {
     tikpocSettings: {
       accountId: "account-01",
@@ -109,8 +125,8 @@ test("automatic rebind preserves runtime choices and resets only the old account
     browserProfileLabel: "TikPoc 02",
     dashboardUrl: "http://127.0.0.1:8766",
     enabled: true,
-    browserFollowbackEnabled: true,
-    browserDmEnabled: false,
+    browserFollowbackEnabled: false,
+    browserDmEnabled: true,
     autoOpenActivity: true,
     bindingMode: "auto",
   });
@@ -129,7 +145,7 @@ test("automatic rebind preserves runtime choices and resets only the old account
   });
 });
 
-test("fresh automatic binding keeps action switches off", () => {
+test("fresh automatic binding applies server action settings", () => {
   const update = core.autoBindingStorageUpdate(
     { tikpocSettings: {} },
     binding(),
@@ -138,6 +154,6 @@ test("fresh automatic binding keeps action switches off", () => {
 
   assert.equal(update.tikpocSettings.enabled, true);
   assert.equal(update.tikpocSettings.browserFollowbackEnabled, false);
-  assert.equal(update.tikpocSettings.browserDmEnabled, false);
+  assert.equal(update.tikpocSettings.browserDmEnabled, true);
   assert.equal(update.tikpocSettings.dashboardUrl, "http://127.0.0.1:8766");
 });

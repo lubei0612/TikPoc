@@ -393,11 +393,24 @@ Completed on `feat/web-lead-conversion`:
   as the initial DM baseline while identity binding recovered. Aggregate durable
   state remained at zero reply plans and zero DM action leases, so no automatic
   reply or duplicate send was claimed. Automatic reply acceptance remains open.
+- A local OpenAI-compatible provider was configured in ignored `.env.local` and
+  passed a synthetic model request without exposing credentials. A real-account
+  natural-language plan was generated with `plan_origin=ai`, and the matching
+  exclusive `dm_send` lease was claimed once.
+- Live debugging found two extension gaps: automatic bindings retained a disabled
+  local DM switch instead of the server account policy, and stable `conv:<id>`
+  conversation keys were reparsed as participant keys. Both now have focused
+  red-green regression coverage and are fixed in the browser bridge.
+- The controlled TikTok conversation is currently restricted by the platform:
+  outgoing bubbles show a warning, disappear, and never arrive in the other
+  Profile. The unexecuted AI plan was marked `superseded` and its claimed lease
+  `uncertain`; no visible AI reply was claimed. Use a different message-capable
+  controlled account for the remaining visible-send and reload-idempotency gate.
 - The retained debug round failed capacity promotion: mean 170.718 seconds,
   P90 15.572 seconds, projected 421 targets per 20-hour day, with historical
   identity mismatch evidence. A fresh calibration-free round is still required.
 - Last fresh full Python verification: `603 passed`; Chrome Node verification:
-  `67 passed`; Android bridge build and Ruff check passed.
+  `69 passed`; Android bridge build and Ruff check passed.
 - Full-repository Ruff format check has a pre-existing 8-file formatting
   baseline; do not reformat those unrelated files as part of a narrow task.
 
@@ -408,7 +421,8 @@ Outstanding at the current checkpoint:
 2. Complete the remaining Multi-account Browser Task 6 automatic fallback-reply,
    reload-idempotency, contact-stage, and human-handoff live gates. Mutual follow,
    bidirectional manual DM delivery, and `4/4` browser health already passed; do
-   not repeat them or send another copy of the completed acceptance message.
+   not repeat them on the restricted conversation. Continue visible-send testing
+   with a different message-capable controlled account.
 3. Execute the remaining Mobile Task 10 two-device live gate on slots 1 and 2.
 4. Finish full regression, two-device calibration, four-/eight-hour
    endurance tests, seven-device benchmark, runbooks, branch integration, and
