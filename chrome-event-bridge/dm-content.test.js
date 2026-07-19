@@ -7,6 +7,9 @@ const SETTINGS = {
   enabled: true,
   accountId: "account-01",
   deviceId: "phone-01",
+  expectedTikTokUsername: "shop_one",
+  observedUsername: "shop_one",
+  bindingState: "ready",
   dashboardUrl: "http://127.0.0.1:8766",
 };
 
@@ -137,6 +140,10 @@ test("one inbound fingerprint is planned and sent only once", async () => {
   assert.equal(await run.workflow.scan(SETTINGS), "duplicate");
   assert.equal(run.clicks, 1);
   assert.equal(run.calls.filter((call) => call.type === "TIKPOC_DM_PLAN").length, 1);
+  for (const call of run.calls) {
+    assert.equal(call.body.observed_username, "shop_one");
+    assert.equal(call.body.binding_state, "ready");
+  }
 });
 
 test("a changed active inbound supersedes the plan before claim or send", async () => {
@@ -213,6 +220,8 @@ test("health payload reports readiness without message content", () => {
     page_role: "messages",
     path: "/messages/thread/one",
     signed_in: true,
+    observed_username: "shop_one",
+    binding_state: "ready",
     timestamp_ms: 1_720_000_001_000,
   });
   assert.equal(JSON.stringify(payload).includes("Hello"), false);

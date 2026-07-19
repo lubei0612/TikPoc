@@ -11,6 +11,8 @@
   root.TikPocDmContent = api;
   api.startBrowserBridge();
 })(typeof globalThis !== "undefined" ? globalThis : this, function createDmContent(core) {
+  const binding = globalThis.TikPocBindingCore ||
+    (typeof require === "function" ? require("./binding-core.js") : null);
   const SETTINGS_KEY = "tikpocSettings";
   const BASELINES_KEY = "tikpocDmBaselines";
   const PROCESSED_KEY = "tikpocDmProcessed";
@@ -262,6 +264,8 @@
       page_role: pageRole(locationValue),
       path: String(locationValue && locationValue.pathname || ""),
       signed_in: Boolean(signedIn),
+      observed_username: settings.observedUsername || "",
+      binding_state: settings.bindingState || "unverified",
       timestamp_ms: Number(timestampMs),
     };
   }
@@ -327,6 +331,8 @@
       const plan = await transport("TIKPOC_DM_PLAN", {
         account_id: settings.accountId,
         device_id: settings.deviceId,
+        observed_username: settings.observedUsername || "",
+        binding_state: settings.bindingState || "unverified",
         conversation_id: inbound.conversationId,
         fingerprint,
         participant_username: inbound.sender,
@@ -345,6 +351,8 @@
         await transport("TIKPOC_DM_RESULT", {
           account_id: settings.accountId,
           device_id: settings.deviceId,
+          observed_username: settings.observedUsername || "",
+          binding_state: settings.bindingState || "unverified",
           plan_id: plan.plan_id,
           state: "superseded",
         });
@@ -358,6 +366,8 @@
       const identity = {
         account_id: settings.accountId,
         device_id: settings.deviceId,
+        observed_username: settings.observedUsername || "",
+        binding_state: settings.bindingState || "unverified",
         action_type: "dm_send",
         action_key: actionKey,
         owner_id: ownerId,
@@ -383,6 +393,8 @@
       await transport("TIKPOC_DM_RESULT", {
         account_id: settings.accountId,
         device_id: settings.deviceId,
+        observed_username: settings.observedUsername || "",
+        binding_state: settings.bindingState || "unverified",
         plan_id: plan.plan_id,
         state: resultState,
       });
@@ -449,7 +461,7 @@
       settings = await storageGet(SETTINGS_KEY) || {};
       return settings;
     }
-    function ready(value) {
+    function configured(value) {
       return Boolean(
         value.enabled &&
         value.browserDmEnabled !== false &&
@@ -458,9 +470,21 @@
         value.dashboardUrl
       );
     }
+    function bound(value) {
+      const result = binding.evaluateBinding(document, value.expectedTikTokUsername);
+      return {
+        ...value,
+        bindingState: result.state,
+        observedUsername: result.observedUsername,
+      };
+    }
+    function ready(value) {
+      return configured(value) && value.bindingState === "ready";
+    }
     async function health() {
-      const current = await loadSettings();
-      if (!ready(current)) {
+      const current = bound(await loadSettings());
+      settings = current;
+      if (!configured(current)) {
         return;
       }
       const signedIn = Boolean(document.querySelector(
@@ -473,7 +497,8 @@
       );
     }
     async function run() {
-      const current = await loadSettings();
+      const current = bound(await loadSettings());
+      settings = current;
       if (ready(current)) {
         await workflow.scan(current);
       }

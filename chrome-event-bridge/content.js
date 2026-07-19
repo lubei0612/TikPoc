@@ -1,6 +1,7 @@
 (function startFollowerBridge() {
   const core = globalThis.TikPocFollowerCore;
-  if (!core) {
+  const binding = globalThis.TikPocBindingCore;
+  if (!core || !binding) {
     return;
   }
 
@@ -107,6 +108,8 @@
       event: {
         account_id: settings.accountId,
         device_id: settings.deviceId,
+        observed_username: settings.observedUsername,
+        binding_state: settings.bindingState,
         event_type: eventType,
         dedup_key: dedupKey,
         payload,
@@ -174,6 +177,8 @@
       const claimIdentity = {
         account_id: settings.accountId,
         device_id: settings.deviceId,
+        observed_username: settings.observedUsername,
+        binding_state: settings.bindingState,
         action_type: "followback",
         action_key: key,
         owner_id: ownerId,
@@ -332,7 +337,19 @@
       ) {
         return;
       }
-      maybeOpenActivity(settings);
+      const bindingResult = binding.evaluateBinding(
+        document,
+        settings.expectedTikTokUsername,
+      );
+      if (bindingResult.state !== "ready") {
+        return;
+      }
+      const boundSettings = {
+        ...settings,
+        bindingState: bindingResult.state,
+        observedUsername: bindingResult.observedUsername,
+      };
+      maybeOpenActivity(boundSettings);
       const processed = stored[PROCESSED_KEY] || {};
       const baselines = stored[BASELINE_KEY] || {};
       const links = Array.from(document.querySelectorAll("a[href*='/@']"))
@@ -343,12 +360,12 @@
         const activitySettled =
           activityOpenedAt > 0 && Date.now() - activityOpenedAt >= 2000;
         if (candidates.length > 0 || activityPanelVisible() || activitySettled) {
-          await establishBaseline(settings, candidates, processed, baselines);
+          await establishBaseline(boundSettings, candidates, processed, baselines);
         }
         return;
       }
       for (const candidate of candidates) {
-        await handleCandidate(candidate, settings, processed);
+        await handleCandidate(candidate, boundSettings, processed);
       }
     } finally {
       scanning = false;

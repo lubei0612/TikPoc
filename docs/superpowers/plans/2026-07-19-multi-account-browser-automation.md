@@ -34,11 +34,11 @@
 - Modify: `chrome-event-bridge/content.js`
 - Modify: `chrome-event-bridge/dm-content.js`
 
-- [ ] Add Node fixtures for one visible `/@username` account link, duplicate identical links, two different visible usernames, signed-out pages, verification pages, case normalization, and expected-username mismatch.
-- [ ] Implement `normalizeUsername`, `visibleAccountUsernames`, and `evaluateBinding`. Return `{state, observedUsername}` where state is `ready`, `unverified`, `mismatch`, `signed_out`, or `verification_required`.
-- [ ] Load `binding-core.js` before both content scripts and require `ready` before Activity baseline/action scanning or Messages baseline/plan/send scanning.
-- [ ] Add `observed_username` and `binding_state` to every browser health payload and action/plan identity body.
-- [ ] Run `node --check chrome-event-bridge/*.js` and `node --test chrome-event-bridge/*.test.js`; commit `feat: gate browser actions on visible account`.
+- [x] Add Node fixtures for one visible `/@username` account link, duplicate identical links, two different visible usernames, signed-out pages, verification pages, case normalization, and expected-username mismatch.
+- [x] Implement `normalizeUsername`, `visibleAccountUsernames`, and `evaluateBinding`. Return `{state, observedUsername}` where state is `ready`, `unverified`, `mismatch`, `signed_out`, or `verification_required`.
+- [x] Load `binding-core.js` before both content scripts and require `ready` before Activity baseline/action scanning or Messages baseline/plan/send scanning.
+- [x] Add `observed_username` and `binding_state` to every browser health payload and action/plan identity body.
+- [x] Run `node --check chrome-event-bridge/*.js` and `node --test chrome-event-bridge/*.test.js`; commit `feat: gate browser actions on visible account`.
 
 ### Task 3: Chrome Profile Binding Menu And Account-Scoped Reset
 
