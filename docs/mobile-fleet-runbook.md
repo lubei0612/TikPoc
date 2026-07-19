@@ -16,6 +16,12 @@ duplicate source rows. The round finished with:
 Use an ignored local configuration and database:
 
 ```bash
+export ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
+"$ANDROID_HOME/platform-tools/adb" -s ADB_ENDPOINT forward --remove tcp:8200 || true
+"$ANDROID_HOME/platform-tools/adb" -s ADB_ENDPOINT forward --remove tcp:9100 || true
+npm run appium -- --address 127.0.0.1 --port 4723
+
 uv run tikpoc pool-import --db var/tikpoc.db --csv PATH_TO_CSV
 uv run tikpoc round-create \
   --db var/tikpoc.db --pool POOL_ID \
@@ -23,6 +29,12 @@ uv run tikpoc round-create \
 uv run tikpoc fleet-run \
   --db var/tikpoc.db --round ROUND_ID --devices config/settings.yaml
 ```
+
+Start Appium in a separate terminal before `fleet-run`. `--starts-at` must be at
+or before the intended execution time; a future value leaves the healthy worker
+waiting with every assignment still pending. If an earlier Appium process was
+terminated while a worker session existed, remove that slot's `systemPort` and
+MJPEG forwards before starting the replacement server.
 
 TikTok 44.8.42 uses the current profile IDs `rgn`, `rfd`, `rfc`, `efq`, and
 `z9h`. Fleet Appium sessions must set `waitForIdleTimeout=0`. Favorites expose
