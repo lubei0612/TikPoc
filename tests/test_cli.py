@@ -72,6 +72,183 @@ def _schema_objects(path: Path) -> tuple[str, ...]:
         )
 
 
+def _write_browser_accounts(path: Path) -> None:
+    path.write_text(
+        """
+accounts:
+  - account_id: account-01
+    device_id: phone-01
+    mode: browser
+    expected_tiktok_username: shop_one
+    browser_profile_label: TikPoc 01
+    enabled: true
+  - account_id: account-02
+    device_id: phone-02
+    mode: browser
+    expected_tiktok_username: shop_two
+    browser_profile_label: TikPoc 02
+    enabled: true
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+
+def _browser_bindings_payload() -> dict[str, object]:
+    return {
+        "accounts": [
+            {
+                "account_id": f"account-0{index}",
+                "device_id": f"phone-0{index}",
+                "expected_tiktok_username": f"shop_{'one' if index == 1 else 'two'}",
+                "browser_profile_label": f"TikPoc 0{index}",
+                "enabled": True,
+                "binding_ready": True,
+            }
+            for index in (1, 2)
+        ]
+    }
+
+
+def _browser_health_payload(*, ready: bool = True) -> dict[str, object]:
+    rows = []
+    for index in (1, 2):
+        username = f"shop_{'one' if index == 1 else 'two'}"
+        for role in ("activity", "messages"):
+            rows.append(
+                {
+                    "account_id": f"account-0{index}",
+                    "page_role": role,
+                    "browser_profile_label": f"TikPoc 0{index}",
+                    "expected_tiktok_username": username,
+                    "observed_username": username if ready else "",
+                    "binding_state": "ready" if ready else "unbound",
+                    "observed_at_ms": 1_720_000_000_000 if ready else 0,
+                    "message_text": "must never print",
+                    "private_destination": "must never print",
+                }
+            )
+    return {"browser_health": rows}
+
+
+def test_cli_browser_status_prints_only_redacted_health(monkeypatch, capsys) -> None:
+    from tikpoc import browser_connect
+
+    monkeypatch.setattr(
+        browser_connect,
+        "fetch_json",
+        lambda _url: _browser_health_payload(),
+    )
+
+    assert main(["browser", "status", "--dashboard-url", "http://127.0.0.1:8766"]) == 0
+    output = capsys.readouterr().out
+    assert "account-01" in output
+    assert "activity" in output
+    assert "must never print" not in output
+
+
+def test_cli_browser_connect_waits_for_every_account_role(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    from tikpoc import browser_connect
+
+    config_path = tmp_path / "web-accounts.yaml"
+    _write_browser_accounts(config_path)
+
+    def fake_fetch(url: str) -> dict[str, object]:
+        return (
+            _browser_bindings_payload()
+            if url.endswith("/api/browser-bindings")
+            else _browser_health_payload()
+        )
+
+    monkeypatch.setattr(browser_connect, "fetch_json", fake_fetch)
+
+    result = main(
+        [
+            "browser",
+            "connect",
+            "--web-accounts",
+            str(config_path),
+            "--dashboard-url",
+            "http://127.0.0.1:8766",
+            "--timeout",
+            "0",
+        ]
+    )
+
+    assert result == 0
+    assert "ready=4/4" in capsys.readouterr().out
+
+
+def test_cli_browser_connect_returns_nonzero_on_timeout(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    from tikpoc import browser_connect
+
+    config_path = tmp_path / "web-accounts.yaml"
+    _write_browser_accounts(config_path)
+
+    def fake_fetch(url: str) -> dict[str, object]:
+        return (
+            _browser_bindings_payload()
+            if url.endswith("/api/browser-bindings")
+            else _browser_health_payload(ready=False)
+        )
+
+    monkeypatch.setattr(browser_connect, "fetch_json", fake_fetch)
+
+    result = main(
+        [
+            "browser",
+            "connect",
+            "--web-accounts",
+            str(config_path),
+            "--dashboard-url",
+            "http://127.0.0.1:8766",
+            "--timeout",
+            "0",
+        ]
+    )
+
+    assert result == 1
+    assert "ready=0/4" in capsys.readouterr().out
+
+
+def test_cli_browser_connect_rejects_registry_server_mismatch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from tikpoc import browser_connect
+
+    config_path = tmp_path / "web-accounts.yaml"
+    _write_browser_accounts(config_path)
+    monkeypatch.setattr(
+        browser_connect,
+        "fetch_json",
+        lambda _url: {"accounts": [_browser_bindings_payload()["accounts"][0]]},
+    )
+
+    with pytest.raises(SystemExit, match="do not match the account registry"):
+        main(
+            [
+                "browser",
+                "connect",
+                "--web-accounts",
+                str(config_path),
+                "--timeout",
+                "0",
+            ]
+        )
+
+
+def test_cli_browser_guide_prints_the_extension_directory(capsys) -> None:
+    extension = Path("/tmp/tikpoc-extension")
+
+    assert main(["browser", "guide", "--extension-path", str(extension)]) == 0
+    output = capsys.readouterr().out
+    assert str(extension) in output
+    assert "Command+Shift+G" in output
+
+
 def test_cli_pool_import_creates_an_idempotent_acquisition_pool(
     tmp_path: Path, capsys
 ) -> None:

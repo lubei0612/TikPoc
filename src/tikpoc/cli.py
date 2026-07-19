@@ -49,6 +49,18 @@ def _parser() -> argparse.ArgumentParser:
     capacity.add_argument("--json", action="store_true", dest="json_output")
     status = commands.add_parser("status")
     status.add_argument("--db", type=Path, required=True)
+    browser = commands.add_parser("browser")
+    browser_commands = browser.add_subparsers(dest="browser_command", required=True)
+    browser_status = browser_commands.add_parser("status")
+    browser_status.add_argument("--dashboard-url", default="http://127.0.0.1:8766")
+    browser_status.add_argument("--json", action="store_true", dest="json_output")
+    browser_connect = browser_commands.add_parser("connect")
+    browser_connect.add_argument("--web-accounts", type=Path, required=True)
+    browser_connect.add_argument("--dashboard-url", default="http://127.0.0.1:8766")
+    browser_connect.add_argument("--timeout", type=float, default=60.0)
+    browser_connect.add_argument("--poll-interval", type=float, default=1.0)
+    browser_guide = browser_commands.add_parser("guide")
+    browser_guide.add_argument("--extension-path", type=Path)
     for command_name in ("serve", "dashboard"):
         serve = commands.add_parser(command_name)
         serve.add_argument("--db", type=Path, required=True)
@@ -83,6 +95,53 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "browser":
+        from . import browser_connect
+        from .web_accounts import WebAccountRegistry
+
+        if args.browser_command == "guide":
+            extension_path = (
+                args.extension_path or browser_connect.default_extension_path()
+            )
+            print(f"extension_path={extension_path}")
+            print("Chrome: chrome://extensions -> Load unpacked")
+            print("Folder dialog: Command+Shift+G -> paste extension_path -> Select")
+            print(
+                "Then open TikTok and run: tikpoc browser connect --web-accounts CONFIG"
+            )
+            return 0
+        try:
+            origin = browser_connect.dashboard_origin(args.dashboard_url)
+            if args.browser_command == "status":
+                rows = browser_connect.redacted_browser_status(
+                    browser_connect.fetch_json(f"{origin}/api/leads")
+                )
+                if args.json_output:
+                    print(json.dumps(rows, sort_keys=True, separators=(",", ":")))
+                else:
+                    for row in rows:
+                        age = row["heartbeat_age_ms"]
+                        print(
+                            f"account_id={row['account_id']} "
+                            f"profile={row['browser_profile_label'] or '-'} "
+                            f"role={row['page_role']} "
+                            f"expected=@{row['expected_tiktok_username'] or '-'} "
+                            f"observed=@{row['observed_username'] or '-'} "
+                            f"state={row['binding_state']} "
+                            f"heartbeat_age_ms={age if age is not None else '-'}"
+                        )
+                return 0
+            registry = WebAccountRegistry.from_path(args.web_accounts)
+            ready, total, _rows = browser_connect.wait_for_browser_health(
+                registry,
+                origin,
+                timeout_seconds=args.timeout,
+                poll_interval_seconds=args.poll_interval,
+            )
+            print(f"ready={ready}/{total}")
+            return 0 if ready == total else 1
+        except (OSError, ValueError) as error:
+            raise SystemExit(str(error)) from None
     if args.command == "pool-import":
         _require_file(args.csv, "CSV file")
         result = read_targets(args.csv)
