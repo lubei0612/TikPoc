@@ -65,8 +65,64 @@ seconds. The bounded recovery now tries the stable route, Inbox baseline, one ap
 restart, then the public username URL with exact visible-username verification.
 That target completed through the final fallback.
 
-This is measured 326-target final-attempt evidence, not the planned clean
-500-unique-target promotion gate. The run was interrupted for route diagnosis and
-the affected assignment accumulated earlier failed attempts before the fix. Keep
-the 500-target gate open until a larger unique input is available and run it from
-an unchanged build.
+This was measured 326-target final-attempt evidence, not the planned clean
+500-unique-target promotion gate. The run was interrupted for route diagnosis
+and the affected assignment accumulated earlier failed attempts before the fix.
+The next section records the later 500-target result.
+
+## Mixed-Build 500-Target Diagnostic (2026-07-19)
+
+A fresh database imported 500 unique targets from the deduplicated 16,384-target
+export and ran them on MYT slot 1. The final durable state was:
+
+- 500/500 completed assignments, confirmed visits, and 1/1 coverage;
+- 10 confirmed favorites, 67 likes, 15 reposts, and 408 trace-only outcomes;
+- 342 ineligible traces, 64 pacing traces, and 2 `repost_unavailable` traces;
+- zero deferred assignments, uncertain plans, uncertain quota reservations,
+  active assignment leases, false completions, quota overruns, identity
+  mismatches, or assignment-cardinality findings.
+
+Two selected videos opened a visibly complete share surface containing controls
+such as Copy link but no Repost control. They remained deferred under the prior
+build and accumulated only `not_applied`/`uncertain` attempts. The accepted build
+distinguishes that visible unavailable state from an unknown UI state, preserves
+the requested repost, releases the repost quota reservation, and confirms the
+already verified video visit as trace-only. It never reports either case as a
+repost.
+
+The final capacity audit reported:
+
+- measured assignment time: 2,394.932 seconds;
+- mean 4.790 seconds and P90 7.756 seconds;
+- 751.6 confirmed targets/hour;
+- projected 15,031 unique targets per 20-hour day;
+- no capacity rejection reasons.
+
+The final state meets the numeric single-device thresholds, but this round
+resumed two deferred assignments after the implementation changed. It is useful
+root-cause and final-state evidence, not the clean final-build fresh-500 gate.
+Run the final build from a new database and round before promotion. It is also
+not evidence for multi-device coverage, four-/eight-hour endurance, or the
+seven-device 70,000-visit daily benchmark.
+
+## Final-Build 100-Target Preflight (2026-07-19)
+
+After the unavailable-repost implementation and tests were committed, slot 1
+ran an unchanged build against a new database, round, and 100-unique-target CSV.
+The Appium server started with explicit Android SDK environment variables and
+stale slot-1 ADB forwards removed before session creation. The final durable
+result was:
+
+- 100/100 completed assignments and 1/1 coverage;
+- mean 6.812 seconds and P90 10.847 seconds;
+- 528.5 confirmed targets/hour;
+- projected 10,570 unique targets per 20-hour day;
+- zero uncertain results.
+
+The capacity command failed only with `device timing threshold exceeded`.
+Several one-attempt video and action paths produced real long tails, so this was
+not a retry-integrity failure. Do not promote this build to the clean 500-target
+gate until another fresh 100-target preflight is below both 6.5-second mean and
+8.64-second P90 thresholds. The database is
+`var/myt-slot-01-preflight-100-final-v4-20260719.db` and remains ignored local
+evidence.

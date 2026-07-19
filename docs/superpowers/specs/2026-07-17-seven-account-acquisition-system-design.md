@@ -50,6 +50,10 @@ visit, interaction, follow, conversation, and invitation measurements.
   trace-only. Its probability is not redistributed to another interaction.
 - A generic share-panel open is not a repost. Repost requires the visible
   Repost control to be activated and its resulting UI state verified.
+- If the share surface is visibly loaded but exposes no Repost control, retain
+  the requested repost in the immutable plan, record `repost_unavailable`,
+  release its quota reservation, and complete the already confirmed video visit
+  as trace-only. This state never counts as a repost.
 - No assignment advances merely because a click command returned. It advances
   only after a visible terminal result or enters a durable deferred-retry state.
 - A batch may run for multiple exposure rounds across multiple days. Each round
@@ -226,6 +230,9 @@ Important rules:
   equivalent calibrated success signal.
 - A repost opens the share surface, activates the visible Repost control, and is
   confirmed by Reposted, Remove repost, or another calibrated completed state.
+- A visibly loaded share surface without a Repost control is a verified
+  unavailable result. It becomes a quota-free trace-only outcome with the
+  original requested action and diagnostic attempts retained.
 - Trace-only confirms the intended profile or video identity and configured
   dwell completion without pressing an interaction control.
 - Before retrying a click after a timeout, reconciliation reads the current
@@ -245,8 +252,9 @@ TikPoc tracks two related facts separately:
 
 - `profile_visit_confirmed`: the device visibly reached and identity-matched the
   target profile.
-- `assignment_completed`: the required ineligible trace, eligible trace-only, or
-  verified interaction outcome reached its terminal confirmed state.
+- `assignment_completed`: the required ineligible trace, eligible trace-only,
+  verified-unavailable trace fallback, or verified interaction outcome reached
+  its terminal confirmed state.
 
 Operational progress may show both, but a round's required `7/7` result uses
 `assignment_completed`. An eligible action that is pending, deferred, failed,

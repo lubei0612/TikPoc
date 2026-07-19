@@ -22,13 +22,15 @@ them here.
 
 TikPoc separates outbound mobile touch work from inbound web lead handling:
 
-1. Seven paired mobile accounts process the same imported target batch.
-2. Every target must receive a confirmed visit from all seven accounts (`7/7`).
+1. A configurable set of paired mobile accounts processes the same imported
+   target batch.
+2. Every target must receive a confirmed visit from every enabled account
+   (`N/N`).
 3. Chrome profiles handle follow-back, new direct messages, AI-assisted
    multi-turn replies, private-channel invitations, and human takeover.
 4. Mobile workers continue independently while the web flow handles leads.
-5. The production target is at least 10,000 unique targets per day, equal to
-   70,000 confirmed device-profile visits for seven-account coverage.
+5. The seven-account production benchmark is at least 10,000 unique targets per
+   day, equal to 70,000 confirmed device-profile visits.
 6. Measure the funnel through follows, inbound messages, qualified leads,
    private-channel invitations, captured contacts, human takeovers, and sales.
 
@@ -55,6 +57,10 @@ Read these before implementing related work:
 - `docs/superpowers/plans/2026-07-17-acquisition-rounds-reliable-mobile.md`
   contains the current target-pool, round, snapshot, interaction, MYT, mobile,
   and capacity implementation tasks.
+- `docs/superpowers/specs/2026-07-19-paced-mobile-acquisition-design.md` and
+  `docs/superpowers/plans/2026-07-19-paced-mobile-acquisition.md` supersede the
+  older eligibility, equal outcome draw, and fixed-hour quota behavior with the
+  current one-post eligibility and rolling pacing contract.
 - `docs/superpowers/plans/2026-07-17-operator-console.md` contains the FastAPI,
   React, human-control, lead-inbox, and analytics tasks.
 - `docs/superpowers/specs/2026-07-11-tiktok-mobile-automation-design.md` and
@@ -72,22 +78,25 @@ user-approved document and update this guide in the same change.
 ### Mobile touch plane
 
 - The phone/device backend imports and visits CSV targets.
-- Eligibility is `following > followers` and `video_count > 3`.
-- For an eligible profile, open one randomly selected video and choose exactly
-  one outcome: like, favorite, repost, or trace-only. The four outcomes are
-  evenly weighted before quota constraints are applied.
+- Eligibility is `following > followers` and `video_count >= 1`.
+- For an eligible profile, open one randomly selected video. Durable per-action
+  token buckets and rolling quota headroom select a due like, favorite, or
+  repost; when no action is due, retain the visit as trace-only.
 - Trace-only means the confirmed profile/video visit is retained without an
   interaction action.
-- Per-account fixed natural-hour limits are: like `100`, favorite `14`, repost
+- Per-account rolling one-hour limits are: like `100`, favorite `14`, repost
   `25`.
 - A repost is complete only after the visible repost control inside the share
   surface has been activated and its resulting state has been verified.
+- A visibly loaded share surface without a repost control records
+  `repost_unavailable`, releases the action quota reservation, and completes the
+  confirmed video visit as trace-only. It never records a repost success.
 - Do not advance to the next target until the selected action has reached a
   terminal verified result or a recorded explicit failure/uncertain state.
 - One device maps to one TikTok account. Never let two workers claim the same
   device/account pair.
-- All seven accounts process the same logical target batch. Coverage is based on
-  durable confirmed visits, not task creation or attempted navigation.
+- All enabled accounts process the same logical target batch. Coverage is based
+  on durable confirmed visits, not task creation or attempted navigation.
 
 ### Browser lead plane
 
@@ -163,8 +172,8 @@ user-approved document and update this guide in the same change.
 - Active implementation branch: `feat/web-lead-conversion`
 - Do feature work in the active worktree unless the user explicitly selects a
   different branch.
-- A GitHub remote has not yet been configured. Inspect `git remote -v` before
-  offering to push or open a pull request.
+- GitHub `origin` is configured for the private repository. The active branch is
+  pushed and draft PR `#1` tracks integration into `main`.
 - Preserve unrelated user changes. Never use destructive resets or checkout
   commands to clean a dirty worktree.
 
@@ -479,9 +488,31 @@ Completed on `feat/web-lead-conversion`:
   Python `642`, Chrome extension `76`, frontend `35`, production console build,
   Android build, Ruff check, touched-file format, JavaScript syntax, and
   `git diff --check`.
+- A mixed-build 500-target MYT slot-1 diagnostic reached 500/500 with exact 1/1
+  coverage after the unavailable-repost fix resumed two deferred assignments.
+  Final-state mean/P90 were 4.790/7.756 seconds and the 20-hour projection was
+  15,031 unique targets. This does not close the clean final-build gate.
+- Two videos exposed a complete share surface without a Repost control. The
+  requested reposts and diagnostic attempts remain durable, their reservations
+  were released, and the verified visits completed as `repost_unavailable`
+  trace-only outcomes. No repost success was inferred.
+- The unchanged final build completed a fresh 100-target slot-1 preflight with
+  exact 100/100 coverage and zero uncertain results. Mean/P90 were
+  6.812/10.847 seconds and the 20-hour projection was 10,570 unique targets.
+  The only capacity failure was `device timing threshold exceeded`, so the
+  clean 500-target gate was not started.
+- Fresh integrated verification after the browser scan-health and mobile repost
+  fixes passed Python `687`, Chrome extension `83`, browser-health Python `108`,
+  frontend `35`, the production console build, Android build, Ruff check, and
+  `git diff --check`.
 - Real two-account welcome sends and the remaining automatic reply, reload,
   channel choice, invitation, contact-capture, and human-handoff gates still
   require fresh visible evidence. Do not infer them from automated regression.
+- A user LaunchAgent now runs `tikpoc proxy-guard` every 30 seconds against the
+  existing Clash Verge subscription. Six-device baseline and controlled slot-6
+  stale-address recovery both passed; the final cycle reported six healthy
+  devices and six TikTok HTTP `200` results. Subscription URLs and provider
+  state remain outside TikPoc files and logs.
 
 Outstanding at the current checkpoint:
 
@@ -490,19 +521,19 @@ Outstanding at the current checkpoint:
 2. Restore fresh Chrome Activity/Messages heartbeats. The four stored browser
    page records became stale after the service restart; no browser action was
    attempted while the Chrome control connection was unavailable.
-3. Run the fresh 500-target slot-1 pacing/performance gate and record measured
-   stage mean/P90 separately from projections.
-4. Complete the remaining Multi-account Browser Task 6 verified post-follow
+3. Complete the remaining Multi-account Browser Task 6 verified post-follow
    welcome, automatic reply,
    reload-idempotency, channel-preference, single-destination invitation,
    contact-stage, human-handoff, and fresh follow-back live gates. Mutual follow,
    bidirectional manual DM delivery, and `4/4` browser health already passed; do
    not repeat them on a conversation whose later bubbles disappear after reload.
    Continue with a fresh controlled conversation that receives live DOM updates.
+4. Repeat the fresh final-build 100-target slot-1 preflight after cooldown or
+   measured route/video latency improvement. Start the clean 500-target gate
+   only when mean is below 6.5 seconds and P90 is below 8.64 seconds.
 5. Execute the remaining Mobile Task 10 two-device live gate on slots 1 and 2.
-6. Finish full regression, two-device calibration, four-/eight-hour
-   endurance tests, seven-device benchmark, runbooks, branch integration, and
-   GitHub setup.
+6. Finish full regression, two-device calibration, four-/eight-hour endurance
+   tests, the seven-device benchmark, runbooks, and branch/PR integration.
 
 ## Next Execution Procedure
 
