@@ -1430,6 +1430,9 @@ def test_lead_funnel_sales_health_and_latency_read_models(tmp_path: Path) -> Non
         observed_at_ms=4_000,
         detail="Messages visible",
         observed_username="shop_one",
+        last_scan_at_ms=3_900,
+        last_success_at_ms=3_800,
+        scan_state="idle",
     )
     assert database.browser_health_snapshot() == [
         {
@@ -1440,6 +1443,9 @@ def test_lead_funnel_sales_health_and_latency_read_models(tmp_path: Path) -> Non
             "observed_at_ms": 4_000,
             "detail": "Messages visible",
             "observed_username": "shop_one",
+            "last_scan_at_ms": 3_900,
+            "last_success_at_ms": 3_800,
+            "scan_state": "idle",
         }
     ]
 
@@ -1487,6 +1493,39 @@ def test_lead_sale_rejects_invalid_business_values(
             status=status,
             occurred_at_ms=1_000,
         )
+
+
+def test_browser_scan_health_does_not_regress_on_late_heartbeat(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "tasks.db")
+    database.migrate()
+    database.upsert_browser_health(
+        "account-01",
+        "messages",
+        device_id="phone-01",
+        status="ready",
+        observed_at_ms=2_000,
+        last_scan_at_ms=1_900,
+        last_success_at_ms=1_800,
+        scan_state="idle",
+    )
+    database.upsert_browser_health(
+        "account-01",
+        "messages",
+        device_id="phone-01",
+        status="ready",
+        observed_at_ms=3_000,
+        last_scan_at_ms=1_500,
+        last_success_at_ms=1_400,
+        scan_state="error",
+    )
+
+    health = database.browser_health_snapshot()[0]
+    assert health["observed_at_ms"] == 3_000
+    assert health["last_scan_at_ms"] == 1_900
+    assert health["last_success_at_ms"] == 1_800
+    assert health["scan_state"] == "idle"
 
 
 def test_uncertain_and_superseded_browser_actions_can_be_reclaimed_after_expiry(

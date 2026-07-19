@@ -169,6 +169,23 @@
     }
   }
 
+  function installWatchdog(setIntervalValue, schedule) {
+    return setIntervalValue(schedule, 15_000);
+  }
+
+  function shouldOpenActivity(
+    autoOpen,
+    panelVisible,
+    lastOpenedAt,
+    now = Date.now(),
+  ) {
+    return Boolean(
+      autoOpen &&
+      !panelVisible &&
+      Number(now) - Number(lastOpenedAt || 0) >= 15_000
+    );
+  }
+
   function shouldAttemptRecord(
     record,
     now = Date.now(),
@@ -225,8 +242,10 @@
     followButtonState,
     isFollowerNotification,
     installContinuousTriggers,
+    installWatchdog,
     normalizeText,
     parseTikTokProfileUrl,
     shouldAttemptRecord,
+    shouldOpenActivity,
   };
 });

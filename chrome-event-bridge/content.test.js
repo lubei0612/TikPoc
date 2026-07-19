@@ -14,6 +14,7 @@ test("activity content script reports account binding health on alarm ticks", as
   const scheduled = [];
   const documentEvents = [];
   const windowEvents = [];
+  const intervals = [];
   const settings = {
     enabled: true,
     accountId: "account-02",
@@ -74,6 +75,10 @@ test("activity content script reports account binding health on alarm ticks", as
     location,
     MutationObserver,
     setTimeout: (callback) => { scheduled.push(callback); return scheduled.length; },
+    setInterval: (callback, intervalMs) => {
+      intervals.push([callback, intervalMs]);
+      return intervals.length;
+    },
     clearTimeout() {},
   });
 
@@ -92,6 +97,8 @@ test("activity content script reports account binding health on alarm ticks", as
     "popstate",
     "hashchange",
   ]);
+  assert.equal(intervals.length, 1);
+  assert.equal(intervals[0][1], 15_000);
   for (const { body, ...message } of messages) {
     assert.deepEqual({ ...message, body: { ...body, timestamp_ms: 0 } }, {
       type: "TIKPOC_BROWSER_HEALTH",
@@ -105,6 +112,9 @@ test("activity content script reports account binding health on alarm ticks", as
         observed_username: "ikun.bags5",
         binding_state: "ready",
         timestamp_ms: 0,
+        last_scan_at_ms: 0,
+        last_success_at_ms: 0,
+        scan_state: "not_started",
       },
     });
     assert.equal(typeof body.timestamp_ms, "number");

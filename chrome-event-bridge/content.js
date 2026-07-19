@@ -16,8 +16,10 @@
   const ACTIVITY_LABELS = new Set(["activity", "活动", "活動"]);
   let scanTimer = null;
   let scanning = false;
-  let activityOpenedByBridge = false;
   let activityOpenedAt = 0;
+  let lastScanAtMs = 0;
+  let lastSuccessAtMs = 0;
+  let scanState = "not_started";
   const ownerId = globalThis.crypto && typeof globalThis.crypto.randomUUID === "function"
     ? globalThis.crypto.randomUUID()
     : `tab-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -163,6 +165,9 @@
         observed_username: bindingResult.observedUsername,
         binding_state: bindingResult.state,
         timestamp_ms: Date.now(),
+        last_scan_at_ms: lastScanAtMs,
+        last_success_at_ms: lastSuccessAtMs,
+        scan_state: scanState,
       },
     });
   }
@@ -287,7 +292,11 @@
   }
 
   function maybeOpenActivity(settings) {
-    if (!settings.autoOpenActivity || activityOpenedByBridge) {
+    if (!core.shouldOpenActivity(
+      settings.autoOpenActivity,
+      activityPanelVisible(),
+      activityOpenedAt,
+    )) {
       return;
     }
     const controls = Array.from(
@@ -303,12 +312,10 @@
       return visible(element) && ACTIVITY_LABELS.has(firstToken);
     });
     if (activity && activity.getAttribute("aria-expanded") === "true") {
-      activityOpenedByBridge = true;
       activityOpenedAt = Date.now();
       return;
     }
     if (activity) {
-      activityOpenedByBridge = true;
       activityOpenedAt = Date.now();
       activity.click();
       setTimeout(scheduleScan, 2200);
@@ -368,6 +375,8 @@
       return;
     }
     scanning = true;
+    lastScanAtMs = Date.now();
+    scanState = "scanning";
     try {
       const stored = await storageGet([SETTINGS_KEY, PROCESSED_KEY, BASELINE_KEY]);
       const settings = stored[SETTINGS_KEY] || {};
@@ -417,7 +426,14 @@
       for (const candidate of candidates) {
         await handleCandidate(candidate, boundSettings, processed);
       }
+    } catch (error) {
+      scanState = "error";
+      throw error;
     } finally {
+      if (scanState === "scanning") {
+        lastSuccessAtMs = Date.now();
+        scanState = "idle";
+      }
       scanning = false;
     }
   }
@@ -447,6 +463,7 @@
     return false;
   });
   core.installContinuousTriggers(document, globalThis, scheduleScan);
+  core.installWatchdog(setInterval, scheduleScan);
   reportHealth().catch(() => {});
   scheduleScan();
 })();

@@ -327,6 +327,9 @@ def test_browser_health_persists_visible_identity_before_binding_conflict(
         observed_username="shop_two",
         binding_state="ready",
         timestamp_ms=4_000,
+        last_scan_at_ms=3_900,
+        last_success_at_ms=3_800,
+        scan_state="idle",
     )
 
     response = client.post(
@@ -346,6 +349,9 @@ def test_browser_health_persists_visible_identity_before_binding_conflict(
             "observed_at_ms": 4_000,
             "detail": "/messages",
             "observed_username": "shop_two",
+            "last_scan_at_ms": 3_900,
+            "last_success_at_ms": 3_800,
+            "scan_state": "idle",
         }
     ]
 
@@ -377,6 +383,9 @@ def test_browser_account_without_expected_username_reports_unverified_health(
         "observed_at_ms": 5_000,
         "detail": "/messages",
         "observed_username": "",
+        "last_scan_at_ms": 0,
+        "last_success_at_ms": 0,
+        "scan_state": "not_started",
     }
     claim_body = _browser_post_bodies()["/api/browser-actions/claim"]
     claim_body.update(observed_username="", binding_state="unverified")
@@ -779,6 +788,9 @@ def test_two_browser_accounts_isolate_equal_events_actions_and_health(
             "observed_at_ms": 2_000,
             "detail": "/activity",
             "observed_username": "shop_one",
+            "last_scan_at_ms": 0,
+            "last_success_at_ms": 0,
+            "scan_state": "not_started",
         },
         {
             "account_id": "account-02",
@@ -788,6 +800,9 @@ def test_two_browser_accounts_isolate_equal_events_actions_and_health(
             "observed_at_ms": 2_000,
             "detail": "/activity",
             "observed_username": "shop_two",
+            "last_scan_at_ms": 0,
+            "last_success_at_ms": 0,
+            "scan_state": "not_started",
         },
     ]
 
@@ -1432,6 +1447,9 @@ def test_fastapi_browser_routes_preserve_responses_and_exact_cors(
             "observed_at_ms": 1_000,
             "detail": "/messages",
             "observed_username": "@SHOP_ONE",
+            "last_scan_at_ms": 0,
+            "last_success_at_ms": 0,
+            "scan_state": "not_started",
         }
     ]
     for response in (event, planned, result, claim, action_result, health):

@@ -187,3 +187,24 @@ test("installs continuous activity triggers", () => {
     ["hashchange", schedule],
   ]);
 });
+
+test("installs a fifteen second activity watchdog", () => {
+  assert.equal(typeof core.installWatchdog, "function");
+  const calls = [];
+  const schedule = () => {};
+
+  core.installWatchdog((handler, intervalMs) => {
+    calls.push([handler, intervalMs]);
+    return 17;
+  }, schedule);
+
+  assert.deepEqual(calls, [[schedule, 15_000]]);
+});
+
+test("reopens Activity only after the bounded interval", () => {
+  assert.equal(typeof core.shouldOpenActivity, "function");
+  assert.equal(core.shouldOpenActivity(true, false, 1_000, 15_999), false);
+  assert.equal(core.shouldOpenActivity(true, false, 1_000, 16_000), true);
+  assert.equal(core.shouldOpenActivity(true, true, 1_000, 20_000), false);
+  assert.equal(core.shouldOpenActivity(false, false, 0, 20_000), false);
+});

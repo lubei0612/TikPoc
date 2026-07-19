@@ -174,3 +174,16 @@ test("installs continuous Messages triggers", () => {
     ["hashchange", schedule],
   ]);
 });
+
+test("installs a fifteen second Messages watchdog", () => {
+  assert.equal(typeof dm.installWatchdog, "function");
+  const calls = [];
+  const schedule = () => {};
+
+  dm.installWatchdog((handler, intervalMs) => {
+    calls.push([handler, intervalMs]);
+    return 23;
+  }, schedule);
+
+  assert.deepEqual(calls, [[schedule, 15_000]]);
+});

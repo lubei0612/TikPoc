@@ -441,7 +441,13 @@
     return false;
   }
 
-  function buildHealthPayload(settings, locationValue, signedIn, timestampMs = Date.now()) {
+  function buildHealthPayload(
+    settings,
+    locationValue,
+    signedIn,
+    timestampMs = Date.now(),
+    scanHealth = {},
+  ) {
     return {
       account_id: settings.accountId,
       device_id: settings.deviceId,
@@ -451,6 +457,9 @@
       observed_username: settings.observedUsername || "",
       binding_state: settings.bindingState || "unverified",
       timestamp_ms: Number(timestampMs),
+      last_scan_at_ms: Number(scanHealth.lastScanAtMs || 0),
+      last_success_at_ms: Number(scanHealth.lastSuccessAtMs || 0),
+      scan_state: core.normalizeText(scanHealth.scanState || "not_started"),
     };
   }
 
@@ -762,6 +771,11 @@
         : `tab-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     });
     let timer = null;
+    let scanHealth = {
+      lastScanAtMs: 0,
+      lastSuccessAtMs: 0,
+      scanState: "not_started",
+    };
     async function loadSettings() {
       const [value, cachedStatus] = await Promise.all([
         storageGet(SETTINGS_KEY),
@@ -812,7 +826,7 @@
       ));
       await transport(
         "TIKPOC_BROWSER_HEALTH",
-        buildHealthPayload(current, location, signedIn),
+        buildHealthPayload(current, location, signedIn, Date.now(), scanHealth),
         current,
       );
     }
@@ -823,7 +837,19 @@
         await persistBinding(current);
       }
       if (canRunWorkflow(current)) {
-        await workflow.scan(current);
+        const scanAt = Date.now();
+        scanHealth = { ...scanHealth, lastScanAtMs: scanAt, scanState: "scanning" };
+        try {
+          const scanState = await workflow.scan(current);
+          scanHealth = {
+            lastScanAtMs: scanAt,
+            lastSuccessAtMs: Date.now(),
+            scanState: scanState || "idle",
+          };
+        } catch (error) {
+          scanHealth = { ...scanHealth, scanState: "error" };
+          throw error;
+        }
       }
     }
     function schedule() {
@@ -847,6 +873,7 @@
       return false;
     });
     core.installContinuousTriggers(document, globalThis, schedule);
+    core.installWatchdog(setInterval, schedule);
     health().catch(() => {});
     schedule();
   }

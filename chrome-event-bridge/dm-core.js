@@ -60,6 +60,10 @@
     }
   }
 
+  function installWatchdog(setIntervalValue, schedule) {
+    return setIntervalValue(schedule, 15_000);
+  }
+
   function conversationKey(value, username) {
     try {
       const url = new URL(String(value || ""));
@@ -177,5 +181,6 @@
     findSemanticButton,
     hasMatchingOutbound,
     installContinuousTriggers,
+    installWatchdog,
   };
 });

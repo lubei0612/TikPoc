@@ -147,6 +147,9 @@ def _record_browser_health(
         observed_at_ms=body.timestamp_ms,
         detail=body.path,
         observed_username=body.observed_username,
+        last_scan_at_ms=body.last_scan_at_ms,
+        last_success_at_ms=body.last_success_at_ms,
+        scan_state=body.scan_state,
     )
     database.record_runtime_event(f"browser_health_{body.page_role}", body.account_id)
 

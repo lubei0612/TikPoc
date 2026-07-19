@@ -83,6 +83,9 @@ class BrowserHealthRequest(BrowserIdentityRequest):
     path: BoundedText
     signed_in: bool
     timestamp_ms: int = Field(ge=0)
+    last_scan_at_ms: int = Field(default=0, ge=0)
+    last_success_at_ms: int = Field(default=0, ge=0)
+    scan_state: BoundedText = "not_started"
 
 
 class DeviceEventRequest(ApiRequest):

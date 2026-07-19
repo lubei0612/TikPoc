@@ -528,6 +528,11 @@ test("health payload reports readiness without message content", () => {
     { pathname: "/messages/thread/one" },
     true,
     1_720_000_001_000,
+    {
+      lastScanAtMs: 1_720_000_000_900,
+      lastSuccessAtMs: 1_720_000_000_900,
+      scanState: "idle",
+    },
   );
   assert.deepEqual(payload, {
     account_id: "account-01",
@@ -538,6 +543,9 @@ test("health payload reports readiness without message content", () => {
     observed_username: "shop_one",
     binding_state: "ready",
     timestamp_ms: 1_720_000_001_000,
+    last_scan_at_ms: 1_720_000_000_900,
+    last_success_at_ms: 1_720_000_000_900,
+    scan_state: "idle",
   });
   assert.equal(JSON.stringify(payload).includes("Hello"), false);
   assert.equal(Object.hasOwn(payload, "text"), false);

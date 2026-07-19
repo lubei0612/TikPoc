@@ -839,6 +839,9 @@ class Database:
                     observed_at_ms INTEGER NOT NULL,
                     detail TEXT NOT NULL DEFAULT '',
                     observed_username TEXT NOT NULL DEFAULT '',
+                    last_scan_at_ms INTEGER NOT NULL DEFAULT 0,
+                    last_success_at_ms INTEGER NOT NULL DEFAULT 0,
+                    scan_state TEXT NOT NULL DEFAULT 'not_started',
                     PRIMARY KEY(account_id, page_role)
                 )
                 """
@@ -854,6 +857,27 @@ class Database:
                     """
                     ALTER TABLE browser_account_health
                     ADD COLUMN observed_username TEXT NOT NULL DEFAULT ''
+                    """
+                )
+            if "last_scan_at_ms" not in browser_health_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE browser_account_health
+                    ADD COLUMN last_scan_at_ms INTEGER NOT NULL DEFAULT 0
+                    """
+                )
+            if "last_success_at_ms" not in browser_health_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE browser_account_health
+                    ADD COLUMN last_success_at_ms INTEGER NOT NULL DEFAULT 0
+                    """
+                )
+            if "scan_state" not in browser_health_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE browser_account_health
+                    ADD COLUMN scan_state TEXT NOT NULL DEFAULT 'not_started'
                     """
                 )
             web_message_columns = {
@@ -2903,23 +2927,41 @@ class Database:
         observed_at_ms: int,
         detail: str = "",
         observed_username: str = "",
+        last_scan_at_ms: int = 0,
+        last_success_at_ms: int = 0,
+        scan_state: str = "not_started",
     ) -> None:
-        _require_identity(account_id, page_role, status)
-        if int(observed_at_ms) < 0:
-            raise ValueError("browser health timestamp must be nonnegative")
+        _require_identity(account_id, page_role, status, scan_state)
+        if min(int(observed_at_ms), int(last_scan_at_ms), int(last_success_at_ms)) < 0:
+            raise ValueError("browser health timestamps must be nonnegative")
         with self._connect() as connection:
             connection.execute(
                 """
                 INSERT INTO browser_account_health(
                     account_id, page_role, device_id, status,
-                    observed_at_ms, detail, observed_username
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    observed_at_ms, detail, observed_username,
+                    last_scan_at_ms, last_success_at_ms, scan_state
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(account_id, page_role) DO UPDATE SET
                     device_id=excluded.device_id,
                     status=excluded.status,
                     observed_at_ms=excluded.observed_at_ms,
                     detail=excluded.detail,
-                    observed_username=excluded.observed_username
+                    observed_username=excluded.observed_username,
+                    last_scan_at_ms=MAX(
+                        browser_account_health.last_scan_at_ms,
+                        excluded.last_scan_at_ms
+                    ),
+                    last_success_at_ms=MAX(
+                        browser_account_health.last_success_at_ms,
+                        excluded.last_success_at_ms
+                    ),
+                    scan_state=CASE
+                        WHEN excluded.last_scan_at_ms >=
+                             browser_account_health.last_scan_at_ms
+                        THEN excluded.scan_state
+                        ELSE browser_account_health.scan_state
+                    END
                 WHERE excluded.observed_at_ms >= browser_account_health.observed_at_ms
                 """,
                 (
@@ -2930,6 +2972,9 @@ class Database:
                     int(observed_at_ms),
                     detail.strip(),
                     observed_username.strip(),
+                    int(last_scan_at_ms),
+                    int(last_success_at_ms),
+                    scan_state.strip(),
                 ),
             )
 
@@ -2938,7 +2983,8 @@ class Database:
             rows = connection.execute(
                 """
                 SELECT account_id, page_role, device_id, status,
-                       observed_at_ms, detail, observed_username
+                       observed_at_ms, detail, observed_username,
+                       last_scan_at_ms, last_success_at_ms, scan_state
                 FROM browser_account_health
                 ORDER BY account_id, page_role
                 """
