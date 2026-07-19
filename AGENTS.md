@@ -7,13 +7,12 @@ them here.
 
 ## Current Control State
 
-- The project goal is paused at the user's request.
-- Do not resume implementation, run live account actions, start fleet workers,
-  or change runtime services until the user explicitly says `继续 goal`.
-- While paused, inspection, documentation, status reporting, and explicitly
-  requested maintenance are allowed.
-- Resume from the checkpoint in this file. Do not restart the project or repeat
-  completed tasks.
+- The pause checkpoint below is historical. The user resumed the browser work in
+  the active `web-lead-conversion` worktree and approved continuous execution.
+- Do not repeat completed browser actions from this primary checkout. Continue
+  implementation in the active worktree and use the cross-worktree report below.
+- New live actions still require the applicable user instruction, ready account
+  identity, and visible-state evidence.
 
 ## Mission
 
@@ -211,6 +210,52 @@ for the affected path has been performed and recorded.
   commits.
 - Committed examples must use placeholders and synthetic fixtures.
 - Redact secrets from test output, review notes, commits, and issue/PR text.
+
+## Cross-Worktree Browser Report (2026-07-19)
+
+Source of truth for the resumed browser work:
+
+- Worktree: `/Users/chenyuqi/.config/superpowers/worktrees/tik/web-lead-conversion`
+- Branch: `feat/web-lead-conversion`
+- Latest checkpoint commit: `09278b6`
+  (`fix: synchronize browser DM automation state`)
+- Previous live-DOM fix: `c3b27cb`
+  (`fix: adapt browser bridge to live TikTok DOM`)
+
+Verified results:
+
+- Two dedicated Chrome Profiles were automatically bound to separate accounts.
+  Activity and Messages health reached `4/4` ready after service/profile reload.
+- Mutual visible follow state passed in both directions. Bidirectional manual DM
+  delivery passed and remained visible after reopening the conversations.
+- Both Profiles currently expose one usable message composer. Together with the
+  successful bidirectional delivery evidence, account-level messaging is normal.
+- The warning observed during later testing is specific to the recipient or
+  conversation state. It is not evidence that either sending account is globally
+  blocked from messaging.
+- An ignored local OpenAI-compatible provider configuration passed a synthetic
+  request. One durable `ai` reply plan and one exclusive `dm_send` lease were
+  created without exposing credentials or message content.
+- Automatic binding now synchronizes server DM/follow-back settings. The browser
+  bridge also supports Business Suite Messages frames, current TikTok DOM
+  selectors, stable `conv:<id>` keys, geometry-based direction, row-level opening,
+  and hashed preview signatures.
+- Full verification after the latest fixes: Python `603 passed`, Chrome extension
+  `69 passed`, Ruff check passed, Android bridge build passed, and
+  `git diff --check` passed.
+
+Current live boundary:
+
+- The tested recipient conversation rejected outgoing messages: the visible
+  bubble showed a warning, disappeared, and did not arrive in the other Profile.
+  Treat this as a recipient/conversation restriction, not an account restriction.
+- The unexecuted AI plan was recorded `superseded`; its claimed lease was recorded
+  `uncertain`, preventing immediate duplicate retry.
+- Visible AI send, reload idempotency, multi-turn invitation, contact-stage, and
+  human-handoff acceptance remain open. Continue them with a different controlled
+  recipient conversation that can receive messages normally.
+- Automatic follow-back remains paused to avoid processing historical Activity
+  entries. Do not repeat the already completed mutual-follow or manual-DM tests.
 
 ## Pause Checkpoint (2026-07-17)
 
