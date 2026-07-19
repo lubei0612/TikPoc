@@ -436,8 +436,29 @@ Completed on `feat/web-lead-conversion`:
   `625 passed`, Chrome Node `69 passed`, frontend `35 passed`, Playwright `15/15`
   at desktop/wide/mobile, production build, Android build, Ruff check, and
   `git diff --check` passed.
-- Supabase is recorded only as a future repository migration boundary for a
-  separate session; no Supabase implementation is part of this checkpoint.
+- Supabase phase 1 is deployed to the Singapore `tikpoc-production` project.
+  The committed migration creates central account, target-pool, target, run,
+  device-health, lead, event, sale, and sync-checkpoint tables with RLS enabled;
+  `anon` and `authenticated` table access is revoked. Secrets remain only in
+  ignored owner-only files under `config/secrets/`.
+- `supabase-pool-import` uses the same deterministic pool ID as SQLite and
+  imports in idempotent 500-row batches. The real deduplicated export is stored
+  centrally as one pool with `16,384` targets; count-only verification passed.
+- Six MYT mobile account/device mappings and six health rows are in Supabase.
+  All six slots are ADB-online with TikTok `44.8.42` and proxy
+  `192.168.28.144:7897`; slot 1 is logged in and slots 2-6 are visibly at the
+  login page.
+- The Chinese console is running under launchd at `127.0.0.1:8766` from the
+  active worktree with `/Users/Shared/TikPoc/tikpoc.db`. Its installed service
+  uses `tikpoc serve`; the repository plist retains the `dashboard` alias so it
+  remains installable from the not-yet-merged primary checkout.
+- Pool imports remain hidden as `importing` until stale target rows are cleared,
+  every batch succeeds, and the final count is published as `complete`. Central
+  health enforces the configured account/device pair and lead stages cannot
+  regress.
+- Fresh verification for the Supabase phase passed `652` Python tests, Ruff
+  check, touched-file format, plist validation, remote migration parity, live
+  foreign-key/stage probes, and `git diff --check`.
 - Full-repository Ruff format check has a pre-existing 8-file formatting
   baseline; do not reformat those unrelated files as part of a narrow task.
 - Warm professional brand customer service and verified new-follower welcome
@@ -464,17 +485,22 @@ Completed on `feat/web-lead-conversion`:
 
 Outstanding at the current checkpoint:
 
-1. Run the fresh 500-target slot-1 pacing/performance gate and record measured
+1. Let the user complete TikTok login on MYT slots 2-6, then bind visible
+   usernames to the six internal account IDs and refresh Supabase health.
+2. Restore fresh Chrome Activity/Messages heartbeats. The four stored browser
+   page records became stale after the service restart; no browser action was
+   attempted while the Chrome control connection was unavailable.
+3. Run the fresh 500-target slot-1 pacing/performance gate and record measured
    stage mean/P90 separately from projections.
-2. Complete the remaining Multi-account Browser Task 6 verified post-follow
+4. Complete the remaining Multi-account Browser Task 6 verified post-follow
    welcome, automatic reply,
    reload-idempotency, channel-preference, single-destination invitation,
    contact-stage, human-handoff, and fresh follow-back live gates. Mutual follow,
    bidirectional manual DM delivery, and `4/4` browser health already passed; do
    not repeat them on a conversation whose later bubbles disappear after reload.
    Continue with a fresh controlled conversation that receives live DOM updates.
-3. Execute the remaining Mobile Task 10 two-device live gate on slots 1 and 2.
-4. Finish full regression, two-device calibration, four-/eight-hour
+5. Execute the remaining Mobile Task 10 two-device live gate on slots 1 and 2.
+6. Finish full regression, two-device calibration, four-/eight-hour
    endurance tests, seven-device benchmark, runbooks, branch integration, and
    GitHub setup.
 

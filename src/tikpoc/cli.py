@@ -28,6 +28,13 @@ def _parser() -> argparse.ArgumentParser:
     pool_import = commands.add_parser("pool-import")
     pool_import.add_argument("--db", type=Path, required=True)
     pool_import.add_argument("--csv", type=Path, required=True)
+    supabase_pool_import = commands.add_parser("supabase-pool-import")
+    supabase_pool_import.add_argument("--csv", type=Path, required=True)
+    supabase_pool_import.add_argument(
+        "--env-file",
+        type=Path,
+        default=Path("config/secrets/supabase.env"),
+    )
     round_create = commands.add_parser("round-create")
     round_create.add_argument("--db", type=Path, required=True)
     round_create.add_argument("--pool", required=True)
@@ -153,6 +160,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"pool_id={imported.pool_id} unique_targets={imported.unique_targets} "
             f"source_rows={imported.source_rows} "
             f"duplicates={result.skipped_duplicates} invalid={result.skipped_invalid}"
+        )
+        return 0
+    if args.command == "supabase-pool-import":
+        from .supabase_store import SupabaseBusinessStore
+
+        _require_file(args.csv, "CSV file")
+        _require_file(args.env_file, "Supabase environment file")
+        result = read_targets(args.csv)
+        checksum = hashlib.sha256(args.csv.read_bytes()).hexdigest()
+        pool_id = f"pool-{checksum[:20]}"
+        source_rows = sum(
+            max(1, len(target.source_line_numbers)) for target in result.targets
+        )
+        store = SupabaseBusinessStore.from_env_file(args.env_file)
+        store.import_pool(
+            pool_id=pool_id,
+            source_name=args.csv.name,
+            source_checksum=checksum,
+            source_rows=source_rows,
+            targets=result.targets,
+        )
+        print(
+            f"pool_id={pool_id} unique_targets={len(result.targets)} "
+            f"source_rows={source_rows} duplicates={result.skipped_duplicates} "
+            f"invalid={result.skipped_invalid}"
         )
         return 0
     if args.command == "round-create":

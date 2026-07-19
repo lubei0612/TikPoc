@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import sqlite3
@@ -285,6 +286,52 @@ def test_cli_pool_import_validates_source_before_database_mutation(
         )
 
     assert not database_path.exists()
+
+
+def test_cli_supabase_pool_import_uses_deterministic_pool_and_source_counts(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    source = tmp_path / "comments.csv"
+    env_file = tmp_path / "supabase.env"
+    _write_acquisition_csv(source)
+    env_file.write_text(
+        "SUPABASE_URL=https://project.supabase.co\n"
+        "SUPABASE_SERVICE_ROLE_KEY=service-secret\n",
+        encoding="utf-8",
+    )
+    env_file.chmod(0o600)
+    captured = {}
+
+    class FakeStore:
+        def import_pool(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(
+        "tikpoc.supabase_store.SupabaseBusinessStore.from_env_file",
+        lambda path: FakeStore(),
+    )
+
+    result = main(
+        [
+            "supabase-pool-import",
+            "--csv",
+            str(source),
+            "--env-file",
+            str(env_file),
+        ]
+    )
+
+    checksum = hashlib.sha256(source.read_bytes()).hexdigest()
+    assert result == 0
+    assert captured["pool_id"] == f"pool-{checksum[:20]}"
+    assert captured["source_name"] == "comments.csv"
+    assert captured["source_checksum"] == checksum
+    assert captured["source_rows"] == 2
+    assert len(captured["targets"]) == 2
+    assert capsys.readouterr().out == (
+        f"pool_id=pool-{checksum[:20]} unique_targets=2 source_rows=2 "
+        "duplicates=0 invalid=0\n"
+    )
 
 
 def test_cli_round_create_materializes_configured_devices(
