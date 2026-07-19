@@ -141,3 +141,36 @@ class LeadSaleCommand(LeadCommand):
 
 class AccountEnableCommand(LeadCommand):
     enabled: bool
+
+
+class ProviderSettingsCommand(ApiRequest):
+    base_url: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=2_000),
+    ]
+    api_key: Annotated[
+        str, StringConstraints(strip_whitespace=True, max_length=8_000)
+    ] = ""
+    model: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=500),
+    ]
+    clear_key: bool = False
+
+
+class AccountAutomationSettingsCommand(ApiRequest):
+    whatsapp: Annotated[
+        str, StringConstraints(strip_whitespace=True, max_length=500)
+    ] = ""
+    telegram: Annotated[
+        str, StringConstraints(strip_whitespace=True, max_length=500)
+    ] = ""
+    offer_context: Annotated[
+        str, StringConstraints(strip_whitespace=True, max_length=3_000)
+    ] = ""
+    faq_context: Annotated[
+        str, StringConstraints(strip_whitespace=True, max_length=3_000)
+    ] = ""
+    reply_tone: Annotated[
+        str, StringConstraints(strip_whitespace=True, max_length=500)
+    ] = ""

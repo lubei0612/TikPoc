@@ -3,7 +3,9 @@ import os
 import re
 import time
 from collections.abc import Callable, Iterable
+from dataclasses import replace
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -19,6 +21,7 @@ from .acquisition_service import (
 )
 from .api_models import (
     AccountEnableCommand,
+    AccountAutomationSettingsCommand,
     BrowserActionClaimRequest,
     BrowserActionResultRequest,
     BrowserEventRequest,
@@ -33,12 +36,18 @@ from .api_models import (
     ManualReplyPlanCommand,
     OperatorCommand,
     PoolImportRequest,
+    ProviderSettingsCommand,
     RetryCommand,
     RoundCreateRequest,
 )
 from .browser_dm import BrowserConversationBusy, BrowserDmService, BrowserInbound
 from .db import Database, OperatorCommandConflict
-from .messaging import AiReplyClient
+from .messaging import RuntimeAiReplyClient, probe_openai_provider
+from .runtime_settings import (
+    AccountRuntimeSettings,
+    ProviderCredentials,
+    RuntimeSettingsStore,
+)
 from .web_accounts import WebAccount, WebAccountRegistry
 from .webhooks import (
     WebhookPayloadError,
@@ -57,6 +66,7 @@ _BROWSER_PATHS = {
     "/api/browser-actions/result",
     "/api/browser-health",
 }
+_SETTINGS_PREFIX = "/api/settings"
 _EXTENSION_ORIGIN = re.compile(r"chrome-extension://[a-p]{32}")
 _CONSOLE_ASSET = re.compile(
     r"[A-Za-z0-9_.-]+-[A-Za-z0-9_-]+\.(?:css|gif|jpe?g|js|png|svg|webp|woff2?)"
@@ -147,6 +157,8 @@ def create_app(
     webhook_max_age_seconds: int = 300,
     clock: Callable[[], float] = time.time,
     import_roots: Iterable[Path] | None = None,
+    runtime_settings: RuntimeSettingsStore | None = None,
+    provider_tester: Callable[[ProviderCredentials], tuple[bool, int]] | None = None,
 ) -> FastAPI:
     database = Database(database_path)
     database.migrate()
@@ -159,11 +171,28 @@ def create_app(
         browser_accounts=() if registry is None else registry.accounts,
     )
     acquisition_service.migrate()
+    runtime_settings = runtime_settings or RuntimeSettingsStore(
+        database_path.parent / "config" / "secrets" / "operator-settings.json"
+    )
+    provider_tester = provider_tester or probe_openai_provider
+
+    def runtime_account(account: WebAccount) -> WebAccount:
+        settings = runtime_settings.account_settings(account.account_id)
+        return replace(
+            account,
+            whatsapp=settings.whatsapp or account.whatsapp,
+            telegram=settings.telegram or account.telegram,
+            offer_context=settings.offer_context or account.offer_context,
+            faq_text=settings.faq_context or account.faq_text,
+            reply_tone=settings.reply_tone or account.reply_tone,
+        )
+
     if browser_dm_service is None and registry is not None:
         browser_dm_service = BrowserDmService(
             database,
             registry,
-            AiReplyClient.from_environment(),
+            RuntimeAiReplyClient(runtime_settings.provider_credentials),
+            account_overlay=runtime_account,
         )
     if browser_extension_origins is None:
         browser_extension_origins = os.getenv(
@@ -185,6 +214,7 @@ def create_app(
     app.state.acquisition_service = acquisition_service
     app.state.registry = registry
     app.state.browser_dm_service = browser_dm_service
+    app.state.runtime_settings = runtime_settings
     app.state.browser_origins = browser_origins
     app.state.tiktok_app_secret = tiktok_app_secret
     app.state.webhook_max_age_seconds = webhook_max_age_seconds
@@ -193,6 +223,23 @@ def create_app(
     @app.middleware("http")
     async def browser_request_gate(request: Request, call_next: Callable):
         path = request.url.path
+        if path.startswith(_SETTINGS_PREFIX):
+            host = (request.url.hostname or "").casefold()
+            if host not in {"127.0.0.1", "localhost", "::1", "testserver"}:
+                return _json({"error": "settings are available on loopback only"}, 403)
+            if request.method == "POST":
+                origin = request.headers.get("origin", "").rstrip("/")
+                expected_origin = (
+                    f"{request.url.scheme}://{request.headers.get('host', '')}"
+                )
+                if origin != expected_origin:
+                    return _json({"error": "settings origin is not allowed"}, 403)
+                media_type = request.headers.get("content-type", "").split(";", 1)[0]
+                if media_type.strip().casefold() != "application/json":
+                    return _json(
+                        {"error": "settings request must use application/json"}, 415
+                    )
+            return await call_next(request)
         if path not in _BROWSER_PATHS:
             return await call_next(request)
         origin = request.headers.get("origin")
@@ -629,7 +676,7 @@ def create_app(
     def operator_account(account_id: str) -> WebAccount:
         if registry is None:
             raise KeyError(account_id)
-        return registry.by_account_id(account_id)
+        return runtime_account(registry.by_account_id(account_id))
 
     def account_readiness(account: WebAccount) -> dict[str, object]:
         settings = database.account_operator_settings(
@@ -639,7 +686,7 @@ def create_app(
                 account.enabled and account.browser_followback_enabled
             ),
         )
-        runtime_model = AiReplyClient.from_environment()
+        runtime_model = runtime_settings.provider_credentials()
         return {
             "account_id": account.account_id,
             "device_id": account.device_id,
@@ -649,7 +696,14 @@ def create_app(
             "followback_enabled": bool(
                 account.enabled and settings["followback_enabled"]
             ),
-            "private_channel_configured": bool(account.private_channel_hint.strip()),
+            "private_channel_configured": any(
+                value.strip()
+                for value in (
+                    account.private_channel_hint,
+                    account.whatsapp,
+                    account.telegram,
+                )
+            ),
             "offer_configured": bool(account.offer_context.strip()),
             "faq_configured": bool(account.faq_text.strip()),
             "model_configured": all(
@@ -664,21 +718,33 @@ def create_app(
 
     def redact_destination(value: object, account_id: str) -> object:
         try:
-            destination = " ".join(
-                operator_account(account_id).private_channel_hint.split()
+            account = operator_account(account_id)
+            destinations = tuple(
+                " ".join(value.split())
+                for value in (
+                    account.private_channel_hint,
+                    account.whatsapp,
+                    account.telegram,
+                )
+                if value.strip()
             )
         except KeyError:
-            destination = ""
-        if not destination:
+            destinations = ()
+        if not destinations:
             return value
-        destination_pattern = re.compile(
-            r"\s+".join(re.escape(token) for token in destination.split()),
-            re.IGNORECASE,
+        destination_patterns = tuple(
+            re.compile(
+                r"\s+".join(re.escape(token) for token in destination.split()),
+                re.IGNORECASE,
+            )
+            for destination in destinations
         )
 
         def redact(item: object) -> object:
             if isinstance(item, str):
-                return destination_pattern.sub("[private channel configured]", item)
+                for pattern in destination_patterns:
+                    item = pattern.sub("[private channel configured]", item)
+                return item
             if isinstance(item, list):
                 return [redact(child) for child in item]
             if isinstance(item, dict):
@@ -686,6 +752,77 @@ def create_app(
             return item
 
         return redact(value)
+
+    def provider_payload() -> dict[str, object]:
+        provider = runtime_settings.provider_credentials()
+        return {
+            "base_url": provider.base_url,
+            "model": provider.model,
+            "key_configured": provider.key_configured,
+        }
+
+    def validate_provider_url(base_url: str) -> bool:
+        parsed = urlparse(base_url)
+        if parsed.scheme == "https" and bool(parsed.hostname):
+            return True
+        return parsed.scheme == "http" and parsed.hostname in {
+            "127.0.0.1",
+            "localhost",
+            "::1",
+        }
+
+    @app.get("/api/settings")
+    def settings_snapshot() -> JSONResponse:
+        accounts = []
+        for account in () if registry is None else registry.accounts:
+            configured = runtime_settings.account_settings(account.account_id)
+            accounts.append(
+                {
+                    "account_id": account.account_id,
+                    "browser_profile_label": account.browser_profile_label,
+                    "expected_tiktok_username": account.expected_tiktok_username,
+                    **configured.__dict__,
+                }
+            )
+        return _json({"provider": provider_payload(), "accounts": accounts})
+
+    @app.post("/api/settings/provider")
+    def save_provider_settings(body: ProviderSettingsCommand) -> JSONResponse:
+        if not validate_provider_url(body.base_url):
+            return _json({"error": "provider base URL must use HTTPS"}, 422)
+        runtime_settings.save_provider(
+            base_url=body.base_url,
+            api_key=body.api_key,
+            model=body.model,
+            clear_key=body.clear_key,
+        )
+        return _json(provider_payload())
+
+    @app.post("/api/settings/provider/test")
+    def test_provider_settings() -> JSONResponse:
+        provider = runtime_settings.provider_credentials()
+        ok, elapsed_ms = provider_tester(provider)
+        return _json(
+            {
+                "ok": bool(ok),
+                "model": provider.model,
+                "elapsed_ms": max(0, int(elapsed_ms)),
+            }
+        )
+
+    @app.post("/api/settings/accounts/{account_id}")
+    def save_account_settings(
+        account_id: str, body: AccountAutomationSettingsCommand
+    ) -> JSONResponse:
+        try:
+            account = operator_account(account_id)
+        except KeyError:
+            return _json({"error": "web account not found"}, 404)
+        saved = runtime_settings.save_account(
+            account.account_id,
+            AccountRuntimeSettings(**body.model_dump()),
+        )
+        return _json({"account_id": account.account_id, **saved.__dict__})
 
     @app.get("/api/leads")
     def lead_inbox(
@@ -888,6 +1025,7 @@ def create_app(
     @app.get("/operations")
     @app.get("/inbox")
     @app.get("/analytics")
+    @app.get("/settings")
     def operator_console() -> FileResponse:
         return console_index()
 

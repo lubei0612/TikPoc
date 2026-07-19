@@ -191,6 +191,20 @@ test("analytics separates measured evidence from projection", async ({ page }, t
   await page.screenshot({ path: testInfo.outputPath("analytics.png"), fullPage: true });
 });
 
+test("settings keeps provider and account forms usable at every viewport", async ({ page }, testInfo) => {
+  const errors = rejectConsoleErrors(page);
+  await page.goto("/settings");
+  await expect(page.getByRole("heading", { name: "AI 与私域配置" })).toBeVisible();
+  await expect(page.getByLabel("转发地址")).toBeVisible();
+  await expect(page.locator('input[aria-label="API Key"]')).toHaveValue("");
+  await expect(page.getByRole("group", { name: "account-01 自动化配置" })).toBeVisible();
+  await expect(page.getByRole("group", { name: "account-02 自动化配置" })).toBeVisible();
+  await expectNoViewportOverflow(page);
+  await expectPageControlsDoNotOverlap(page);
+  expect(errors).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath("settings.png"), fullPage: true });
+});
+
 test("navigation preserves direct routes and browser history", async ({ page }) => {
   const errors = rejectConsoleErrors(page);
   await page.goto("/operations");
@@ -205,5 +219,8 @@ test("navigation preserves direct routes and browser history", async ({ page }) 
   await expect(page.getByRole("heading", { name: "线索转化" })).toBeVisible();
   await page.getByRole("button", { name: "经营分析" }).click();
   await expect(page).toHaveURL(/\/analytics$/);
+  await page.getByRole("button", { name: "自动化设置" }).click();
+  await expect(page).toHaveURL(/\/settings$/);
+  await expect(page.getByRole("heading", { name: "AI 与私域配置" })).toBeVisible();
   expect(errors).toEqual([]);
 });

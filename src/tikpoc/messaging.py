@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from collections.abc import Callable
 from urllib.request import Request, urlopen
 
@@ -11,6 +12,40 @@ _PROMPT_DESTINATION_LIMIT = 500
 _PROMPT_STAGE_LIMIT = 32
 _SYSTEM_PROMPT_LIMIT = 8_000
 _DEFAULT_FALLBACK = "Thanks for your message. How can I help?"
+
+
+def probe_openai_provider(
+    provider: ProviderCredentials,
+    *,
+    opener: Callable = urlopen,
+    clock: Callable[[], float] = time.perf_counter,
+) -> tuple[bool, int]:
+    started = clock()
+    if not (provider.base_url and provider.api_key and provider.model):
+        return False, max(0, int((clock() - started) * 1_000))
+    payload = {
+        "model": provider.model,
+        "temperature": 0,
+        "max_tokens": 8,
+        "messages": [{"role": "user", "content": "Reply with OK."}],
+    }
+    try:
+        request = Request(
+            f"{provider.base_url.rstrip('/')}/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {provider.api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with opener(request, timeout=30) as response:
+            data = json.loads(response.read())
+        content = data["choices"][0]["message"]["content"]
+        ok = isinstance(content, str) and bool(content.strip())
+    except (OSError, KeyError, IndexError, TypeError, ValueError):
+        ok = False
+    return ok, max(0, int((clock() - started) * 1_000))
 
 
 def _bounded_prompt_fragment(value: str, limit: int) -> str:

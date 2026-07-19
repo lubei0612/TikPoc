@@ -207,6 +207,28 @@ export interface LeadInboxSnapshot {
   browser_health: BrowserHealth[];
 }
 
+export interface ProviderSettings {
+  base_url: string;
+  model: string;
+  key_configured: boolean;
+}
+
+export interface AccountAutomationSettings {
+  account_id: string;
+  browser_profile_label: string;
+  expected_tiktok_username: string;
+  whatsapp: string;
+  telegram: string;
+  offer_context: string;
+  faq_context: string;
+  reply_tone: string;
+}
+
+export interface SettingsSnapshot {
+  provider: ProviderSettings;
+  accounts: AccountAutomationSettings[];
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -258,12 +280,47 @@ export async function getLeads(
   return parseJson<LeadInboxSnapshot>(await fetch(`/api/leads?${query}`, { signal }));
 }
 
+export async function getSettings(signal?: AbortSignal) {
+  return parseJson<SettingsSnapshot>(await fetch("/api/settings", { signal }));
+}
+
 async function postJson<T>(url: string, body: object) {
   return parseJson<T>(await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   }));
+}
+
+export function saveProviderSettings(body: {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  clearKey?: boolean;
+}) {
+  return postJson<ProviderSettings>("/api/settings/provider", {
+    base_url: body.baseUrl,
+    api_key: body.apiKey,
+    model: body.model,
+    clear_key: Boolean(body.clearKey),
+  });
+}
+
+export function testProviderSettings() {
+  return postJson<{ ok: boolean; model: string; elapsed_ms: number }>(
+    "/api/settings/provider/test",
+    {},
+  );
+}
+
+export function saveAccountAutomationSettings(
+  accountId: string,
+  body: Omit<AccountAutomationSettings, "account_id" | "browser_profile_label" | "expected_tiktok_username">,
+) {
+  return postJson<AccountAutomationSettings>(
+    `/api/settings/accounts/${encodeURIComponent(accountId)}`,
+    body,
+  );
 }
 
 export function takeOverLead(accountId: string, conversationId: string, commandId: string) {

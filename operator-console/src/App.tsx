@@ -1,17 +1,18 @@
-import { Activity, BarChart3, Inbox, Network, RadioTower } from "lucide-react";
+import { Activity, BarChart3, Inbox, Network, RadioTower, Settings2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { getRounds, type RoundListItem } from "./api";
 import { OperationsView, type FleetHealthSummary } from "./views/OperationsView";
 import { AnalyticsView } from "./views/AnalyticsView";
 import { InboxView } from "./views/InboxView";
+import { SettingsView } from "./views/SettingsView";
 import { localizeError } from "./localization";
 
-type Tab = "operations" | "inbox" | "analytics";
+type Tab = "operations" | "inbox" | "analytics" | "settings";
 
 const tabFromPath = (): Tab => {
   const tab = window.location.pathname.slice(1);
-  return tab === "inbox" || tab === "analytics" ? tab : "operations";
+  return tab === "inbox" || tab === "analytics" || tab === "settings" ? tab : "operations";
 };
 
 export default function App() {
@@ -70,6 +71,7 @@ export default function App() {
         <button aria-current={tab === "operations" ? "page" : undefined} onClick={() => selectTab("operations")}><Activity size={16} />运营监控</button>
         <button aria-current={tab === "inbox" ? "page" : undefined} onClick={() => selectTab("inbox")}><Inbox size={16} />线索收件箱</button>
         <button aria-current={tab === "analytics" ? "page" : undefined} onClick={() => selectTab("analytics")}><BarChart3 size={16} />经营分析</button>
+        <button aria-current={tab === "settings" ? "page" : undefined} onClick={() => selectTab("settings")}><Settings2 size={16} />自动化设置</button>
       </nav>
       {error && <div className="shell-error" role="alert">{error}</div>}
       {tab === "operations" && roundId && <OperationsView onHealthChange={setFleetHealth} roundId={roundId} />}
@@ -77,6 +79,7 @@ export default function App() {
       {tab === "inbox" && <InboxView />}
       {tab === "analytics" && roundId && <AnalyticsView roundId={roundId} />}
       {tab === "analytics" && !roundId && !error && <div className="workspace-state">暂无获客轮次。</div>}
+      {tab === "settings" && <SettingsView />}
     </div>
   );
 }

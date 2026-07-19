@@ -283,6 +283,26 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .metric-value { font-family: "SFMono-Regular", Consolas, monospace; font-weight: 700; }
 .capacity-table td small { display: block; margin-top: 2px; color: #7a847e; font-size: 8px; }
 
+.settings-workspace { max-width: 1240px; margin: 0 auto; padding: 14px 26px 44px; }
+.settings-notice { margin-top: 10px; padding: 9px 11px; color: var(--green); background: #edf7f0; border-left: 3px solid var(--green); font-size: 12px; }
+.settings-notice.is-error { color: var(--red); background: #fff0ee; border-left-color: var(--red); }
+.settings-section { margin-top: 20px; }
+.settings-section .section-heading > span { display: inline-flex; align-items: center; gap: 5px; }
+.provider-form { display: grid; grid-template-columns: minmax(240px, 1.4fr) minmax(170px, .8fr) minmax(240px, 1fr); gap: 12px; padding: 16px 0; border-bottom: 1px solid var(--line-strong); }
+.provider-form label, .account-settings label { min-width: 0; display: grid; gap: 5px; color: #59635d; font-size: 10px; font-weight: 700; }
+.provider-form input, .account-settings input, .account-settings textarea { width: 100%; min-width: 0; padding: 8px 9px; color: var(--ink); background: var(--paper); border: 1px solid var(--line-strong); border-radius: 5px; font-size: 12px; font-weight: 500; }
+.provider-form input { height: 36px; }
+.account-settings textarea { min-height: 74px; resize: vertical; line-height: 1.45; }
+.settings-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; }
+.settings-actions .icon-command { width: auto; min-width: 132px; padding: 0 12px; }
+.account-settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding-top: 12px; }
+.account-settings { min-width: 0; display: grid; gap: 11px; margin: 0; padding: 14px; background: var(--paper); border: 1px solid var(--line); border-radius: 6px; }
+.account-settings legend { max-width: calc(100% - 20px); display: flex; align-items: baseline; gap: 8px; padding: 0 6px; color: var(--ink); font-size: 12px; }
+.account-settings legend strong { white-space: nowrap; }
+.account-settings legend span { min-width: 0; color: var(--muted); font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.channel-fields { min-width: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.account-settings > .icon-command { width: auto; justify-self: start; padding: 0 12px; }
+
 @media (max-width: 900px) {
   .round-strip { grid-template-columns: repeat(3, minmax(0, 1fr)) 48px; }
   .round-strip > div { padding: 6px 10px; }
@@ -296,6 +316,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   .evidence-grid { grid-template-columns: 1fr; }
   .inbox-workspace { grid-template-columns: minmax(0, 1fr) minmax(340px, .8fr); }
   .analytics-grid { grid-template-columns: 1fr; }
+  .provider-form { grid-template-columns: 1fr 1fr; }
+  .provider-form label:first-child { grid-column: 1 / -1; }
 }
 
 @media (max-width: 719px) {
@@ -306,9 +328,9 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   .topbar select { width: min(100%, 260px); }
   .global-health { height: 22px; }
   .primary-nav { padding: 0 8px; overflow-x: auto; position: static; }
-  .primary-nav button { min-width: 108px; }
+  .primary-nav button { min-width: 92px; flex: 1; }
   .operations-workspace { padding: 12px 12px 40px; }
-  .inbox-workspace, .analytics-workspace { padding: 12px 12px 40px; }
+  .inbox-workspace, .analytics-workspace, .settings-workspace { padding: 12px 12px 40px; }
   .round-strip { grid-template-columns: 1fr 1fr; }
   .round-strip > div { min-width: 0; border-top: 0 !important; border-bottom: 1px solid var(--line); }
   .round-strip > div:nth-child(even) { border-right: 0; }
@@ -348,6 +370,10 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   .revenue-band { grid-template-columns: 1fr; }
   .revenue-band > div { border-right: 0; border-bottom: 1px solid var(--line); }
   .revenue-band > div:last-child { border-bottom: 0; }
+  .provider-form, .account-settings-grid, .channel-fields { grid-template-columns: 1fr; }
+  .provider-form label:first-child { grid-column: auto; }
+  .settings-actions { display: grid; grid-template-columns: 1fr 1fr 32px; }
+  .settings-actions .icon-command { min-width: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
