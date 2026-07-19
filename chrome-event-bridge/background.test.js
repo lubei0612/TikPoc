@@ -91,6 +91,8 @@ test("browser DM, action, and health messages share the localhost JSON transport
   const routes = [
     ["TIKPOC_DM_PLAN", "/api/browser-dm/reply-plan"],
     ["TIKPOC_DM_RESULT", "/api/browser-dm/reply-result"],
+    ["TIKPOC_WELCOME_PLAN", "/api/browser-dm/welcome-plan"],
+    ["TIKPOC_WELCOME_RESULT", "/api/browser-dm/welcome-result"],
     ["TIKPOC_ACTION_CLAIM", "/api/browser-actions/claim"],
     ["TIKPOC_ACTION_RESULT", "/api/browser-actions/result"],
     ["TIKPOC_BROWSER_HEALTH", "/api/browser-health"],
@@ -221,4 +223,48 @@ test("browser binding transport reads only the loopback binding endpoint", async
   });
   assert.equal(rejected.ok, false);
   assert.equal(request, null);
+});
+
+test("a completed followback wakes open TikTok tabs for welcome scanning", async () => {
+  let messageListener;
+  const notifications = [];
+  const context = {
+    URL,
+    Set,
+    chrome: {
+      runtime: {
+        onMessage: { addListener(listener) { messageListener = listener; } },
+        onInstalled: { addListener() {} },
+        onStartup: { addListener() {} },
+        openOptionsPage() {},
+      },
+      alarms: { create() {}, onAlarm: { addListener() {} } },
+      tabs: {
+        async query() { return [{ id: 11 }, { id: 12 }]; },
+        async sendMessage(tabId, message) { notifications.push({ tabId, message }); },
+      },
+    },
+    async fetch() {
+      return { ok: true, async json() { return { recorded: true }; } };
+    },
+  };
+  vm.runInNewContext(
+    fs.readFileSync(path.join(__dirname, "background.js"), "utf8"),
+    context,
+  );
+
+  const response = await new Promise((resolve) => {
+    assert.equal(messageListener({
+      type: "TIKPOC_ACTION_RESULT",
+      dashboardUrl: "http://127.0.0.1:8766",
+      body: { action_type: "followback", state: "completed" },
+    }, {}, resolve), true);
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(response.ok, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(notifications)), [
+    { tabId: 11, message: { type: "TIKPOC_HEALTH_TICK" } },
+    { tabId: 12, message: { type: "TIKPOC_HEALTH_TICK" } },
+  ]);
 });

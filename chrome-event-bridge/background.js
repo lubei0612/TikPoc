@@ -7,6 +7,8 @@ const POST_ROUTES = new Map([
   [REPORT_EVENT, "/api/browser-events"],
   ["TIKPOC_DM_PLAN", "/api/browser-dm/reply-plan"],
   ["TIKPOC_DM_RESULT", "/api/browser-dm/reply-result"],
+  ["TIKPOC_WELCOME_PLAN", "/api/browser-dm/welcome-plan"],
+  ["TIKPOC_WELCOME_RESULT", "/api/browser-dm/welcome-result"],
   ["TIKPOC_ACTION_CLAIM", "/api/browser-actions/claim"],
   ["TIKPOC_ACTION_RESULT", "/api/browser-actions/result"],
   ["TIKPOC_BROWSER_HEALTH", "/api/browser-health"],
@@ -92,7 +94,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     task = postLocal(message.dashboardUrl, POST_ROUTES.get(message.type), message.body);
   }
   task
-    .then((result) => sendResponse({ ok: true, result }))
+    .then((result) => {
+      sendResponse({ ok: true, result });
+      if (
+        message.type === "TIKPOC_ACTION_RESULT" &&
+        message.body &&
+        message.body.action_type === "followback" &&
+        message.body.state === "completed"
+      ) {
+        notifyTikTokTabs().catch(() => {});
+      }
+    })
     .catch((error) => sendResponse({ ok: false, error: String(error.message || error) }));
   return true;
 });

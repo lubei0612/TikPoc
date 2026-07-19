@@ -44,20 +44,30 @@ function harness({
   settings = SETTINGS,
   storage = memoryStorage(),
   planId = 17,
+  welcomePlan = null,
+  welcomeTarget = { matched: true, existingMessages: false },
 } = {}) {
   const calls = [];
   let currentRows = [{ key: inbound().conversationId, signature: "old", unread: false }];
   let readIndex = 0;
   let clicks = 0;
+  let welcomeOpens = 0;
+  let welcomeAvailable = Boolean(welcomePlan);
   const adapter = {
     conversationRows() { return currentRows; },
     rowSnapshot(row) { return row; },
     async openConversation() { return true; },
+    async openWelcomeConversation(username) {
+      welcomeOpens += 1;
+      return { ...welcomeTarget, username };
+    },
     readActiveConversation() {
       return reads[Math.min(readIndex++, reads.length - 1)];
     },
     findComposer() { return { value: "" }; },
-    setComposerText(_composer, text) { return text === "Reply draft"; },
+    setComposerText(_composer, text) {
+      return text === "Reply draft" || text === welcomePlan?.reply_text;
+    },
     findSendButton() { return { click() { clicks += 1; } }; },
     async waitForOutbound() { return outbound; },
   };
@@ -75,6 +85,13 @@ function harness({
         stage: "engaged",
       };
     }
+    if (type === "TIKPOC_WELCOME_PLAN") {
+      return welcomeAvailable ? welcomePlan : {};
+    }
+    if (type === "TIKPOC_WELCOME_RESULT") {
+      welcomeAvailable = false;
+      return { recorded: true };
+    }
     if (type === "TIKPOC_ACTION_CLAIM") {
       return { claimed: true };
     }
@@ -91,6 +108,7 @@ function harness({
     adapter,
     calls,
     get clicks() { return clicks; },
+    get welcomeOpens() { return welcomeOpens; },
     setRows(rows) { currentRows = rows; },
     storage,
     workflow,
@@ -414,6 +432,94 @@ test("a lost result response after click does not click the same fingerprint aga
   run.setRows([{ key: inbound().conversationId, signature: "rerender", unread: true }]);
   assert.equal(await run.workflow.scan(SETTINGS), "duplicate");
   assert.equal(run.clicks, 1);
+});
+
+test("an idle scan sends one exact-target welcome with a dedicated lease", async () => {
+  const run = harness({
+    welcomePlan: {
+      plan_id: 23,
+      follower_username: "buyer.one",
+      reply_text: "Welcome draft",
+    },
+  });
+  await run.workflow.scan(SETTINGS);
+
+  assert.equal(await run.workflow.scan(SETTINGS), "welcome_sent");
+  assert.equal(run.welcomeOpens, 1);
+  assert.equal(run.clicks, 1);
+  const claim = run.calls.find((call) =>
+    call.type === "TIKPOC_ACTION_CLAIM" && call.body.action_type === "welcome_send"
+  );
+  assert.equal(claim.body.action_key, "welcome_send:23");
+  assert.equal(
+    run.calls.find((call) => call.type === "TIKPOC_WELCOME_RESULT").body.state,
+    "sent",
+  );
+  assert.equal(
+    run.calls.find((call) =>
+      call.type === "TIKPOC_ACTION_RESULT" && call.body.action_type === "welcome_send"
+    ).body.state,
+    "completed",
+  );
+  assert.equal(await run.workflow.scan(SETTINGS), "idle");
+  assert.equal(run.clicks, 1);
+});
+
+test("an actionable inbound message takes priority over a pending welcome", async () => {
+  const run = harness({
+    welcomePlan: {
+      plan_id: 23,
+      follower_username: "buyer.one",
+      reply_text: "Welcome draft",
+    },
+  });
+  await run.workflow.scan(SETTINGS);
+  run.setRows([{ key: inbound().conversationId, signature: "new", unread: true }]);
+
+  assert.equal(await run.workflow.scan(SETTINGS), "sent");
+  assert.equal(
+    run.calls.some((call) => call.type === "TIKPOC_WELCOME_PLAN"),
+    false,
+  );
+  assert.equal(run.welcomeOpens, 0);
+});
+
+test("welcome targeting ambiguity records uncertain without composing", async () => {
+  const run = harness({
+    welcomePlan: {
+      plan_id: 23,
+      follower_username: "buyer.one",
+      reply_text: "Welcome draft",
+    },
+    welcomeTarget: { matched: false, existingMessages: false },
+  });
+  await run.workflow.scan(SETTINGS);
+
+  assert.equal(await run.workflow.scan(SETTINGS), "welcome_uncertain");
+  assert.equal(run.clicks, 0);
+  assert.equal(
+    run.calls.find((call) => call.type === "TIKPOC_WELCOME_RESULT").body.state,
+    "uncertain",
+  );
+});
+
+test("an existing conversation supersedes the generic follower welcome", async () => {
+  const run = harness({
+    welcomePlan: {
+      plan_id: 23,
+      follower_username: "buyer.one",
+      reply_text: "Welcome draft",
+    },
+    welcomeTarget: { matched: true, existingMessages: true },
+  });
+  await run.workflow.scan(SETTINGS);
+
+  assert.equal(await run.workflow.scan(SETTINGS), "welcome_superseded");
+  assert.equal(run.clicks, 0);
+  assert.equal(
+    run.calls.find((call) => call.type === "TIKPOC_WELCOME_RESULT").body.state,
+    "superseded",
+  );
 });
 
 test("health payload reports readiness without message content", () => {

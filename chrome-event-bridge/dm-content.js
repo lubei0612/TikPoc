@@ -180,6 +180,114 @@
     return true;
   }
 
+  function usernameFromElement(element) {
+    const direct = firstAttribute(element, ["data-username", "data-user-name"]);
+    if (direct) {
+      return core.normalizedUsername(direct);
+    }
+    const profile = element && typeof element.querySelector === "function"
+      ? element.querySelector("a[href*='/@']")
+      : null;
+    if (profile && profile.href) {
+      try {
+        const match = new URL(profile.href, globalThis.location && globalThis.location.href)
+          .pathname.match(/^\/@([^/]+)/);
+        return core.normalizedUsername(match ? decodeURIComponent(match[1]) : "");
+      } catch (_error) {
+        return "";
+      }
+    }
+    const nickname = element && typeof element.querySelector === "function"
+      ? element.querySelector("[data-e2e='dm-new-conversation-nickname'], [data-e2e*='uniqueid']")
+      : null;
+    return core.normalizedUsername(elementLabel(nickname));
+  }
+
+  function activeConversationState(documentValue = document) {
+    const scope = documentValue.querySelector("main, [role='main']") || documentValue;
+    const participantNode = scope.querySelector(
+      "[data-e2e*='chat-header'][data-username], [data-e2e*='chat-header'] a[href*='/@'], " +
+      "[role='heading'][data-username], [role='heading'] a[href*='/@'], " +
+      "[data-e2e='chat-uniqueid']",
+    );
+    let participant = firstAttribute(participantNode, ["data-username", "data-user-name"]);
+    if (!participant && participantNode && participantNode.href) {
+      try {
+        const match = new URL(
+          participantNode.href,
+          globalThis.location && globalThis.location.href,
+        ).pathname.match(/^\/@([^/]+)/);
+        participant = match ? decodeURIComponent(match[1]) : "";
+      } catch (_error) {
+        participant = "";
+      }
+    }
+    participant = core.normalizedUsername(participant || elementLabel(participantNode));
+    const messageCount = Array.from(scope.querySelectorAll(
+      "[data-e2e='dm-new-chat-item'], [data-e2e*='message-item'], " +
+      "[data-e2e*='chat-message'], [data-message-id]",
+    )).filter(visible).length;
+    return { participant, messageCount };
+  }
+
+  function exactUsernameElement(elements, expectedUsername) {
+    const candidates = Array.from(elements || [])
+      .filter(visible)
+      .map((element) => ({ element, username: usernameFromElement(element) }))
+      .filter((candidate) => candidate.username);
+    return core.findExactUsernameCandidate(candidates, expectedUsername);
+  }
+
+  async function openWelcomeConversation(username, documentValue = document) {
+    const expected = core.normalizedUsername(username);
+    if (!expected) {
+      return { matched: false, existingMessages: false };
+    }
+    let selected = exactUsernameElement(conversationRows(documentValue), expected);
+    let existingConversation = Boolean(selected);
+    if (!selected) {
+      const controls = documentValue.querySelectorAll(
+        "button[aria-label], [role='button'][aria-label], [data-e2e*='new-chat'], " +
+        "[data-e2e*='new-message']",
+      );
+      const newConversation = core.findSemanticButton(controls, [
+        "new message",
+        "new chat",
+        "新建消息",
+        "新消息",
+        "新增訊息",
+      ]);
+      if (!newConversation) {
+        return { matched: false, existingMessages: false };
+      }
+      newConversation.click();
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      const searchInputs = Array.from(documentValue.querySelectorAll(
+        "input[type='search'], input[role='searchbox'], input[aria-label*='search' i], " +
+        "input[placeholder*='search' i], input[aria-label*='搜索'], input[placeholder*='搜索']",
+      )).filter(visible);
+      if (searchInputs.length !== 1 || !setComposerText(searchInputs[0], expected)) {
+        return { matched: false, existingMessages: false };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      const resultRows = documentValue.querySelectorAll(
+        "[data-e2e*='search-user'], [data-e2e*='user-item'], " +
+        "[role='dialog'] [role='listitem'], [role='dialog'] a[href*='/@']",
+      );
+      selected = exactUsernameElement(resultRows, expected);
+      existingConversation = false;
+    }
+    if (!selected || !(await openConversation(selected.element))) {
+      return { matched: false, existingMessages: false };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const active = activeConversationState(documentValue);
+    return {
+      matched: active.participant === expected,
+      existingMessages: existingConversation && active.messageCount > 0,
+    };
+  }
+
   function bubbleDirection(bubble, textNode) {
     const signal = firstAttribute(bubble, [
       "data-direction",
@@ -401,7 +509,7 @@
         snapshot.unread || baseline[snapshot.key] !== snapshot.signature,
       );
       if (!candidate) {
-        return "idle";
+        return scanWelcome(settings);
       }
       const opened = await adapter.openConversation(candidate.row);
       if (opened === false) {
@@ -517,6 +625,99 @@
       return resultState;
     }
 
+    async function scanWelcome(settings) {
+      const identity = {
+        account_id: settings.accountId,
+        device_id: settings.deviceId,
+        observed_username: settings.observedUsername || "",
+        binding_state: settings.bindingState || "unverified",
+      };
+      const plan = await transport("TIKPOC_WELCOME_PLAN", identity);
+      if (!plan || !Number.isInteger(plan.plan_id) || plan.plan_id <= 0) {
+        return "idle";
+      }
+      const username = core.normalizedUsername(plan.follower_username);
+      const replyText = core.normalizeText(plan.reply_text);
+      if (!username || !replyText) {
+        await transport("TIKPOC_WELCOME_RESULT", {
+          ...identity,
+          plan_id: plan.plan_id,
+          state: "uncertain",
+        });
+        return "welcome_uncertain";
+      }
+      const actionKey = `welcome_send:${plan.plan_id}`;
+      const processed = await storage.get(PROCESSED_KEY) || {};
+      if (processed[actionKey]) {
+        await transport("TIKPOC_WELCOME_RESULT", {
+          ...identity,
+          plan_id: plan.plan_id,
+          state: "uncertain",
+        });
+        return "welcome_duplicate";
+      }
+      const actionIdentity = {
+        ...identity,
+        action_type: "welcome_send",
+        action_key: actionKey,
+        owner_id: ownerId,
+      };
+      const claim = await transport("TIKPOC_ACTION_CLAIM", {
+        ...actionIdentity,
+        timestamp_ms: now(),
+        lease_seconds: 30,
+      });
+      if (!claim.claimed) {
+        return "welcome_busy";
+      }
+      const target = await adapter.openWelcomeConversation(username);
+      if (!target || !target.matched || target.existingMessages) {
+        const state = target && target.matched && target.existingMessages
+          ? "superseded"
+          : "uncertain";
+        await transport("TIKPOC_WELCOME_RESULT", {
+          ...identity,
+          plan_id: plan.plan_id,
+          state,
+        });
+        await transport("TIKPOC_ACTION_RESULT", {
+          ...actionIdentity,
+          state,
+        });
+        return state === "superseded" ? "welcome_superseded" : "welcome_uncertain";
+      }
+      const composer = adapter.findComposer();
+      const composed = composer && adapter.setComposerText(composer, replyText);
+      const sendButton = composed && adapter.findSendButton();
+      processed[actionKey] = {
+        accountId: settings.accountId,
+        state: "sending",
+        updatedAt: now(),
+      };
+      await storage.set(PROCESSED_KEY, trimProcessed(processed));
+      if (sendButton) {
+        sendButton.click();
+      }
+      const confirmed = Boolean(sendButton) && await adapter.waitForOutbound(replyText);
+      const planState = confirmed ? "sent" : "uncertain";
+      await transport("TIKPOC_WELCOME_RESULT", {
+        ...identity,
+        plan_id: plan.plan_id,
+        state: planState,
+      });
+      await transport("TIKPOC_ACTION_RESULT", {
+        ...actionIdentity,
+        state: confirmed ? "completed" : "uncertain",
+      });
+      processed[actionKey] = {
+        accountId: settings.accountId,
+        state: planState,
+        updatedAt: now(),
+      };
+      await storage.set(PROCESSED_KEY, trimProcessed(processed));
+      return confirmed ? "welcome_sent" : "welcome_uncertain";
+    }
+
     return { scan };
   }
 
@@ -549,6 +750,7 @@
       conversationRows,
       rowSnapshot,
       openConversation,
+      openWelcomeConversation: (username) => openWelcomeConversation(username),
       readActiveConversation: (accountId) => readActiveConversation(document, accountId),
       findComposer,
       setComposerText,
@@ -645,7 +847,7 @@
     });
     chrome.runtime.onMessage.addListener((message) => {
       if (message && message.type === HEALTH_TICK) {
-        health().catch(() => {});
+        health().then(schedule, schedule);
       }
       return false;
     });
@@ -663,6 +865,9 @@
     findComposer,
     findSendButton,
     openConversation,
+    openWelcomeConversation,
+    activeConversationState,
+    usernameFromElement,
     pageRole,
     resolveBinding,
     readActiveConversation,

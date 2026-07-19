@@ -30,6 +30,17 @@
     return /^[a-z0-9._]+$/.test(username) ? username : "";
   }
 
+  function findExactUsernameCandidate(candidates, expectedUsername) {
+    const expected = normalizedUsername(expectedUsername);
+    if (!expected) {
+      return null;
+    }
+    const matches = Array.from(candidates || []).filter(
+      (candidate) => normalizedUsername(candidate && candidate.username) === expected,
+    );
+    return matches.length === 1 ? matches[0] : null;
+  }
+
   function conversationKey(value, username) {
     try {
       const url = new URL(String(value || ""));
@@ -137,6 +148,8 @@
 
   return {
     normalizeText,
+    normalizedUsername,
+    findExactUsernameCandidate,
     conversationKey,
     isActionableInbound,
     fingerprintMessage,

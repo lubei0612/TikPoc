@@ -127,3 +127,15 @@ test("reconciles only an exact normalized outbound bubble", () => {
     false,
   );
 });
+
+test("selects one exact normalized username and rejects ambiguity", () => {
+  const first = { username: " Buyer.One ", id: 1 };
+  const second = { username: "other", id: 2 };
+
+  assert.equal(dm.findExactUsernameCandidate([first, second], "@buyer.one"), first);
+  assert.equal(dm.findExactUsernameCandidate([first, second], "missing"), null);
+  assert.equal(
+    dm.findExactUsernameCandidate([first, { username: "@buyer.one" }], "buyer.one"),
+    null,
+  );
+});
