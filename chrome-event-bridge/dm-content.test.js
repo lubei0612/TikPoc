@@ -558,6 +558,81 @@ test("disabled DM automation still reports binding health without running workfl
   assert.equal(dmContent.canRunWorkflow(disabled), false);
 });
 
+test("disabled DM automation records a successful read-only observer scan", async () => {
+  const original = {
+    chrome: globalThis.chrome,
+    document: globalThis.document,
+    location: globalThis.location,
+    MutationObserver: globalThis.MutationObserver,
+    setInterval: globalThis.setInterval,
+    setTimeout: globalThis.setTimeout,
+    clearTimeout: globalThis.clearTimeout,
+  };
+  const scheduled = [];
+  const listeners = [];
+  const health = [];
+  const accountLink = {
+    href: "https://www.tiktok.com/@shop_one",
+    getClientRects() { return [{}]; },
+    getAttribute(name) { return name === "href" ? this.href : null; },
+  };
+  const settings = { ...SETTINGS, browserDmEnabled: false };
+  try {
+    globalThis.document = {
+      documentElement: {},
+      addEventListener() {},
+      querySelector(selector) { return selector.includes("avatar") ? {} : null; },
+      querySelectorAll(selector) {
+        return selector.includes("nav a[href*='/@']") ? [accountLink] : [];
+      },
+    };
+    globalThis.location = {
+      href: "https://www.tiktok.com/messages",
+      pathname: "/messages",
+    };
+    globalThis.MutationObserver = class { observe() {} };
+    globalThis.setTimeout = (callback) => { scheduled.push(callback); return scheduled.length; };
+    globalThis.clearTimeout = () => {};
+    globalThis.setInterval = () => 1;
+    globalThis.chrome = {
+      runtime: {
+        lastError: null,
+        onMessage: { addListener(listener) { listeners.push(listener); } },
+        sendMessage(message, callback) {
+          if (message.type === "TIKPOC_BROWSER_HEALTH") {
+            health.push(message.body);
+          }
+          callback({ ok: true, result: { recorded: true } });
+        },
+      },
+      storage: {
+        local: {
+          get(keys, callback) {
+            const key = keys[0];
+            callback({ [key]: key === "tikpocSettings" ? settings : undefined });
+          },
+          set(_values, callback) { callback(); },
+        },
+        onChanged: { addListener() {} },
+      },
+    };
+
+    dmContent.startBrowserBridge();
+    await new Promise((resolve) => setImmediate(resolve));
+    await scheduled.shift()();
+    await new Promise((resolve) => setImmediate(resolve));
+    listeners[0]({ type: "TIKPOC_HEALTH_TICK" });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(health.length, 2);
+    assert.equal(health[1].scan_state, "idle");
+    assert.ok(health[1].last_scan_at_ms > 0);
+    assert.ok(health[1].last_success_at_ms >= health[1].last_scan_at_ms);
+  } finally {
+    Object.assign(globalThis, original);
+  }
+});
+
 test("uses only fresh account-scoped activity binding evidence in a Messages frame", () => {
   const direct = { state: "unverified", observedUsername: "" };
   const cached = {
