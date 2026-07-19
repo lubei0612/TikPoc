@@ -136,6 +136,39 @@
     return Boolean(settings && settings.enabled && settings[featureKey] !== false);
   }
 
+  function createCoalescingRunner(run) {
+    let active = null;
+    let requested = false;
+
+    async function drain() {
+      do {
+        requested = false;
+        await run();
+      } while (requested);
+    }
+
+    return function request() {
+      requested = true;
+      if (!active) {
+        active = drain().finally(() => {
+          active = null;
+        });
+      }
+      return active;
+    };
+  }
+
+  function installContinuousTriggers(documentValue, windowValue, schedule) {
+    if (documentValue && typeof documentValue.addEventListener === "function") {
+      documentValue.addEventListener("visibilitychange", schedule);
+    }
+    if (windowValue && typeof windowValue.addEventListener === "function") {
+      for (const eventName of ["pageshow", "popstate", "hashchange"]) {
+        windowValue.addEventListener(eventName, schedule);
+      }
+    }
+  }
+
   function shouldAttemptRecord(
     record,
     now = Date.now(),
@@ -187,9 +220,11 @@
     browserFeatureEnabled,
     buildFollowerDedupKey,
     classifyCandidate,
+    createCoalescingRunner,
     extractFollowerEventId,
     followButtonState,
     isFollowerNotification,
+    installContinuousTriggers,
     normalizeText,
     parseTikTokProfileUrl,
     shouldAttemptRecord,

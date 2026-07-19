@@ -154,3 +154,23 @@ test("suppresses a welcome whenever the exact target already has messages", () =
     { matched: false, existingMessages: true },
   );
 });
+
+test("installs continuous Messages triggers", () => {
+  assert.equal(typeof dm.installContinuousTriggers, "function");
+  const documentEvents = [];
+  const windowEvents = [];
+  const schedule = () => {};
+
+  dm.installContinuousTriggers(
+    { addEventListener(name, handler) { documentEvents.push([name, handler]); } },
+    { addEventListener(name, handler) { windowEvents.push([name, handler]); } },
+    schedule,
+  );
+
+  assert.deepEqual(documentEvents, [["visibilitychange", schedule]]);
+  assert.deepEqual(windowEvents, [
+    ["pageshow", schedule],
+    ["popstate", schedule],
+    ["hashchange", schedule],
+  ]);
+});

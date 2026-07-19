@@ -846,6 +846,7 @@
       }
       return false;
     });
+    core.installContinuousTriggers(document, globalThis, schedule);
     health().catch(() => {});
     schedule();
   }

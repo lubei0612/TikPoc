@@ -140,3 +140,50 @@ test("retries unresolved records only after the delay and below the cap", () => 
     false,
   );
 });
+
+test("coalesces activity scans to one active run and one pending rerun", async () => {
+  assert.equal(typeof core.createCoalescingRunner, "function");
+  let release;
+  let active = 0;
+  let maxActive = 0;
+  let runs = 0;
+  const firstRun = new Promise((resolve) => { release = resolve; });
+  const request = core.createCoalescingRunner(async () => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    runs += 1;
+    if (runs === 1) {
+      await firstRun;
+    }
+    active -= 1;
+  });
+
+  const first = request();
+  const second = request();
+  request();
+  release();
+  await Promise.all([first, second]);
+
+  assert.equal(runs, 2);
+  assert.equal(maxActive, 1);
+});
+
+test("installs continuous activity triggers", () => {
+  assert.equal(typeof core.installContinuousTriggers, "function");
+  const documentEvents = [];
+  const windowEvents = [];
+  const schedule = () => {};
+
+  core.installContinuousTriggers(
+    { addEventListener(name, handler) { documentEvents.push([name, handler]); } },
+    { addEventListener(name, handler) { windowEvents.push([name, handler]); } },
+    schedule,
+  );
+
+  assert.deepEqual(documentEvents, [["visibilitychange", schedule]]);
+  assert.deepEqual(windowEvents, [
+    ["pageshow", schedule],
+    ["popstate", schedule],
+    ["hashchange", schedule],
+  ]);
+});

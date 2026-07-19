@@ -49,6 +49,17 @@
     };
   }
 
+  function installContinuousTriggers(documentValue, windowValue, schedule) {
+    if (documentValue && typeof documentValue.addEventListener === "function") {
+      documentValue.addEventListener("visibilitychange", schedule);
+    }
+    if (windowValue && typeof windowValue.addEventListener === "function") {
+      for (const eventName of ["pageshow", "popstate", "hashchange"]) {
+        windowValue.addEventListener(eventName, schedule);
+      }
+    }
+  }
+
   function conversationKey(value, username) {
     try {
       const url = new URL(String(value || ""));
@@ -165,5 +176,6 @@
     sameInbound,
     findSemanticButton,
     hasMatchingOutbound,
+    installContinuousTriggers,
   };
 });

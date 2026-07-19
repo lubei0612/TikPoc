@@ -11,6 +11,9 @@ const optionsCore = require("./options-core.js");
 test("activity content script reports account binding health on alarm ticks", async () => {
   const listeners = [];
   const messages = [];
+  const scheduled = [];
+  const documentEvents = [];
+  const windowEvents = [];
   const settings = {
     enabled: true,
     accountId: "account-02",
@@ -27,6 +30,7 @@ test("activity content script reports account binding health on alarm ticks", as
   const document = {
     body: { textContent: "" },
     documentElement: {},
+    addEventListener(name, handler) { documentEvents.push([name, handler]); },
     querySelector(selector) {
       return selector.includes("avatar") ? {} : null;
     },
@@ -65,20 +69,29 @@ test("activity content script reports account binding health on alarm ticks", as
       TikPocOptionsCore: optionsCore,
       crypto: { randomUUID: () => "activity-tab" },
       location,
+      addEventListener(name, handler) { windowEvents.push([name, handler]); },
     },
     location,
     MutationObserver,
-    setTimeout: () => 1,
+    setTimeout: (callback) => { scheduled.push(callback); return scheduled.length; },
     clearTimeout() {},
   });
 
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(messages.length, 1);
   assert.equal(listeners.length, 1);
+  scheduled.length = 0;
   listeners[0]({ type: "TIKPOC_HEALTH_TICK" });
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(messages.length, 2);
+  assert.equal(scheduled.length, 1);
+  assert.deepEqual(documentEvents.map(([name]) => name), ["visibilitychange"]);
+  assert.deepEqual(windowEvents.map(([name]) => name), [
+    "pageshow",
+    "popstate",
+    "hashchange",
+  ]);
   for (const { body, ...message } of messages) {
     assert.deepEqual({ ...message, body: { ...body, timestamp_ms: 0 } }, {
       type: "TIKPOC_BROWSER_HEALTH",

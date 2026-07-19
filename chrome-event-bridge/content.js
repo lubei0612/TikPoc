@@ -422,9 +422,11 @@
     }
   }
 
+  const requestScan = core.createCoalescingRunner(scan);
+
   function scheduleScan() {
     clearTimeout(scanTimer);
-    scanTimer = setTimeout(scan, 250);
+    scanTimer = setTimeout(() => requestScan().catch(() => {}), 250);
   }
 
   const observer = new MutationObserver(scheduleScan);
@@ -440,10 +442,11 @@
   });
   chrome.runtime.onMessage.addListener((message) => {
     if (message && message.type === HEALTH_TICK) {
-      reportHealth().catch(() => {});
+      reportHealth().then(scheduleScan, scheduleScan);
     }
     return false;
   });
+  core.installContinuousTriggers(document, globalThis, scheduleScan);
   reportHealth().catch(() => {});
   scheduleScan();
 })();
