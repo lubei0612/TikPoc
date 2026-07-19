@@ -66,11 +66,11 @@
 - Modify: `tests/test_acquisition_api.py`
 - Modify: `tests/test_web_events_db.py`
 
-- [ ] Add API tests proving missing, ambiguous, and mismatched visible identities receive `409`, while normalized matches can create a plan, claim an action, finish a result, and report health.
-- [ ] Extend `BrowserIdentityRequest` with `observed_username` and `binding_state`; validate them against the registry in one `_browser_account` boundary used by events, plans, results, claims, and health.
-- [ ] Persist browser health status and observed username per account/page role. Preserve the last `uncertain` action lease until reconciliation or expiry.
-- [ ] Return `binding_unverified` for configured accounts lacking an expected username, and do not accept action-bearing requests for them.
-- [ ] Run `uv run pytest tests/test_acquisition_api.py tests/test_web_events_db.py tests/test_browser_dm.py -q`; commit `feat: enforce browser profile identity`.
+- [x] Add API tests proving missing, ambiguous, and mismatched visible identities receive `409`, while normalized matches can create a plan, claim an action, finish a result, and report health.
+- [x] Extend `BrowserIdentityRequest` with `observed_username` and `binding_state`; validate them against the registry in one `_browser_account` boundary used by events, plans, results, claims, and health.
+- [x] Persist browser health status and observed username per account/page role. Preserve the last `uncertain` action lease until reconciliation or expiry.
+- [x] Return `binding_unverified` for configured accounts lacking an expected username, and do not accept action-bearing requests for them.
+- [x] Run `uv run pytest tests/test_acquisition_api.py tests/test_web_events_db.py tests/test_browser_dm.py -q`; commit `feat: enforce browser profile identity`.
 
 ### Task 5: Chinese Multi-Account Health And Controls
 

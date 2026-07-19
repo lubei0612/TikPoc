@@ -11,6 +11,10 @@ Identifier = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=200),
 ]
+VisibleUsername = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, max_length=200),
+]
 
 
 class ApiRequest(BaseModel):
@@ -20,6 +24,14 @@ class ApiRequest(BaseModel):
 class BrowserIdentityRequest(ApiRequest):
     account_id: Identifier
     device_id: Identifier
+    observed_username: VisibleUsername = ""
+    binding_state: Literal[
+        "ready",
+        "unverified",
+        "mismatch",
+        "signed_out",
+        "verification_required",
+    ] = "unverified"
 
 
 class BrowserEventRequest(BrowserIdentityRequest):

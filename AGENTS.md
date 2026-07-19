@@ -343,10 +343,20 @@ Completed on `feat/web-lead-conversion`:
   Playwright checks passed without overflow.
 - Multi-account Browser Task 3 specification and quality reviews passed after
   preventing binding-status writes from self-triggering Activity/DM scans.
+- Multi-account Browser Task 4 is complete: all browser events, reply plans,
+  reply results, action claims/results, and health requests pass through one
+  account/device/visible-username boundary. Missing, ambiguous, signed-out,
+  verification, and mismatch states block action-bearing requests with `409`.
+- Browser health persists the server-evaluated binding state and observed
+  username per account/page role, including blocked heartbeats. A client claim
+  of `ready` never overrides a server-detected username mismatch.
+- Task 4 specification and quality reviews passed with no remaining Critical or
+  Important findings. Full Python verification passed `596` tests; Chrome Node
+  verification remains `46` tests.
 - The retained debug round failed capacity promotion: mean 170.718 seconds,
   P90 15.572 seconds, projected 421 targets per 20-hour day, with historical
   identity mismatch evidence. A fresh calibration-free round is still required.
-- Last fresh full Python verification: `582 passed`; Chrome Node verification:
+- Last fresh full Python verification: `596 passed`; Chrome Node verification:
   `46 passed`; Android bridge build passed with the portable build-root fix.
 - Full-repository Ruff format check has a pre-existing 14-file formatting
   baseline; do not reformat those unrelated files as part of a narrow task.

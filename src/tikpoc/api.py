@@ -62,6 +62,20 @@ _CONSOLE_ASSET = re.compile(
 )
 
 
+class BrowserBindingConflict(ValueError):
+    def __init__(self, error_code: str) -> None:
+        super().__init__(error_code)
+        self.error_code = error_code
+
+    @property
+    def binding_state(self) -> str:
+        return {
+            "binding_mismatch": "mismatch",
+            "binding_signed_out": "signed_out",
+            "binding_verification_required": "verification_required",
+        }.get(self.error_code, "unverified")
+
+
 def _json(payload: object, status_code: int = 200) -> JSONResponse:
     return JSONResponse(payload, status_code=status_code)
 
@@ -84,7 +98,42 @@ def _browser_account(
     account = registry.by_account_id(identity.account_id)
     if not account.enabled or account.device_id != identity.device_id:
         raise ValueError("browser account and device mapping do not match")
+    if not account.expected_tiktok_username:
+        raise BrowserBindingConflict("binding_unverified")
+    if identity.binding_state != "ready":
+        error_codes = {
+            "mismatch": "binding_mismatch",
+            "signed_out": "binding_signed_out",
+            "verification_required": "binding_verification_required",
+        }
+        raise BrowserBindingConflict(
+            error_codes.get(identity.binding_state, "binding_unverified")
+        )
+    expected = account.expected_tiktok_username.strip().removeprefix("@").casefold()
+    observed = identity.observed_username.strip().removeprefix("@").casefold()
+    if not observed:
+        raise BrowserBindingConflict("binding_unverified")
+    if observed != expected:
+        raise BrowserBindingConflict("binding_mismatch")
     return account
+
+
+def _record_browser_health(
+    database: Database,
+    body: BrowserHealthRequest,
+    *,
+    binding_state: str | None = None,
+) -> None:
+    database.upsert_browser_health(
+        body.account_id,
+        body.page_role,
+        device_id=body.device_id,
+        status=binding_state or body.binding_state,
+        observed_at_ms=body.timestamp_ms,
+        detail=body.path,
+        observed_username=body.observed_username,
+    )
+    database.record_runtime_event(f"browser_health_{body.page_role}", body.account_id)
 
 
 def create_app(
@@ -215,6 +264,8 @@ def create_app(
         try:
             body = BrowserEventRequest.model_validate(await _json_object(request))
             _browser_account(registry, body)
+        except BrowserBindingConflict as error:
+            return _json({"error": error.error_code}, 409)
         except (KeyError, TypeError, ValueError, ValidationError):
             return _json({"error": "invalid browser event"}, 400)
         payload = dict(body.payload)
@@ -280,6 +331,8 @@ def create_app(
             )
         except BrowserConversationBusy:
             return _json({"error": "browser conversation busy"}, 409)
+        except BrowserBindingConflict as error:
+            return _json({"error": error.error_code}, 409)
         except (KeyError, TypeError, ValueError, ValidationError):
             return _json({"error": "invalid browser request"}, 400)
         return _json(
@@ -305,6 +358,8 @@ def create_app(
                 body.plan_id,
                 body.state,
             )
+        except BrowserBindingConflict as error:
+            return _json({"error": error.error_code}, 409)
         except KeyError:
             return _json({"error": "browser reply plan not found"}, 404)
         except (TypeError, ValueError, ValidationError):
@@ -347,6 +402,8 @@ def create_app(
                     body.timestamp_ms,
                     body.lease_seconds,
                 )
+        except BrowserBindingConflict as error:
+            return _json({"error": error.error_code}, 409)
         except (KeyError, TypeError, ValueError, ValidationError):
             return _json({"error": "invalid browser request"}, 400)
         return _json({"claimed": claimed})
@@ -365,6 +422,8 @@ def create_app(
                 body.owner_id,
                 body.state,
             )
+        except BrowserBindingConflict as error:
+            return _json({"error": error.error_code}, 409)
         except (KeyError, TypeError, ValueError, ValidationError):
             return _json({"error": "invalid browser request"}, 400)
         return _json({"recorded": recorded})
@@ -373,12 +432,16 @@ def create_app(
     async def browser_health(request: Request) -> JSONResponse:
         try:
             body = BrowserHealthRequest.model_validate(await _json_object(request))
-            _browser_account(registry, body)
         except (KeyError, TypeError, ValueError, ValidationError):
             return _json({"error": "invalid browser request"}, 400)
-        database.record_runtime_event(
-            f"browser_health_{body.page_role}", body.account_id
-        )
+        try:
+            _browser_account(registry, body)
+        except BrowserBindingConflict as error:
+            _record_browser_health(database, body, binding_state=error.binding_state)
+            return _json({"error": error.error_code}, 409)
+        except (KeyError, TypeError, ValueError, ValidationError):
+            return _json({"error": "invalid browser request"}, 400)
+        _record_browser_health(database, body)
         return _json({"recorded": True})
 
     @app.post("/api/tiktok-business/webhook")

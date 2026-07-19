@@ -15,6 +15,15 @@ class _ReplyClient:
         return "Synthetic reply"
 
 
+def _browser_identity() -> dict[str, object]:
+    return {
+        "account_id": "account-01",
+        "device_id": "phone-01",
+        "observed_username": "shop_one",
+        "binding_state": "ready",
+    }
+
+
 def _seeded_app(tmp_path: Path):
     path = tmp_path / "tikpoc.db"
     database = Database(path)
@@ -27,8 +36,13 @@ def _seeded_app(tmp_path: Path):
                 private_channel_hint="WhatsApp: +1 555 0100",
                 offer_context="Synthetic offer",
                 faq_text="Synthetic FAQ",
+                expected_tiktok_username="shop_one",
             ),
-            WebAccount(account_id="account-02", device_id="phone-02"),
+            WebAccount(
+                account_id="account-02",
+                device_id="phone-02",
+                expected_tiktok_username="shop_two",
+            ),
         )
     )
     for index, text in enumerate(("first", "second", "x" * 220), start=1):
@@ -131,8 +145,7 @@ def test_takeover_is_idempotent_and_disables_future_ai_plans(tmp_path: Path) -> 
         "/api/browser-dm/reply-plan",
         headers={"origin": "https://www.tiktok.com"},
         json={
-            "account_id": "account-01",
-            "device_id": "phone-01",
+            **_browser_identity(),
             "conversation_id": "conversation-01",
             "fingerprint": "future-message",
             "participant_username": "buyer_01",
@@ -426,8 +439,7 @@ def test_ai_off_still_allows_taken_over_manual_plan_to_claim_send_lease(
         "/api/browser-actions/claim",
         headers={"Origin": "https://www.tiktok.com"},
         json={
-            "account_id": "account-01",
-            "device_id": "phone-01",
+            **_browser_identity(),
             "action_type": "dm_send",
             "action_key": f"dm_send:{manual.json()['plan_id']}",
             "owner_id": "operator-tab",
@@ -455,8 +467,7 @@ def test_takeover_supersedes_ai_draft_before_atomic_dm_claim(tmp_path: Path) -> 
         "/api/browser-actions/claim",
         headers={"Origin": "https://www.tiktok.com"},
         json={
-            "account_id": "account-01",
-            "device_id": "phone-01",
+            **_browser_identity(),
             "action_type": "dm_send",
             "action_key": f"dm_send:{draft.id}",
             "owner_id": "tab-01",
@@ -484,8 +495,7 @@ def test_dm_claim_rejects_plan_id_aliases_and_creates_only_canonical_lease(
     assert draft is not None
     route = "/api/browser-actions/claim"
     base = {
-        "account_id": "account-01",
-        "device_id": "phone-01",
+        **_browser_identity(),
         "action_type": "dm_send",
         "owner_id": "tab-01",
         "timestamp_ms": 8_000,
@@ -616,6 +626,7 @@ def test_disabled_account_readiness_masks_persisted_operator_switches_and_blocks
                 private_channel_hint=account.private_channel_hint,
                 offer_context=account.offer_context,
                 faq_text=account.faq_text,
+                expected_tiktok_username=account.expected_tiktok_username,
             ),
             WebAccount(account_id="account-02", device_id="phone-02"),
         )
@@ -633,8 +644,7 @@ def test_disabled_account_readiness_masks_persisted_operator_switches_and_blocks
         "/api/browser-actions/claim",
         headers={"Origin": "https://www.tiktok.com"},
         json={
-            "account_id": "account-01",
-            "device_id": "phone-01",
+            **_browser_identity(),
             "action_type": "followback",
             "action_key": "buyer-01",
             "owner_id": "disabled-tab",
@@ -680,8 +690,7 @@ def test_disabled_account_controls_reject_browser_action_claims_without_leases(
             "/api/browser-actions/claim",
             headers=headers,
             json={
-                "account_id": "account-01",
-                "device_id": "phone-01",
+                **_browser_identity(),
                 "action_type": action_type,
                 "action_key": action_key,
                 "owner_id": "tab-01",

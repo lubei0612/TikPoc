@@ -108,6 +108,7 @@ def _registry(tmp_path: Path) -> WebAccountRegistry:
                 device_id="phone-01",
                 business_id="business-01",
                 token_file=tmp_path / "token.json",
+                expected_tiktok_username="shop_one",
             ),
         )
     )
@@ -176,8 +177,7 @@ def _post_browser_request(
 
 def _browser_inbound_body() -> dict[str, object]:
     return {
-        "account_id": "account-01",
-        "device_id": "phone-01",
+        **_browser_identity(),
         "conversation_id": "conversation-01",
         "fingerprint": "fp-01",
         "participant_username": "prospect",
@@ -186,8 +186,17 @@ def _browser_inbound_body() -> dict[str, object]:
     }
 
 
+def _browser_identity() -> dict[str, object]:
+    return {
+        "account_id": "account-01",
+        "device_id": "phone-01",
+        "observed_username": "@SHOP_ONE",
+        "binding_state": "ready",
+    }
+
+
 def _browser_post_bodies() -> dict[str, dict[str, object]]:
-    identity = {"account_id": "account-01", "device_id": "phone-01"}
+    identity = _browser_identity()
     return {
         "/api/browser-events": {
             **identity,
@@ -223,6 +232,115 @@ def _browser_post_bodies() -> dict[str, dict[str, object]]:
             "timestamp_ms": 1_000,
         },
     }
+
+
+@pytest.mark.parametrize("path", tuple(_browser_post_bodies()))
+@pytest.mark.parametrize(
+    ("identity_update", "error_code"),
+    [
+        (
+            {"observed_username": "", "binding_state": "unverified"},
+            "binding_unverified",
+        ),
+        (
+            {"observed_username": "shop_two", "binding_state": "mismatch"},
+            "binding_mismatch",
+        ),
+    ],
+)
+def test_browser_endpoints_reject_unverified_visible_identity(
+    tmp_path: Path,
+    path: str,
+    identity_update: dict[str, object],
+    error_code: str,
+) -> None:
+    client = TestClient(
+        create_app(tmp_path / "binding.db", registry=_registry(tmp_path))
+    )
+    body = _browser_post_bodies()[path]
+    body.update(identity_update)
+
+    response = client.post(
+        path,
+        json=body,
+        headers={"Origin": "https://www.tiktok.com"},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"error": error_code}
+    assert Database(tmp_path / "binding.db").claim_web_event("account-01") is None
+
+
+def test_browser_health_persists_visible_identity_before_binding_conflict(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "health-binding.db"
+    client = TestClient(create_app(database_path, registry=_registry(tmp_path)))
+    body = _browser_post_bodies()["/api/browser-health"]
+    body.update(
+        observed_username="shop_two",
+        binding_state="ready",
+        timestamp_ms=4_000,
+    )
+
+    response = client.post(
+        "/api/browser-health",
+        json=body,
+        headers={"Origin": "https://www.tiktok.com"},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"error": "binding_mismatch"}
+    assert Database(database_path).browser_health_snapshot() == [
+        {
+            "account_id": "account-01",
+            "page_role": "messages",
+            "device_id": "phone-01",
+            "status": "mismatch",
+            "observed_at_ms": 4_000,
+            "detail": "/messages",
+            "observed_username": "shop_two",
+        }
+    ]
+
+
+def test_browser_account_without_expected_username_reports_unverified_health(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "unverified-binding.db"
+    registry = WebAccountRegistry(
+        (WebAccount(account_id="account-01", device_id="phone-01"),)
+    )
+    client = TestClient(create_app(database_path, registry=registry))
+    body = _browser_post_bodies()["/api/browser-health"]
+    body.update(observed_username="", binding_state="unverified", timestamp_ms=5_000)
+
+    response = client.post(
+        "/api/browser-health",
+        json=body,
+        headers={"Origin": "https://www.tiktok.com"},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"error": "binding_unverified"}
+    assert Database(database_path).browser_health_snapshot()[0] == {
+        "account_id": "account-01",
+        "page_role": "messages",
+        "device_id": "phone-01",
+        "status": "unverified",
+        "observed_at_ms": 5_000,
+        "detail": "/messages",
+        "observed_username": "",
+    }
+    claim_body = _browser_post_bodies()["/api/browser-actions/claim"]
+    claim_body.update(observed_username="", binding_state="unverified")
+    claim = client.post(
+        "/api/browser-actions/claim",
+        json=claim_body,
+        headers={"Origin": "https://www.tiktok.com"},
+    )
+    assert claim.status_code == 409
+    assert claim.json() == {"error": "binding_unverified"}
 
 
 def test_browser_post_routes_validate_origin_and_json_before_side_effects(
@@ -438,7 +556,7 @@ def test_browser_action_and_health_endpoints(tmp_path: Path) -> None:
         browser_dm_service=FakeBrowserDmService(),
     )
     try:
-        identity = {"account_id": "account-01", "device_id": "phone-01"}
+        identity = _browser_identity()
         claimed = json.load(
             _post_json(
                 base_url,
@@ -962,8 +1080,7 @@ def test_fastapi_browser_routes_preserve_responses_and_exact_cors(
     result = client.post(
         "/api/browser-dm/reply-result",
         json={
-            "account_id": "account-01",
-            "device_id": "phone-01",
+            **_browser_identity(),
             "plan_id": 17,
             "state": "sent",
         },
@@ -1000,6 +1117,17 @@ def test_fastapi_browser_routes_preserve_responses_and_exact_cors(
     assert claim.json() == {"claimed": True}
     assert action_result.json() == {"recorded": True}
     assert health.json() == {"recorded": True}
+    assert database.browser_health_snapshot() == [
+        {
+            "account_id": "account-01",
+            "page_role": "messages",
+            "device_id": "phone-01",
+            "status": "ready",
+            "observed_at_ms": 1_000,
+            "detail": "/messages",
+            "observed_username": "@SHOP_ONE",
+        }
+    ]
     for response in (event, planned, result, claim, action_result, health):
         assert response.headers["access-control-allow-origin"] == extension_origin
 

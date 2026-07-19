@@ -781,10 +781,24 @@ class Database:
                     status TEXT NOT NULL,
                     observed_at_ms INTEGER NOT NULL,
                     detail TEXT NOT NULL DEFAULT '',
+                    observed_username TEXT NOT NULL DEFAULT '',
                     PRIMARY KEY(account_id, page_role)
                 )
                 """
             )
+            browser_health_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(browser_account_health)"
+                )
+            }
+            if "observed_username" not in browser_health_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE browser_account_health
+                    ADD COLUMN observed_username TEXT NOT NULL DEFAULT ''
+                    """
+                )
             web_message_columns = {
                 row["name"]
                 for row in connection.execute("PRAGMA table_info(web_messages)")
@@ -2785,6 +2799,7 @@ class Database:
         status: str,
         observed_at_ms: int,
         detail: str = "",
+        observed_username: str = "",
     ) -> None:
         _require_identity(account_id, page_role, status)
         if int(observed_at_ms) < 0:
@@ -2794,13 +2809,14 @@ class Database:
                 """
                 INSERT INTO browser_account_health(
                     account_id, page_role, device_id, status,
-                    observed_at_ms, detail
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    observed_at_ms, detail, observed_username
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(account_id, page_role) DO UPDATE SET
                     device_id=excluded.device_id,
                     status=excluded.status,
                     observed_at_ms=excluded.observed_at_ms,
-                    detail=excluded.detail
+                    detail=excluded.detail,
+                    observed_username=excluded.observed_username
                 WHERE excluded.observed_at_ms >= browser_account_health.observed_at_ms
                 """,
                 (
@@ -2810,6 +2826,7 @@ class Database:
                     status.strip(),
                     int(observed_at_ms),
                     detail.strip(),
+                    observed_username.strip(),
                 ),
             )
 
@@ -2818,7 +2835,7 @@ class Database:
             rows = connection.execute(
                 """
                 SELECT account_id, page_role, device_id, status,
-                       observed_at_ms, detail
+                       observed_at_ms, detail, observed_username
                 FROM browser_account_health
                 ORDER BY account_id, page_role
                 """

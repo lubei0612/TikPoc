@@ -1429,6 +1429,7 @@ def test_lead_funnel_sales_health_and_latency_read_models(tmp_path: Path) -> Non
         status="ready",
         observed_at_ms=4_000,
         detail="Messages visible",
+        observed_username="shop_one",
     )
     assert database.browser_health_snapshot() == [
         {
@@ -1438,6 +1439,7 @@ def test_lead_funnel_sales_health_and_latency_read_models(tmp_path: Path) -> Non
             "status": "ready",
             "observed_at_ms": 4_000,
             "detail": "Messages visible",
+            "observed_username": "shop_one",
         }
     ]
 
