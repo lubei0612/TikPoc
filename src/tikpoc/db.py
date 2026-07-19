@@ -63,6 +63,18 @@ class BrowserReplyPlan:
     invitation_evidence_known: bool = False
 
 
+@dataclass(frozen=True)
+class BrowserWelcomePlan:
+    id: int
+    account_id: str
+    follower_username: str
+    follower_key: str
+    reply_text: str
+    state: str
+    created_at_ms: int
+    updated_at_ms: int
+
+
 class BrowserConversationBusy(RuntimeError):
     def __init__(self, plan: BrowserReplyPlan) -> None:
         self.plan = plan
@@ -103,6 +115,19 @@ def _row_browser_reply_plan(row: sqlite3.Row) -> BrowserReplyPlan:
         source_inbound_fingerprint=str(row["source_inbound_fingerprint"]),
         invitation_included=bool(row["invitation_included"]),
         invitation_evidence_known=bool(row["invitation_evidence_known"]),
+    )
+
+
+def _row_browser_welcome_plan(row: sqlite3.Row) -> BrowserWelcomePlan:
+    return BrowserWelcomePlan(
+        id=int(row["id"]),
+        account_id=str(row["account_id"]),
+        follower_username=str(row["follower_username"]),
+        follower_key=str(row["follower_key"]),
+        reply_text=str(row["reply_text"]),
+        state=str(row["state"]),
+        created_at_ms=int(row["created_at_ms"]),
+        updated_at_ms=int(row["updated_at_ms"]),
     )
 
 
@@ -556,6 +581,27 @@ class Database:
                 """
                 CREATE INDEX IF NOT EXISTS browser_reply_plans_conversation_idx
                 ON browser_reply_plans(account_id, conversation_id)
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS browser_welcome_plans (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_id TEXT NOT NULL,
+                    follower_username TEXT NOT NULL,
+                    follower_key TEXT NOT NULL,
+                    reply_text TEXT NOT NULL,
+                    state TEXT NOT NULL DEFAULT 'planned',
+                    created_at_ms INTEGER NOT NULL,
+                    updated_at_ms INTEGER NOT NULL,
+                    UNIQUE(account_id, follower_username)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS browser_welcome_plans_pending_idx
+                ON browser_welcome_plans(account_id, state, id)
                 """
             )
             connection.execute(
@@ -2698,6 +2744,52 @@ class Database:
             )
             return cursor.rowcount == 1
 
+    def claim_browser_welcome_action(
+        self,
+        account_id: str,
+        action_key: str,
+        owner_id: str,
+        now_ms: int,
+        lease_seconds: int = 30,
+    ) -> bool:
+        _require_identity(account_id, action_key, owner_id)
+        prefix = "welcome_send:"
+        raw_plan_id = action_key[len(prefix) :] if action_key.startswith(prefix) else ""
+        if not raw_plan_id.isascii() or not raw_plan_id.isdecimal():
+            return False
+        plan_id = int(raw_plan_id)
+        if plan_id <= 0:
+            return False
+        expires_at_ms = int(now_ms) + max(1, int(lease_seconds)) * 1_000
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            plan = connection.execute(
+                """
+                SELECT state FROM browser_welcome_plans
+                WHERE id=? AND account_id=?
+                """,
+                (plan_id, account_id),
+            ).fetchone()
+            if plan is None or str(plan["state"]) != "planned":
+                return False
+            cursor = connection.execute(
+                """
+                INSERT INTO browser_action_leases(
+                    account_id, action_type, action_key, owner_id,
+                    lease_expires_at_ms, state
+                ) VALUES (?, 'welcome_send', ?, ?, ?, 'claimed')
+                ON CONFLICT(account_id, action_type, action_key) DO UPDATE SET
+                    owner_id=excluded.owner_id,
+                    lease_expires_at_ms=excluded.lease_expires_at_ms,
+                    state='claimed',
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE browser_action_leases.state != 'completed'
+                  AND browser_action_leases.lease_expires_at_ms <= ?
+                """,
+                (account_id, action_key, owner_id, expires_at_ms, int(now_ms)),
+            )
+            return cursor.rowcount == 1
+
     def record_lead_sale_command(
         self,
         account_id: str,
@@ -2904,6 +2996,119 @@ class Database:
                     expires_at_ms,
                     int(now_ms),
                 ),
+            )
+            return cursor.rowcount == 1
+
+    def completed_followback_username(
+        self, account_id: str, follower_key: str
+    ) -> str | None:
+        _require_identity(account_id, follower_key)
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT event.payload_json
+                FROM browser_action_leases AS action
+                JOIN web_events AS event
+                  ON event.account_id=action.account_id
+                 AND event.dedup_key=action.action_key
+                 AND event.event_type='followback_completed'
+                WHERE action.account_id=? AND action.action_type='followback'
+                  AND action.action_key=? AND action.state='completed'
+                ORDER BY event.id DESC LIMIT 1
+                """,
+                (account_id, follower_key),
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            payload = json.loads(str(row["payload_json"]))
+        except (TypeError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        username = payload.get("username")
+        return str(username).strip() if isinstance(username, str) else None
+
+    def browser_welcome_plan(
+        self, account_id: str, follower_username: str
+    ) -> BrowserWelcomePlan | None:
+        _require_identity(account_id, follower_username)
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM browser_welcome_plans
+                WHERE account_id=? AND follower_username=?
+                """,
+                (account_id, follower_username),
+            ).fetchone()
+        return None if row is None else _row_browser_welcome_plan(row)
+
+    def create_browser_welcome_plan(
+        self,
+        account_id: str,
+        follower_username: str,
+        follower_key: str,
+        reply_text: str,
+        *,
+        now_ms: int,
+    ) -> BrowserWelcomePlan:
+        _require_identity(account_id, follower_username, follower_key, reply_text)
+        if int(now_ms) < 0:
+            raise ValueError("welcome plan timestamp must be nonnegative")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO browser_welcome_plans(
+                    account_id, follower_username, follower_key, reply_text,
+                    state, created_at_ms, updated_at_ms
+                ) VALUES (?, ?, ?, ?, 'planned', ?, ?)
+                """,
+                (
+                    account_id,
+                    follower_username,
+                    follower_key,
+                    reply_text,
+                    int(now_ms),
+                    int(now_ms),
+                ),
+            )
+            row = connection.execute(
+                """
+                SELECT * FROM browser_welcome_plans
+                WHERE account_id=? AND follower_username=?
+                """,
+                (account_id, follower_username),
+            ).fetchone()
+        assert row is not None
+        return _row_browser_welcome_plan(row)
+
+    def next_browser_welcome_plan(self, account_id: str) -> BrowserWelcomePlan | None:
+        _require_identity(account_id)
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM browser_welcome_plans
+                WHERE account_id=? AND state='planned'
+                ORDER BY id LIMIT 1
+                """,
+                (account_id,),
+            ).fetchone()
+        return None if row is None else _row_browser_welcome_plan(row)
+
+    def record_browser_welcome_result(
+        self, account_id: str, plan_id: int, state: str, *, now_ms: int
+    ) -> bool:
+        _require_identity(account_id)
+        if state not in {"sent", "uncertain", "superseded"}:
+            raise ValueError(f"invalid browser welcome result state: {state}")
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE browser_welcome_plans SET state=?, updated_at_ms=?
+                WHERE id=? AND account_id=? AND state='planned'
+                """,
+                (state, int(now_ms), int(plan_id), account_id),
             )
             return cursor.rowcount == 1
 

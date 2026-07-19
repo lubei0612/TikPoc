@@ -206,6 +206,36 @@ def test_customer_service_prompt_does_not_repeat_ai_disclosure() -> None:
     assert "Do not repeat an AI or brand introduction" in system
 
 
+def test_new_follower_welcome_uses_default_language_without_private_channels() -> None:
+    requests = []
+
+    def opener(request, timeout):
+        requests.append(request)
+        return FakeResponse("A welcome")
+
+    client = AiReplyClient(
+        base_url="https://llm.example/v1",
+        api_key="secret",
+        model="reply-model",
+        opener=opener,
+    )
+
+    client.reply_conversation(
+        [],
+        brand_name="Sample Brand",
+        introduce_ai=True,
+        response_mode="new_follower_welcome",
+        welcome_language="English",
+    )
+
+    system = json.loads(requests[0].data)["messages"][0]["content"]
+    assert "Write the welcome in English" in system
+    assert "Sample Brand's AI customer-service assistant" in system
+    assert "Thank the person for following" in system
+    assert "one easy product-oriented question" in system
+    assert "Do not include WhatsApp, Telegram" in system
+
+
 def test_lead_reply_prompt_bounds_context_and_excludes_private_values() -> None:
     requests = []
 

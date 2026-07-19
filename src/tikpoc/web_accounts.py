@@ -39,6 +39,8 @@ class WebAccount:
     telegram: str = ""
     reply_tone: str = ""
     brand_name: str = ""
+    welcome_after_followback: bool = False
+    welcome_language: str = "English"
 
     def __post_init__(self) -> None:
         if self.mode is None:
@@ -161,6 +163,13 @@ class WebAccountRegistry:
                     telegram=str(item.get("telegram") or "").strip(),
                     reply_tone=str(item.get("reply_tone") or "").strip(),
                     brand_name=str(item.get("brand_name") or "").strip(),
+                    welcome_after_followback=_parse_bool(
+                        item.get("welcome_after_followback", False),
+                        field="welcome_after_followback",
+                    ),
+                    welcome_language=str(
+                        item.get("welcome_language") or "English"
+                    ).strip(),
                     offer_context=str(item.get("offer_context") or "").strip(),
                     faq_text=faq_text,
                     reply_language=str(item.get("reply_language") or "auto").strip(),

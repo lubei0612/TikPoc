@@ -58,6 +58,11 @@ class BrowserReplyResultRequest(BrowserIdentityRequest):
     state: Identifier
 
 
+class BrowserWelcomeResultRequest(BrowserIdentityRequest):
+    plan_id: int = Field(gt=0)
+    state: Literal["sent", "uncertain", "superseded"]
+
+
 class BrowserActionClaimRequest(BrowserIdentityRequest):
     action_type: Identifier
     action_key: Identifier

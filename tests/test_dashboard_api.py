@@ -13,8 +13,14 @@ from fastapi.testclient import TestClient
 
 from tikpoc.api import create_app
 from tikpoc.browser_dm import BrowserDmService, BrowserInbound, BrowserReply
+from tikpoc.browser_welcome import BrowserWelcomeService
 from tikpoc.dashboard import create_server
-from tikpoc.db import BrowserConversationBusy, BrowserReplyPlan, Database
+from tikpoc.db import (
+    BrowserConversationBusy,
+    BrowserReplyPlan,
+    BrowserWelcomePlan,
+    Database,
+)
 from tikpoc.web_accounts import WebAccount, WebAccountRegistry
 
 
@@ -140,6 +146,40 @@ class FakeBrowserDmService:
         return True
 
 
+class FakeBrowserWelcomeService:
+    def __init__(self) -> None:
+        self.followbacks: list[tuple[str, str, str]] = []
+        self.results: list[tuple[str, str, int, str]] = []
+
+    def plan_after_followback(
+        self, account_id: str, device_id: str, follower_key: str
+    ) -> BrowserWelcomePlan:
+        self.followbacks.append((account_id, device_id, follower_key))
+        return self.next_plan(account_id, device_id)
+
+    def next_plan(self, account_id: str, device_id: str) -> BrowserWelcomePlan:
+        return BrowserWelcomePlan(
+            id=23,
+            account_id=account_id,
+            follower_username="prospect",
+            follower_key="follower:key",
+            reply_text="Synthetic welcome",
+            state="planned",
+            created_at_ms=1_000,
+            updated_at_ms=1_000,
+        )
+
+    def record_result(
+        self,
+        account_id: str,
+        device_id: str,
+        plan_id: int,
+        state: str,
+    ) -> bool:
+        self.results.append((account_id, device_id, plan_id, state))
+        return True
+
+
 def _post_json(base_url: str, path: str, body: dict[str, object]):
     return urlopen(
         Request(
@@ -208,6 +248,12 @@ def _browser_post_bodies() -> dict[str, dict[str, object]]:
         "/api/browser-dm/reply-result": {
             **identity,
             "plan_id": 17,
+            "state": "sent",
+        },
+        "/api/browser-dm/welcome-plan": identity,
+        "/api/browser-dm/welcome-result": {
+            **identity,
+            "plan_id": 23,
             "state": "sent",
         },
         "/api/browser-actions/claim": {
@@ -758,6 +804,108 @@ def test_browser_dm_service_is_built_from_registry(tmp_path: Path) -> None:
         assert server.browser_dm_service.database is server.database
     finally:
         server.server_close()
+
+
+def test_browser_welcome_service_is_built_from_registry(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(tmp_path / "welcome.db", registry=_registry(tmp_path))
+    )
+
+    assert isinstance(client.app.state.browser_welcome_service, BrowserWelcomeService)
+
+
+def test_completed_followback_triggers_welcome_and_messages_api_reconciles_it(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "welcome-api.db"
+    welcome = FakeBrowserWelcomeService()
+    client = TestClient(
+        create_app(
+            database_path,
+            registry=_registry(tmp_path),
+            browser_welcome_service=welcome,
+        )
+    )
+    identity = _browser_identity()
+
+    assert client.post(
+        "/api/browser-events",
+        headers={"Origin": "https://www.tiktok.com"},
+        json={
+            **identity,
+            "event_type": "followback_completed",
+            "dedup_key": "follower:key",
+            "payload": {"username": "prospect"},
+        },
+    ).json() == {"accepted": True}
+    assert client.post(
+        "/api/browser-actions/claim",
+        headers={"Origin": "https://www.tiktok.com"},
+        json={
+            **identity,
+            "action_type": "followback",
+            "action_key": "follower:key",
+            "owner_id": "activity-tab",
+            "timestamp_ms": 1_000,
+        },
+    ).json() == {"claimed": True}
+    assert client.post(
+        "/api/browser-actions/result",
+        headers={"Origin": "https://www.tiktok.com"},
+        json={
+            **identity,
+            "action_type": "followback",
+            "action_key": "follower:key",
+            "owner_id": "activity-tab",
+            "state": "completed",
+        },
+    ).json() == {"recorded": True}
+    assert welcome.followbacks == [("account-01", "phone-01", "follower:key")]
+
+    plan = client.post(
+        "/api/browser-dm/welcome-plan",
+        headers={"Origin": "https://www.tiktok.com"},
+        json=identity,
+    )
+    result = client.post(
+        "/api/browser-dm/welcome-result",
+        headers={"Origin": "https://www.tiktok.com"},
+        json={**identity, "plan_id": 23, "state": "sent"},
+    )
+
+    assert plan.status_code == 200
+    assert plan.json() == {
+        "plan_id": 23,
+        "follower_username": "prospect",
+        "reply_text": "Synthetic welcome",
+    }
+    assert result.json() == {"recorded": True}
+    assert welcome.results == [("account-01", "phone-01", 23, "sent")]
+
+
+def test_welcome_endpoints_apply_visible_account_binding(tmp_path: Path) -> None:
+    welcome = FakeBrowserWelcomeService()
+    client = TestClient(
+        create_app(
+            tmp_path / "welcome-binding.db",
+            registry=_registry(tmp_path),
+            browser_welcome_service=welcome,
+        )
+    )
+    mismatched = {
+        **_browser_identity(),
+        "observed_username": "other_shop",
+        "binding_state": "mismatch",
+    }
+
+    response = client.post(
+        "/api/browser-dm/welcome-plan",
+        headers={"Origin": "https://www.tiktok.com"},
+        json=mismatched,
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"error": "binding_mismatch"}
 
 
 @pytest.mark.parametrize(

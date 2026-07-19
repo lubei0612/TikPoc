@@ -13,6 +13,7 @@ from .browser_dm import (
     BrowserDmService,
     BrowserInbound,
 )
+from .browser_welcome import BrowserWelcomeService
 from .db import Database
 from .messaging import AiReplyClient
 from .web_accounts import WebAccount, WebAccountRegistry
@@ -32,6 +33,7 @@ class DashboardServer(ThreadingHTTPServer):
         *,
         web_account_registry: WebAccountRegistry | None = None,
         browser_dm_service: BrowserDmService | None = None,
+        browser_welcome_service: BrowserWelcomeService | None = None,
         browser_extension_origins: Iterable[str] | None = None,
         tiktok_app_secret: str = "",
         webhook_max_age_seconds: int = 300,
@@ -48,6 +50,14 @@ class DashboardServer(ThreadingHTTPServer):
                 AiReplyClient.from_environment(),
             )
         self.browser_dm_service = browser_dm_service
+        if browser_welcome_service is None and web_account_registry is not None:
+            browser_welcome_service = BrowserWelcomeService(
+                self.database,
+                web_account_registry,
+                AiReplyClient.from_environment(),
+                clock=clock,
+            )
+        self.browser_welcome_service = browser_welcome_service
         if browser_extension_origins is None:
             browser_extension_origins = os.getenv(
                 "TIKPOC_BROWSER_EXTENSION_ORIGINS", ""
@@ -79,6 +89,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         "/api/browser-events",
         "/api/browser-dm/reply-plan",
         "/api/browser-dm/reply-result",
+        "/api/browser-dm/welcome-plan",
+        "/api/browser-dm/welcome-result",
         "/api/browser-actions/claim",
         "/api/browser-actions/result",
         "/api/browser-health",
@@ -134,6 +146,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         browser_handlers = {
             "/api/browser-dm/reply-plan": self._plan_browser_reply,
             "/api/browser-dm/reply-result": self._record_browser_reply_result,
+            "/api/browser-dm/welcome-plan": self._plan_browser_welcome,
+            "/api/browser-dm/welcome-result": self._record_browser_welcome_result,
             "/api/browser-actions/claim": self._claim_browser_action,
             "/api/browser-actions/result": self._record_browser_action_result,
             "/api/browser-health": self._record_browser_health,
@@ -348,6 +362,60 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         self._send_json({"recorded": recorded})
 
+    def _plan_browser_welcome(self) -> None:
+        service = self.server.browser_welcome_service
+        if service is None:
+            self._send_json(
+                {"error": "browser welcome service is not configured"},
+                HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return
+        try:
+            body = self._read_json_object()
+            account_id, device_id = self._browser_identity(body)
+            plan = service.next_plan(account_id, device_id)
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            self._send_invalid_browser_request()
+            return
+        if plan is None:
+            self.send_response(HTTPStatus.NO_CONTENT)
+            self._send_cors_headers()
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        self._send_json(
+            {
+                "plan_id": plan.id,
+                "follower_username": plan.follower_username,
+                "reply_text": plan.reply_text,
+            }
+        )
+
+    def _record_browser_welcome_result(self) -> None:
+        service = self.server.browser_welcome_service
+        if service is None:
+            self._send_json(
+                {"error": "browser welcome service is not configured"},
+                HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return
+        try:
+            body = self._read_json_object()
+            account_id, device_id = self._browser_identity(body)
+            state = self._required_text(body, "state")
+            if state not in {"sent", "uncertain", "superseded"}:
+                raise ValueError("state")
+            recorded = service.record_result(
+                account_id,
+                device_id,
+                self._required_integer(body, "plan_id", minimum=1),
+                state,
+            )
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            self._send_invalid_browser_request()
+            return
+        self._send_json({"recorded": recorded})
+
     def _claim_browser_action(self) -> None:
         try:
             body = self._read_json_object()
@@ -355,14 +423,27 @@ class DashboardHandler(BaseHTTPRequestHandler):
             lease_seconds = self._optional_integer(
                 body, "lease_seconds", default=30, minimum=1
             )
-            claimed = self.server.database.claim_browser_action(
-                account_id,
-                self._required_text(body, "action_type"),
-                self._required_text(body, "action_key"),
-                self._required_text(body, "owner_id"),
-                self._required_integer(body, "timestamp_ms", minimum=0),
-                lease_seconds,
-            )
+            action_type = self._required_text(body, "action_type")
+            action_key = self._required_text(body, "action_key")
+            owner_id = self._required_text(body, "owner_id")
+            timestamp_ms = self._required_integer(body, "timestamp_ms", minimum=0)
+            if action_type == "welcome_send":
+                claimed = self.server.database.claim_browser_welcome_action(
+                    account_id,
+                    action_key,
+                    owner_id,
+                    timestamp_ms,
+                    lease_seconds,
+                )
+            else:
+                claimed = self.server.database.claim_browser_action(
+                    account_id,
+                    action_type,
+                    action_key,
+                    owner_id,
+                    timestamp_ms,
+                    lease_seconds,
+                )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
             self._send_invalid_browser_request()
             return
@@ -371,14 +452,26 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def _record_browser_action_result(self) -> None:
         try:
             body = self._read_json_object()
-            account_id, _ = self._browser_identity(body)
+            account_id, device_id = self._browser_identity(body)
+            action_type = self._required_text(body, "action_type")
+            action_key = self._required_text(body, "action_key")
+            state = self._required_text(body, "state")
             recorded = self.server.database.finish_browser_action(
                 account_id,
-                self._required_text(body, "action_type"),
-                self._required_text(body, "action_key"),
+                action_type,
+                action_key,
                 self._required_text(body, "owner_id"),
-                self._required_text(body, "state"),
+                state,
             )
+            if (
+                recorded
+                and action_type == "followback"
+                and state == "completed"
+                and self.server.browser_welcome_service is not None
+            ):
+                self.server.browser_welcome_service.plan_after_followback(
+                    account_id, device_id, action_key
+                )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
             self._send_invalid_browser_request()
             return
@@ -503,6 +596,7 @@ def create_server(
     *,
     web_account_registry: WebAccountRegistry | None = None,
     browser_dm_service: BrowserDmService | None = None,
+    browser_welcome_service: BrowserWelcomeService | None = None,
     browser_extension_origins: Iterable[str] | None = None,
     tiktok_app_secret: str = "",
     webhook_max_age_seconds: int = 300,
@@ -513,6 +607,7 @@ def create_server(
         database_path,
         web_account_registry=web_account_registry,
         browser_dm_service=browser_dm_service,
+        browser_welcome_service=browser_welcome_service,
         browser_extension_origins=browser_extension_origins,
         tiktok_app_secret=tiktok_app_secret,
         webhook_max_age_seconds=webhook_max_age_seconds,

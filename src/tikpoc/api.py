@@ -29,6 +29,7 @@ from .api_models import (
     BrowserIdentityRequest,
     BrowserReplyPlanRequest,
     BrowserReplyResultRequest,
+    BrowserWelcomeResultRequest,
     DeviceEventRequest,
     LeadCommand,
     LeadSaleCommand,
@@ -41,6 +42,7 @@ from .api_models import (
     RoundCreateRequest,
 )
 from .browser_dm import BrowserConversationBusy, BrowserDmService, BrowserInbound
+from .browser_welcome import BrowserWelcomeService
 from .db import Database, OperatorCommandConflict
 from .messaging import RuntimeAiReplyClient, probe_openai_provider
 from .runtime_settings import (
@@ -62,6 +64,8 @@ _BROWSER_PATHS = {
     "/api/browser-events",
     "/api/browser-dm/reply-plan",
     "/api/browser-dm/reply-result",
+    "/api/browser-dm/welcome-plan",
+    "/api/browser-dm/welcome-result",
     "/api/browser-actions/claim",
     "/api/browser-actions/result",
     "/api/browser-health",
@@ -152,6 +156,7 @@ def create_app(
     *,
     registry: WebAccountRegistry | None = None,
     browser_dm_service: BrowserDmService | None = None,
+    browser_welcome_service: BrowserWelcomeService | None = None,
     browser_extension_origins: Iterable[str] | None = None,
     tiktok_app_secret: str = "",
     webhook_max_age_seconds: int = 300,
@@ -186,6 +191,8 @@ def create_app(
             faq_text=settings.faq_context or account.faq_text,
             reply_tone=settings.reply_tone or account.reply_tone,
             brand_name=settings.brand_name or account.brand_name,
+            welcome_after_followback=settings.welcome_after_followback,
+            welcome_language=settings.welcome_language or account.welcome_language,
         )
 
     if browser_dm_service is None and registry is not None:
@@ -193,6 +200,14 @@ def create_app(
             database,
             registry,
             RuntimeAiReplyClient(runtime_settings.provider_credentials),
+            account_overlay=runtime_account,
+        )
+    if browser_welcome_service is None and registry is not None:
+        browser_welcome_service = BrowserWelcomeService(
+            database,
+            registry,
+            RuntimeAiReplyClient(runtime_settings.provider_credentials),
+            clock=clock,
             account_overlay=runtime_account,
         )
     if browser_extension_origins is None:
@@ -215,6 +230,7 @@ def create_app(
     app.state.acquisition_service = acquisition_service
     app.state.registry = registry
     app.state.browser_dm_service = browser_dm_service
+    app.state.browser_welcome_service = browser_welcome_service
     app.state.runtime_settings = runtime_settings
     app.state.browser_origins = browser_origins
     app.state.tiktok_app_secret = tiktok_app_secret
@@ -422,6 +438,53 @@ def create_app(
             return _json({"error": "invalid browser request"}, 400)
         return _json({"recorded": recorded})
 
+    @app.post("/api/browser-dm/welcome-plan")
+    async def browser_welcome_plan(request: Request) -> Response:
+        if browser_welcome_service is None:
+            return _json({"error": "browser welcome service is not configured"}, 503)
+        try:
+            body = BrowserIdentityRequest.model_validate(await _json_object(request))
+            _browser_account(registry, body)
+            plan = await run_in_threadpool(
+                browser_welcome_service.next_plan,
+                body.account_id,
+                body.device_id,
+            )
+        except BrowserBindingConflict as error:
+            return _json({"error": error.error_code}, 409)
+        except (KeyError, TypeError, ValueError, ValidationError):
+            return _json({"error": "invalid browser request"}, 400)
+        if plan is None:
+            return Response(status_code=204)
+        return _json(
+            {
+                "plan_id": plan.id,
+                "follower_username": plan.follower_username,
+                "reply_text": plan.reply_text,
+            }
+        )
+
+    @app.post("/api/browser-dm/welcome-result")
+    async def browser_welcome_result(request: Request) -> JSONResponse:
+        if browser_welcome_service is None:
+            return _json({"error": "browser welcome service is not configured"}, 503)
+        try:
+            body = BrowserWelcomeResultRequest.model_validate(
+                await _json_object(request)
+            )
+            _browser_account(registry, body)
+            recorded = browser_welcome_service.record_result(
+                body.account_id,
+                body.device_id,
+                body.plan_id,
+                body.state,
+            )
+        except BrowserBindingConflict as error:
+            return _json({"error": error.error_code}, 409)
+        except (KeyError, TypeError, ValueError, ValidationError):
+            return _json({"error": "invalid browser request"}, 400)
+        return _json({"recorded": recorded})
+
     @app.post("/api/browser-actions/claim")
     async def browser_action_claim(request: Request) -> JSONResponse:
         try:
@@ -436,6 +499,14 @@ def create_app(
                     body.lease_seconds,
                     default_ai_enabled=(account.enabled and account.browser_dm_enabled),
                     account_ai_allowed=(account.enabled and account.browser_dm_enabled),
+                )
+            elif body.action_type == "welcome_send":
+                claimed = database.claim_browser_welcome_action(
+                    body.account_id,
+                    body.action_key,
+                    body.owner_id,
+                    body.timestamp_ms,
+                    body.lease_seconds,
                 )
             else:
                 settings = database.account_operator_settings(
@@ -478,6 +549,18 @@ def create_app(
                 body.owner_id,
                 body.state,
             )
+            if (
+                recorded
+                and body.action_type == "followback"
+                and body.state == "completed"
+                and browser_welcome_service is not None
+            ):
+                await run_in_threadpool(
+                    browser_welcome_service.plan_after_followback,
+                    body.account_id,
+                    body.device_id,
+                    body.action_key,
+                )
         except BrowserBindingConflict as error:
             return _json({"error": error.error_code}, 409)
         except (KeyError, TypeError, ValueError, ValidationError):
