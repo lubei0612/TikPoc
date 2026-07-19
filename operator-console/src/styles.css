@@ -301,6 +301,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .account-settings legend strong { white-space: nowrap; }
 .account-settings legend span { min-width: 0; color: var(--muted); font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .channel-fields { min-width: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.account-settings .settings-toggle { display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: 11px; }
+.account-settings .settings-toggle input { width: 15px; height: 15px; margin: 0; padding: 0; accent-color: var(--green); }
 .account-settings > .icon-command { width: auto; justify-self: start; padding: 0 12px; }
 
 @media (max-width: 900px) {

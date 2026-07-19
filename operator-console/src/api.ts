@@ -222,6 +222,9 @@ export interface AccountAutomationSettings {
   offer_context: string;
   faq_context: string;
   reply_tone: string;
+  brand_name: string;
+  welcome_after_followback: boolean;
+  welcome_language: string;
 }
 
 export interface SettingsSnapshot {

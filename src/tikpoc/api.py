@@ -185,6 +185,7 @@ def create_app(
             offer_context=settings.offer_context or account.offer_context,
             faq_text=settings.faq_context or account.faq_text,
             reply_tone=settings.reply_tone or account.reply_tone,
+            brand_name=settings.brand_name or account.brand_name,
         )
 
     if browser_dm_service is None and registry is not None:

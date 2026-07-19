@@ -82,7 +82,7 @@ export function SettingsView() {
   const updateAccount = (
     accountId: string,
     field: keyof AccountAutomationSettings,
-    value: string,
+    value: string | boolean,
   ) => setAccounts((current) => current.map((account) =>
     account.account_id === accountId ? { ...account, [field]: value } : account,
   ));
@@ -96,6 +96,9 @@ export function SettingsView() {
         offer_context: account.offer_context,
         faq_context: account.faq_context,
         reply_tone: account.reply_tone,
+        brand_name: account.brand_name,
+        welcome_after_followback: account.welcome_after_followback,
+        welcome_language: account.welcome_language,
       });
       setAccounts((current) => current.map((item) => item.account_id === account.account_id
         ? { ...account, ...saved }
@@ -136,6 +139,11 @@ export function SettingsView() {
         <div className="account-settings-grid">
           {accounts.map((account) => <fieldset className="account-settings" key={account.account_id} aria-label={`${account.account_id} 自动化配置`}>
             <legend><strong>{account.account_id}</strong><span>{account.browser_profile_label || "未命名 Profile"} · @{account.expected_tiktok_username || "未识别"}</span></legend>
+            <div className="channel-fields">
+              <label><span>品牌名称</span><input aria-label="品牌名称" value={account.brand_name} onChange={(event) => updateAccount(account.account_id, "brand_name", event.target.value)} /></label>
+              <label><span>默认欢迎语言</span><input aria-label="默认欢迎语言" value={account.welcome_language} onChange={(event) => updateAccount(account.account_id, "welcome_language", event.target.value)} /></label>
+            </div>
+            <label className="settings-toggle"><input aria-label="回关后发送欢迎私信" checked={account.welcome_after_followback} type="checkbox" onChange={(event) => updateAccount(account.account_id, "welcome_after_followback", event.target.checked)} /><span>回关后发送欢迎私信</span></label>
             <div className="channel-fields">
               <label><span>WhatsApp</span><input aria-label="WhatsApp" value={account.whatsapp} onChange={(event) => updateAccount(account.account_id, "whatsapp", event.target.value)} /></label>
               <label><span>Telegram</span><input aria-label="Telegram" value={account.telegram} onChange={(event) => updateAccount(account.account_id, "telegram", event.target.value)} /></label>

@@ -174,3 +174,16 @@ class AccountAutomationSettingsCommand(ApiRequest):
     reply_tone: Annotated[
         str, StringConstraints(strip_whitespace=True, max_length=500)
     ] = ""
+    brand_name: Annotated[
+        str, StringConstraints(strip_whitespace=True, max_length=200)
+    ] = ""
+    welcome_after_followback: bool = False
+    welcome_language: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True,
+            min_length=2,
+            max_length=50,
+            pattern=r"^[A-Za-z][A-Za-z -]*$",
+        ),
+    ] = "English"

@@ -19,6 +19,9 @@ const settingsPayload = {
       offer_context: "Synthetic offer",
       faq_context: "Synthetic FAQ",
       reply_tone: "Brief",
+      brand_name: "Sample Brand",
+      welcome_after_followback: true,
+      welcome_language: "English",
     },
     {
       account_id: "account-02",
@@ -29,6 +32,9 @@ const settingsPayload = {
       offer_context: "",
       faq_context: "",
       reply_tone: "",
+      brand_name: "",
+      welcome_after_followback: false,
+      welcome_language: "English",
     },
   ],
 };
@@ -84,6 +90,9 @@ it("saves one account without changing the other account form", async () => {
 
   render(<SettingsView />);
   const second = await screen.findByRole("group", { name: "account-02 自动化配置" });
+  fireEvent.change(within(second).getByLabelText("品牌名称"), { target: { value: "Second Brand" } });
+  fireEvent.change(within(second).getByLabelText("默认欢迎语言"), { target: { value: "French" } });
+  fireEvent.click(within(second).getByRole("checkbox", { name: "回关后发送欢迎私信" }));
   fireEvent.change(within(second).getByLabelText("WhatsApp"), { target: { value: "CONTACT_B" } });
   fireEvent.click(within(second).getByRole("button", { name: "保存账号配置" }));
 
@@ -91,8 +100,17 @@ it("saves one account without changing the other account form", async () => {
     "/api/settings/accounts/account-02",
     expect.objectContaining({ method: "POST", body: expect.stringContaining("CONTACT_B") }),
   ));
+  const request = vi.mocked(globalThis.fetch).mock.calls.find(([input, init]) =>
+    String(input).endsWith("/account-02") && init?.method === "POST",
+  );
+  expect(JSON.parse(String(request?.[1]?.body))).toEqual(expect.objectContaining({
+    brand_name: "Second Brand",
+    welcome_after_followback: true,
+    welcome_language: "French",
+  }));
   const first = screen.getByRole("group", { name: "account-01 自动化配置" });
   expect(within(first).getByLabelText("WhatsApp")).toHaveValue("CONTACT_A");
+  expect(within(first).getByLabelText("品牌名称")).toHaveValue("Sample Brand");
 });
 
 it("opens the settings route from the top navigation", async () => {

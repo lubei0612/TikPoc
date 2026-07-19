@@ -59,12 +59,29 @@ def test_account_settings_are_isolated_and_round_trip(tmp_path) -> None:
         offer_context="Offer A",
         faq_context="FAQ A",
         reply_tone="Brief",
+        brand_name="Sample Brand",
+        welcome_after_followback=True,
+        welcome_language="English",
     )
 
     store.save_account("account-01", first)
 
     assert store.account_settings("account-01") == first
     assert store.account_settings("account-02") == AccountRuntimeSettings()
+
+
+def test_legacy_account_settings_receive_welcome_defaults(tmp_path) -> None:
+    path = tmp_path / "operator-settings.json"
+    path.write_text(
+        '{"accounts":{"account-01":{"reply_tone":"Brief"}}}',
+        encoding="utf-8",
+    )
+
+    settings = RuntimeSettingsStore(path).account_settings("account-01")
+
+    assert settings.brand_name == ""
+    assert settings.welcome_after_followback is False
+    assert settings.welcome_language == "English"
 
 
 def test_environment_is_used_only_when_saved_provider_field_is_missing(

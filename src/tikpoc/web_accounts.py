@@ -38,6 +38,7 @@ class WebAccount:
     whatsapp: str = ""
     telegram: str = ""
     reply_tone: str = ""
+    brand_name: str = ""
 
     def __post_init__(self) -> None:
         if self.mode is None:
@@ -159,6 +160,7 @@ class WebAccountRegistry:
                     whatsapp=str(item.get("whatsapp") or "").strip(),
                     telegram=str(item.get("telegram") or "").strip(),
                     reply_tone=str(item.get("reply_tone") or "").strip(),
+                    brand_name=str(item.get("brand_name") or "").strip(),
                     offer_context=str(item.get("offer_context") or "").strip(),
                     faq_text=faq_text,
                     reply_language=str(item.get("reply_language") or "auto").strip(),

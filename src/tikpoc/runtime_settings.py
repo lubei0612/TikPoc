@@ -23,6 +23,9 @@ class AccountRuntimeSettings:
     offer_context: str = ""
     faq_context: str = ""
     reply_tone: str = ""
+    brand_name: str = ""
+    welcome_after_followback: bool = False
+    welcome_language: str = "English"
 
 
 class RuntimeSettingsStore:
@@ -123,11 +126,18 @@ class RuntimeSettingsStore:
         value = accounts.get(account_id, {}) if isinstance(accounts, dict) else {}
         if not isinstance(value, dict):
             value = {}
+        welcome_after_followback = value.get("welcome_after_followback", False)
+        if not isinstance(welcome_after_followback, bool):
+            welcome_after_followback = False
         return AccountRuntimeSettings(
-            **{
-                field: str(value.get(field) or "")
-                for field in AccountRuntimeSettings.__dataclass_fields__
-            }
+            whatsapp=str(value.get("whatsapp") or ""),
+            telegram=str(value.get("telegram") or ""),
+            offer_context=str(value.get("offer_context") or ""),
+            faq_context=str(value.get("faq_context") or ""),
+            reply_tone=str(value.get("reply_tone") or ""),
+            brand_name=str(value.get("brand_name") or ""),
+            welcome_after_followback=welcome_after_followback,
+            welcome_language=str(value.get("welcome_language") or "English"),
         )
 
     def save_account(

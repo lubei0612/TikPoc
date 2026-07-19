@@ -24,6 +24,9 @@ def _settings_client(
             offer_context="Synthetic offer",
             faq_context="Synthetic FAQ",
             reply_tone="Brief",
+            brand_name="Sample Brand",
+            welcome_after_followback=True,
+            welcome_language="English",
         ),
     )
     registry = WebAccountRegistry(
@@ -73,6 +76,9 @@ def test_settings_api_returns_editable_accounts_without_provider_key(tmp_path) -
         "offer_context": "Synthetic offer",
         "faq_context": "Synthetic FAQ",
         "reply_tone": "Brief",
+        "brand_name": "Sample Brand",
+        "welcome_after_followback": True,
+        "welcome_language": "English",
     }
     assert payload["accounts"][1]["whatsapp"] == ""
 
@@ -124,6 +130,9 @@ def test_account_settings_save_is_isolated_and_unknown_account_is_rejected(
         "offer_context": "Offer B",
         "faq_context": "FAQ B",
         "reply_tone": "Friendly and brief",
+        "brand_name": "Second Brand",
+        "welcome_after_followback": True,
+        "welcome_language": "French",
     }
 
     saved = client.post(
@@ -140,7 +149,11 @@ def test_account_settings_save_is_isolated_and_unknown_account_is_rejected(
     assert saved.status_code == 200
     assert saved.json()["account_id"] == "account-02"
     assert store.account_settings("account-02").whatsapp == "CONTACT_B"
+    assert store.account_settings("account-02").brand_name == "Second Brand"
+    assert store.account_settings("account-02").welcome_after_followback is True
+    assert store.account_settings("account-02").welcome_language == "French"
     assert store.account_settings("account-01").whatsapp == "CONTACT_A"
+    assert store.account_settings("account-01").brand_name == "Sample Brand"
     assert missing.status_code == 404
 
 
@@ -201,6 +214,9 @@ def test_browser_dm_account_overlay_reads_latest_saved_account_settings(
             offer_context="Updated offer",
             faq_context="Updated FAQ",
             reply_tone="Updated tone",
+            brand_name="Updated Brand",
+            welcome_after_followback=True,
+            welcome_language="Spanish",
         ),
     )
     updated = service._account("account-01", "phone-01")
@@ -208,6 +224,7 @@ def test_browser_dm_account_overlay_reads_latest_saved_account_settings(
     assert initial.whatsapp == "CONTACT_A"
     assert updated.whatsapp == "CONTACT_UPDATED"
     assert updated.offer_context == "Updated offer"
+    assert updated.brand_name == "Updated Brand"
 
 
 def test_lead_readiness_uses_runtime_private_channel_configuration(tmp_path) -> None:
