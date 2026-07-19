@@ -59,7 +59,13 @@ class ProxyGuard:
         self.timeout_seconds = max(1.0, float(timeout_seconds))
 
     def reconcile(self) -> tuple[ProxyHealth, ...]:
-        proxy_host = self.source_address(self.config.myt_host)
+        try:
+            proxy_host = self.source_address(self.config.myt_host)
+        except (OSError, ValueError):
+            return tuple(
+                ProxyHealth(device.device_id, "unknown", "source_unavailable", None)
+                for device in self.config.devices
+            )
         proxy_port = self.config.relay_upstream_port
         listener_ready = self.listener_probe("127.0.0.1", proxy_port)
         if not listener_ready:

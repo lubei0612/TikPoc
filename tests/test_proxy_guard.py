@@ -171,3 +171,27 @@ def test_proxy_guard_isolates_device_errors_without_exposing_stderr() -> None:
     assert rows[0].proxy_state == "device_unavailable"
     assert rows[1].proxy_state == "corrected"
     assert "private-token" not in repr(rows)
+
+
+def test_proxy_guard_records_source_address_outage_without_running_commands() -> None:
+    runner = FakeRunner()
+
+    def unavailable_source(_host):
+        raise OSError("private interface detail")
+
+    guard = ProxyGuard(
+        _config(),
+        adb_path=Path("/sdk/adb"),
+        source_address=unavailable_source,
+        listener_probe=lambda _host, _port: True,
+        runner=runner,
+    )
+
+    rows = guard.reconcile()
+
+    assert [row.proxy_state for row in rows] == [
+        "source_unavailable",
+        "source_unavailable",
+    ]
+    assert runner.commands == []
+    assert "private interface detail" not in repr(rows)
