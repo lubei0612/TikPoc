@@ -21,7 +21,7 @@
 - Modify: `tests/test_messaging.py`
 - Modify: `tests/test_browser_welcome.py`
 
-- [ ] **Step 1: Write failing conversion-policy tests**
+- [x] **Step 1: Write failing conversion-policy tests**
 
 Add parameterized cases proving explicit stop-contact in English, Chinese, German, Spanish, and French returns `ConversationStage.CLOSED` with `stop_contact_reason="explicit_opt_out"`. Add cases proving payment, refund, complaint, cancellation, unsupported-discount, and representative requests return a replyable `QUALIFIED` assessment with `profile_contact_reason` instead of `HUMAN_REQUIRED`. Keep a negative case such as `I am not interested in red; do you have black?` replyable.
 
@@ -43,13 +43,13 @@ def test_explicit_stop_contact_closes_without_reply(text: str) -> None:
     assert result.should_invite is False
 ```
 
-- [ ] **Step 2: Run focused policy tests and observe the expected failure**
+- [x] **Step 2: Run focused policy tests and observe the expected failure**
 
 Run: `uv run pytest tests/test_lead_conversion.py -q`
 
 Expected: new stop-contact fields/cases fail and former handoff cases still produce `human_required`.
 
-- [ ] **Step 3: Implement assessment fields and bounded multilingual stop patterns**
+- [x] **Step 3: Implement assessment fields and bounded multilingual stop patterns**
 
 Extend `ConversionAssessment` with defaulted `profile_contact_reason` and `stop_contact_reason`. Add explicit phrase patterns that require a contact/follow/message stop instruction, check them before terminal/handoff handling, and map `_human_reason(text)` to `QUALIFIED`, `should_invite=True`, and `profile_contact_reason=<reason>`. Preserve existing `CLOSED` behavior and monotonic terminal stages.
 
@@ -65,7 +65,7 @@ class ConversionAssessment:
     stop_contact_reason: str = ""
 ```
 
-- [ ] **Step 4: Write failing prompt and browser-plan tests**
+- [x] **Step 4: Write failing prompt and browser-plan tests**
 
 Add tests proving:
 
@@ -82,19 +82,19 @@ assert "pinned profile posts" in system
 assert "SECRET_DESTINATION" not in system
 ```
 
-- [ ] **Step 5: Run focused messaging and DM tests and observe the expected failure**
+- [x] **Step 5: Run focused messaging and DM tests and observe the expected failure**
 
 Run: `uv run pytest tests/test_messaging.py tests/test_browser_dm.py tests/test_browser_welcome.py -q`
 
 Expected: prompt assertions and autonomous former-handoff behavior fail.
 
-- [ ] **Step 6: Implement the product-interest and profile-contact prompt contract**
+- [x] **Step 6: Implement the product-interest and profile-contact prompt contract**
 
 Add `profile_contact_due` and `profile_contact_reason` arguments to `reply_conversation` and `_build_system_prompt`. For `new_follower_welcome`, require one direct product-interest question grounded in `offer_context`. For a due contact route, instruct the model to mention only the TikTok profile link or pinned-post contact details and never a stored direct destination or live-transfer promise.
 
 Update `BrowserDmService.plan` to pass no direct destination, set `profile_contact_due` from buying intent, meaningful-turn threshold, or a former handoff reason, and keep the 24-hour cooldown. A stop-contact assessment finalizes an empty `closed` plan before any AI call.
 
-- [ ] **Step 7: Run focused tests and commit**
+- [x] **Step 7: Run focused tests and commit**
 
 Run:
 
@@ -120,7 +120,7 @@ Commit only the listed files with `feat: make browser customer service autonomou
 - Modify: `tests/test_browser_dm.py`
 - Modify: `tests/test_browser_welcome.py`
 
-- [ ] **Step 1: Write failing database and service tests**
+- [x] **Step 1: Write failing database and service tests**
 
 Add tests proving that closing a participant for explicit opt-out:
 
@@ -140,13 +140,13 @@ assert database.browser_contact_allowed("account-01", "buyer.one") is False
 assert database.browser_contact_allowed("account-02", "buyer.one") is True
 ```
 
-- [ ] **Step 2: Run the focused tests and observe missing database methods**
+- [x] **Step 2: Run the focused tests and observe missing database methods**
 
 Run: `uv run pytest tests/test_web_events_db.py tests/test_dashboard_api.py tests/test_browser_dm.py tests/test_browser_welcome.py -q`
 
 Expected: tests fail because durable participant suppression is not implemented.
 
-- [ ] **Step 3: Add migration-safe suppression persistence**
+- [x] **Step 3: Add migration-safe suppression persistence**
 
 Create `browser_contact_suppressions` during `Database.migrate()` with primary key `(account_id, participant_username)`, normalized username, reason, and `created_at_ms`. Implement:
 
@@ -199,11 +199,11 @@ def browser_contact_allowed(
 
 The write uses `BEGIN IMMEDIATE`, inserts idempotently, and changes only matching `planned` welcome rows to `superseded`.
 
-- [ ] **Step 4: Connect suppression to DM and welcome services**
+- [x] **Step 4: Connect suppression to DM and welcome services**
 
 When `BrowserDmService.plan` receives `stop_contact_reason`, persist suppression before finalizing the closed reply plan. In `BrowserWelcomeService.plan_after_followback` and `next_plan`, skip suppressed participants without calling the AI provider or claiming a send lease. Add a database lookup from the account-scoped follower action key to the normalized username in its `new_follower` event; the FastAPI follow-back claim endpoint returns `claimed: false` when that username is suppressed.
 
-- [ ] **Step 5: Run focused tests and commit**
+- [x] **Step 5: Run focused tests and commit**
 
 Run:
 
@@ -231,7 +231,7 @@ Commit only the listed files with `feat: persist browser stop-contact suppressio
 - Modify: `tests/test_dashboard_api.py`
 - Modify: `tests/test_web_events_db.py`
 
-- [ ] **Step 1: Write failing route and watchdog tests**
+- [x] **Step 1: Write failing route and watchdog tests**
 
 Add Node tests proving:
 
@@ -243,7 +243,7 @@ Add Node tests proving:
 - overlapping watchdog and mutation triggers never execute two workflow scans concurrently;
 - a closed Activity panel can be reopened after the bounded reopen interval, but is not clicked repeatedly while visible.
 
-- [ ] **Step 2: Run Node tests and observe route/watchdog failures**
+- [x] **Step 2: Run Node tests and observe route/watchdog failures**
 
 Run:
 
@@ -254,13 +254,13 @@ node --test chrome-event-bridge/content.test.js chrome-event-bridge/dm-content.t
 
 Expected: Business Suite manifest coverage and watchdog scheduling assertions fail.
 
-- [ ] **Step 3: Implement bounded watchdog scheduling**
+- [x] **Step 3: Implement bounded watchdog scheduling**
 
 Update the manifest with a second DM match for Business Suite. In both content scripts, keep the existing debounced scheduler and add one `setInterval(schedule, 15_000)` watchdog. A health tick must report health and then schedule a scan. Add a `visibilitychange` listener and compare the current pathname during watchdog execution to detect same-document route changes.
 
 For Activity, replace the one-lifetime `activityOpenedByBridge` gate with visible-panel and elapsed-time checks so a closed panel can be reopened after 15 seconds without click loops. Keep `scanning`/promise-queue serialization and existing action leases unchanged.
 
-- [ ] **Step 4: Write failing scan-health persistence tests**
+- [x] **Step 4: Write failing scan-health persistence tests**
 
 Extend health payload tests with `last_scan_at_ms`, `last_success_at_ms`, and `scan_state`, without message content. Add migration/API tests proving older databases receive the columns and out-of-order heartbeats cannot move scan timestamps backwards.
 
@@ -274,11 +274,11 @@ assert health == {
 }
 ```
 
-- [ ] **Step 5: Implement scan-health fields end to end**
+- [x] **Step 5: Implement scan-health fields end to end**
 
 Add bounded `scan_state` plus nonnegative scan timestamps to `BrowserHealthRequest`. Add migration-safe columns to `browser_account_health`, persist them in `upsert_browser_health`, and return them from `browser_health_snapshot`. Content scripts update in-memory scan state only after serialized scan completion and report it on the next health post. An exception advances `last_scan_at_ms` but not `last_success_at_ms`.
 
-- [ ] **Step 6: Run focused browser and Python tests and commit**
+- [x] **Step 6: Run focused browser and Python tests and commit**
 
 Run:
 
@@ -300,7 +300,7 @@ Commit only the listed files with `fix: keep browser lead observers scanning`.
 - Modify: `docs/web-engagement-runbook.md`
 - Modify: `AGENTS.md`
 
-- [ ] **Step 1: Run the complete applicable automated regression**
+- [x] **Step 1: Run the complete applicable automated regression**
 
 Run:
 
@@ -352,4 +352,3 @@ git status --short --branch
 ```
 
 Commit only the implementation-owned documentation and any remaining task files with `docs: record autonomous browser customer service acceptance`.
-
