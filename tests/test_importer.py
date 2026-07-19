@@ -90,6 +90,36 @@ def test_read_comment_export_requires_identity_columns(tmp_path: Path) -> None:
         read_targets(source)
 
 
+def test_read_deduplicated_user_export_maps_prescreened_profiles(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "all_users_deduped.csv"
+    source.write_text(
+        "username,nickname,user_id,sec_uid,signature,verified,private,"
+        "follower_count,following_count,video_count,heart_count,region,"
+        "avatar_url,sources\n"
+        "@Sample,Sample Name,707,sec-1,hello,false,false,10,20,5,100,US,,"
+        "comments:source\n",
+        encoding="utf-8",
+    )
+
+    result = read_targets(source)
+
+    assert result.skipped_duplicates == 0
+    assert result.skipped_invalid == 0
+    assert len(result.targets) == 1
+    target = result.targets[0]
+    assert target.target_id == "707"
+    assert target.username == "sample"
+    assert target.sec_uid == "sec-1"
+    assert target.profile_url == "https://www.tiktok.com/@sample"
+    assert target.source_video_id == ""
+    assert target.profile_metrics == ProfileMetrics(20, 10, 5)
+    assert target.private_account is False
+    assert target.identity_key == "sec:sec-1"
+    assert target.source_line_numbers == (2,)
+
+
 def test_read_follower_workbook_maps_prescreened_profile_snapshot(
     tmp_path: Path,
 ) -> None:
