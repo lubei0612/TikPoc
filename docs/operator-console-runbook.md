@@ -97,6 +97,27 @@ Returning a conversation to AI requires an eligible nonterminal state, account
 AI enabled, and no unresolved send. Conversation stages do not regress from
 terminal or escalated states.
 
+## Brand Service And Follower Welcome
+
+The `/settings` account form also controls the public brand name, the default
+welcome language, and `回关后发送欢迎私信`. The default language is used only
+when a follower has not written any text; ordinary replies follow the sender's
+language. Put commercial facts in the offer and FAQ fields and keep the reply
+tone focused on warm, professional customer service.
+
+The first autonomous message introduces the configured brand's AI service role
+once. Later replies acknowledge the customer's actual intent, answer with
+confirmed facts, ask at most one easy question, and state the next step. Private
+destinations remain hidden until the existing buying-signal and channel-choice
+policy selects one channel.
+
+When follower welcome is enabled, a welcome plan is created only after the
+matching visible follow-back is confirmed. Messages opens the exact normalized
+username, suppresses the generic welcome when conversation history already
+exists, and requires an exact outbound bubble before recording `sent`.
+`uncertain` or `superseded` plans are not immediately resent. Turn off the
+welcome checkbox to pause new welcomes without disabling inbound AI replies.
+
 ## Analytics
 
 Analytics deliberately separates measured evidence from projections:
@@ -125,3 +146,7 @@ A short synthetic run or unit suite is not proof of the daily production goal.
   restart. Keep destinations and keys out of logs, screenshots, and commits.
 - **Manual plan remains pending:** inspect browser observer health and outbound
   reconciliation. Do not create a second plan for the same inbound fingerprint.
+- **Follower was followed back but not welcomed:** confirm the account welcome
+  checkbox, Messages health, exact follower username, and welcome-plan/action
+  state. An ambiguous conversation or unconfirmed outbound bubble stays
+  `uncertain` rather than sending into another thread.

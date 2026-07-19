@@ -440,12 +440,34 @@ Completed on `feat/web-lead-conversion`:
   separate session; no Supabase implementation is part of this checkpoint.
 - Full-repository Ruff format check has a pre-existing 8-file formatting
   baseline; do not reformat those unrelated files as part of a narrow task.
+- Warm professional brand customer service and verified new-follower welcome
+  behavior are implemented. Per-account settings now include brand name,
+  default welcome language, and an explicit post-follow-back welcome switch.
+- The first autonomous message introduces the configured brand AI service role
+  once. Replies follow acknowledge/assist/advance/assure behavior, answer before
+  qualifying, use one to three short sentences, and ask at most one question.
+- A completed account-scoped follow-back plus its matching follower event creates
+  one durable welcome plan per normalized follower username. Messages gives
+  inbound work priority, uses an exclusive `welcome_send` lease, requires an
+  exact target participant, suppresses welcomes for existing conversations, and
+  reconciles the exact visible outbound bubble.
+- Local IKUN brand, English welcome, business facts, and approved reply tone are
+  stored only in the ignored owner-only settings file. Existing provider and
+  private destinations were preserved and were not printed or committed.
+- Fresh automated verification after the customer-service welcome change passed
+  Python `642`, Chrome extension `76`, frontend `35`, production console build,
+  Android build, Ruff check, touched-file format, JavaScript syntax, and
+  `git diff --check`.
+- Real two-account welcome sends and the remaining automatic reply, reload,
+  channel choice, invitation, contact-capture, and human-handoff gates still
+  require fresh visible evidence. Do not infer them from automated regression.
 
 Outstanding at the current checkpoint:
 
 1. Run the fresh 500-target slot-1 pacing/performance gate and record measured
    stage mean/P90 separately from projections.
-2. Complete the remaining Multi-account Browser Task 6 automatic reply,
+2. Complete the remaining Multi-account Browser Task 6 verified post-follow
+   welcome, automatic reply,
    reload-idempotency, channel-preference, single-destination invitation,
    contact-stage, human-handoff, and fresh follow-back live gates. Mutual follow,
    bidirectional manual DM delivery, and `4/4` browser health already passed; do

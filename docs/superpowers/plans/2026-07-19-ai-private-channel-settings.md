@@ -289,6 +289,15 @@ git commit -m "feat: configure AI automation from the console"
 
 ### Task 4: Local Configuration, Regression, And Real Two-Account Acceptance
 
+**2026-07-19 continuation:** The operator approved the warm professional IKUN
+AI-service style and replaced the earlier follow-only rule with one welcome DM
+after a verified follow-back. The additive design and TDD plan are in
+`docs/superpowers/specs/2026-07-19-customer-service-welcome-design.md` and
+`docs/superpowers/plans/2026-07-19-customer-service-welcome.md`. Implementation
+commits are `e43e52d`, `26aab59`, `6ba3111`, and `190dac0`. Automated verification
+passes Python `642`, Chrome `76`, and frontend `35`; visible two-account welcome
+and conversation-stage gates remain open.
+
 **Files:**
 - Modify locally only: `config/secrets/operator-settings.json`
 - Modify: `docs/web-engagement-runbook.md`
