@@ -22,7 +22,10 @@
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://www.tiktok.com/messages*"],
+      "matches": [
+        "https://www.tiktok.com/messages*",
+        "https://www.tiktok.com/business-suite/messages*"
+      ],
       "js": ["dm-core.js", "binding-core.js", "options-core.js", "dm-content.js"],
       "run_at": "document_idle",
       "all_frames": true

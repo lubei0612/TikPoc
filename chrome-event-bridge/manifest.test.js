@@ -11,7 +11,10 @@ test("injects the DM bridge into same-origin Messages frames only", () => {
     entry.js.includes("dm-content.js"),
   );
 
-  assert.deepEqual(dmEntry.matches, ["https://www.tiktok.com/messages*"]);
+  assert.deepEqual(dmEntry.matches, [
+    "https://www.tiktok.com/messages*",
+    "https://www.tiktok.com/business-suite/messages*",
+  ]);
   assert.equal(dmEntry.all_frames, true);
   assert.equal(dmEntry.js.includes("content.js"), false);
 
