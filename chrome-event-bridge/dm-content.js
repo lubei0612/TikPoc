@@ -244,7 +244,6 @@
       return { matched: false, existingMessages: false };
     }
     let selected = exactUsernameElement(conversationRows(documentValue), expected);
-    let existingConversation = Boolean(selected);
     if (!selected) {
       const controls = documentValue.querySelectorAll(
         "button[aria-label], [role='button'][aria-label], [data-e2e*='new-chat'], " +
@@ -275,17 +274,13 @@
         "[role='dialog'] [role='listitem'], [role='dialog'] a[href*='/@']",
       );
       selected = exactUsernameElement(resultRows, expected);
-      existingConversation = false;
     }
     if (!selected || !(await openConversation(selected.element))) {
       return { matched: false, existingMessages: false };
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
     const active = activeConversationState(documentValue);
-    return {
-      matched: active.participant === expected,
-      existingMessages: existingConversation && active.messageCount > 0,
-    };
+    return core.welcomeTargetState(expected, active);
   }
 
   function bubbleDirection(bubble, textNode) {

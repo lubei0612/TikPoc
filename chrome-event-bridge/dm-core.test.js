@@ -139,3 +139,18 @@ test("selects one exact normalized username and rejects ambiguity", () => {
     null,
   );
 });
+
+test("suppresses a welcome whenever the exact target already has messages", () => {
+  assert.deepEqual(
+    dm.welcomeTargetState("buyer.one", { participant: "@Buyer.One", messageCount: 1 }),
+    { matched: true, existingMessages: true },
+  );
+  assert.deepEqual(
+    dm.welcomeTargetState("buyer.one", { participant: "buyer.one", messageCount: 0 }),
+    { matched: true, existingMessages: false },
+  );
+  assert.deepEqual(
+    dm.welcomeTargetState("buyer.one", { participant: "other", messageCount: 3 }),
+    { matched: false, existingMessages: true },
+  );
+});

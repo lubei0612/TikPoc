@@ -41,6 +41,14 @@
     return matches.length === 1 ? matches[0] : null;
   }
 
+  function welcomeTargetState(expectedUsername, active) {
+    return {
+      matched: normalizedUsername(active && active.participant) ===
+        normalizedUsername(expectedUsername),
+      existingMessages: Number(active && active.messageCount || 0) > 0,
+    };
+  }
+
   function conversationKey(value, username) {
     try {
       const url = new URL(String(value || ""));
@@ -150,6 +158,7 @@
     normalizeText,
     normalizedUsername,
     findExactUsernameCandidate,
+    welcomeTargetState,
     conversationKey,
     isActionableInbound,
     fingerprintMessage,
