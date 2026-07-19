@@ -56,6 +56,7 @@ def registry_with_browser_account(**overrides: object) -> WebAccountRegistry:
         "fallback_acknowledgement": "Thanks for your message.",
         "browser_dm_enabled": True,
         "enabled": True,
+        "brand_name": "Sample Brand",
     }
     values.update(overrides)
     return WebAccountRegistry(
@@ -127,6 +128,8 @@ def test_new_plan_passes_account_context_and_advances_inbound_state_once(
         "should_invite": True,
         "ask_private_channel_preference": False,
         "reply_tone": "",
+        "brand_name": "Sample Brand",
+        "introduce_ai": True,
         "fallback": "Thanks for your message.",
         "max_history_messages": 12,
     }
@@ -134,6 +137,39 @@ def test_new_plan_passes_account_context_and_advances_inbound_state_once(
     assert state.meaningful_turns == 1
     assert state.auto_reply_count == 0
     assert state.last_invited_at_ms == 0
+
+
+def test_existing_outbound_message_suppresses_ai_introduction(tmp_path: Path) -> None:
+    database = Database(tmp_path / "db.sqlite")
+    database.migrate()
+    database.append_web_message(
+        "account-01",
+        "conversation-01",
+        "outbound-existing",
+        direction="outbound",
+        message_type="TEXT",
+        text="Existing service reply",
+        timestamp_ms=1_000,
+    )
+    ai = FakeReplyClient()
+    service = BrowserDmService(
+        database, registry_with_browser_account(), ai, clock=lambda: 100.0
+    )
+
+    service.plan(
+        BrowserInbound(
+            "account-01",
+            "phone-01",
+            "conversation-01",
+            "fp-later-turn",
+            "buyer",
+            "Can I order one?",
+            99_000,
+        )
+    )
+
+    assert ai.calls[0][1]["brand_name"] == "Sample Brand"
+    assert ai.calls[0][1]["introduce_ai"] is False
 
 
 def test_reply_budget_closes_without_calling_ai(tmp_path: Path) -> None:

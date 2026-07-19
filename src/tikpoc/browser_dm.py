@@ -260,6 +260,9 @@ class BrowserDmService:
             history = self.database.recent_web_messages(
                 account.account_id, plan.conversation_id, limit=12
             )
+            introduce_ai = not any(
+                item.get("direction") == "outbound" for item in history
+            )
             reply_text = self.reply_client.reply_conversation(
                 history,
                 private_channel_hint=private_channel_hint,
@@ -269,6 +272,8 @@ class BrowserDmService:
                 should_invite=configured_invite,
                 ask_private_channel_preference=ask_channel_preference,
                 reply_tone=account.reply_tone,
+                brand_name=account.brand_name,
+                introduce_ai=introduce_ai,
                 fallback=account.fallback_acknowledgement,
                 max_history_messages=12,
             )

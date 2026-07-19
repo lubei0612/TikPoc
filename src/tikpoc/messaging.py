@@ -11,7 +11,10 @@ _PROMPT_CONTEXT_LIMIT = 3_000
 _PROMPT_DESTINATION_LIMIT = 500
 _PROMPT_STAGE_LIMIT = 32
 _SYSTEM_PROMPT_LIMIT = 8_000
-_DEFAULT_FALLBACK = "Thanks for your message. How can I help?"
+_DEFAULT_FALLBACK = (
+    "Thank you for contacting us. I'm the AI customer-service assistant. "
+    "Which product details would you like to know first?"
+)
 
 
 def probe_openai_provider(
@@ -69,11 +72,30 @@ def _build_system_prompt(
     private_channel_hint: str,
     ask_private_channel_preference: bool,
     reply_tone: str,
+    brand_name: str,
+    introduce_ai: bool,
+    response_mode: str,
+    welcome_language: str,
 ) -> str:
+    if response_mode not in {"conversation", "new_follower_welcome"}:
+        raise ValueError("invalid AI response mode")
     parts = [
-        "Reply to the TikTok sender in the same language they use.",
-        "Be natural and concise, answer the sender's actual question, and ask at "
-        "most one qualifying question.",
+        (
+            "Reply to the TikTok sender in the same language they use."
+            if response_mode == "conversation"
+            else "Write the welcome in "
+            + _bounded_prompt_fragment(welcome_language, 50)
+            + "."
+        ),
+        "Act as a warm, professional brand customer-service assistant. Write one "
+        "to three short sentences and ask at most one question.",
+        "Use this service flow naturally, without headings: Acknowledge the "
+        "customer's specific intent; Assist with the most useful confirmed answer; "
+        "Advance with one low-effort question only when needed; Assure them of the "
+        "next step and close warmly.",
+        "Answer the sender's actual question before qualifying. Avoid generic "
+        "openers, repeated thanks, empty offers to help, multiple questions, and "
+        "aggressive sales language.",
         "Conversation stage: "
         + _bounded_prompt_fragment(conversation_stage, _PROMPT_STAGE_LIMIT),
         "Account offer facts: "
@@ -83,6 +105,26 @@ def _build_system_prompt(
         "inventory, delivery promises, discounts, payment instructions, refund "
         "decisions, links, or contact details.",
     ]
+    brand = _bounded_prompt_fragment(brand_name, 200)
+    if introduce_ai:
+        identity = (
+            f"{brand}'s AI customer-service assistant"
+            if brand
+            else "an AI customer-service assistant"
+        )
+        parts.append(
+            f"On the first reply only, briefly introduce yourself as {identity}. "
+            "Keep the disclosure to one clause and still answer or advance the "
+            "customer's request."
+        )
+    else:
+        parts.append("Do not repeat an AI or brand introduction in this reply.")
+    if response_mode == "new_follower_welcome":
+        parts.append(
+            "Thank the person for following, introduce the AI service role, and ask "
+            "one easy product-oriented question. Do not include WhatsApp, Telegram, "
+            "or any private-channel destination."
+        )
     tone = _bounded_prompt_fragment(reply_tone, 500)
     if tone:
         parts.append(f"Account reply tone: {tone}")
@@ -160,6 +202,10 @@ class AiReplyClient:
         should_invite: bool = False,
         ask_private_channel_preference: bool = False,
         reply_tone: str = "",
+        brand_name: str = "",
+        introduce_ai: bool = False,
+        response_mode: str = "conversation",
+        welcome_language: str = "English",
         fallback: str | None = None,
         max_history_messages: int = 12,
         max_characters: int = 300,
@@ -193,6 +239,10 @@ class AiReplyClient:
                         private_channel_hint=private_channel_hint,
                         ask_private_channel_preference=ask_private_channel_preference,
                         reply_tone=reply_tone,
+                        brand_name=brand_name,
+                        introduce_ai=introduce_ai,
+                        response_mode=response_mode,
+                        welcome_language=welcome_language,
                     ),
                 },
                 *conversation,

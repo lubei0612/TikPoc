@@ -73,7 +73,13 @@ def test_ai_reply_uses_openai_compatible_chat_endpoint() -> None:
 def test_ai_reply_falls_back_when_not_configured() -> None:
     client = AiReplyClient(base_url="", api_key="", model="")
 
-    assert client.reply("Hello") == "Thanks for your message. How can I help?"
+    assert (
+        client.reply("Hello")
+        == (
+            "Thank you for contacting us. I'm the AI customer-service assistant. "
+            "Which product details would you like to know first?"
+        )[:160]
+    )
 
 
 def test_runtime_ai_client_loads_latest_provider_for_each_request(
@@ -96,7 +102,7 @@ def test_runtime_ai_client_loads_latest_provider_for_each_request(
 
     store = RuntimeSettingsStore(tmp_path / "operator-settings.json")
     client = RuntimeAiReplyClient(store.provider_credentials, opener=opener)
-    assert client.reply("Hello") == "Thanks for your message. How can I help?"
+    assert client.reply("Hello").startswith("Thank you for contacting us.")
 
     store.save_provider(
         base_url="https://provider.example/v1",
@@ -136,6 +142,68 @@ def test_lead_reply_prompt_contains_offer_faq_stage_and_invite() -> None:
     assert "Black bags are available in the current catalog." in system
     assert "Shipping usually takes 5-7 days." in system
     assert "WhatsApp: +1 555 0100" in system
+
+
+def test_customer_service_prompt_uses_service_rubric_and_first_turn_disclosure() -> (
+    None
+):
+    requests = []
+
+    def opener(request, timeout):
+        requests.append(request)
+        return FakeResponse("A helpful answer")
+
+    client = AiReplyClient(
+        base_url="https://llm.example/v1",
+        api_key="secret",
+        model="reply-model",
+        opener=opener,
+    )
+
+    client.reply_conversation(
+        [{"direction": "inbound", "text": "Can I order one?"}],
+        brand_name="Sample Brand",
+        introduce_ai=True,
+    )
+
+    system = json.loads(requests[0].data)["messages"][0]["content"]
+    lowered = system.lower()
+    assert all(
+        word in lowered for word in ("acknowledge", "assist", "advance", "assure")
+    )
+    assert "one to three short sentences" in lowered
+    assert "at most one question" in lowered
+    assert "answer" in lowered and "before" in lowered
+    assert "Sample Brand's AI customer-service assistant" in system
+
+
+def test_customer_service_prompt_does_not_repeat_ai_disclosure() -> None:
+    requests = []
+
+    def opener(request, timeout):
+        requests.append(request)
+        return FakeResponse("A helpful answer")
+
+    client = AiReplyClient(
+        base_url="https://llm.example/v1",
+        api_key="secret",
+        model="reply-model",
+        opener=opener,
+    )
+
+    client.reply_conversation(
+        [
+            {"direction": "inbound", "text": "Hello"},
+            {"direction": "outbound", "text": "Welcome"},
+            {"direction": "inbound", "text": "Can I order one?"},
+        ],
+        brand_name="Sample Brand",
+        introduce_ai=False,
+    )
+
+    system = json.loads(requests[0].data)["messages"][0]["content"]
+    assert "Sample Brand's AI customer-service assistant" not in system
+    assert "Do not repeat an AI or brand introduction" in system
 
 
 def test_lead_reply_prompt_bounds_context_and_excludes_private_values() -> None:
@@ -269,7 +337,7 @@ def test_reply_conversation_uses_builtin_fallback_for_blank_values() -> None:
         max_characters=10,
     )
 
-    assert reply == "Thanks for"
+    assert reply == "Thank you "
 
 
 @pytest.mark.parametrize("exception_type", [TypeError, ValueError])
