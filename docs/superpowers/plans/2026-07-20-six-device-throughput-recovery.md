@@ -60,3 +60,17 @@ metrics as an inaccessible trace.
 - Run focused tests, full regression, Ruff, and diff checks.
 - Run a fresh six-device canary from the same durable checkpoint and apply the
   existing 400-per-device-hour acceptance gate.
+
+## Task 7: Reuse Selected Semantic Post Elements
+
+- Change the existing adapter test to require one post-container query across
+  list, deterministic selection, and click.
+- Add failing tests proving route, back, restart, and consumption invalidate the
+  semantic element cache.
+- Cache only Appium WebElements from the current visible profile and consume the
+  cache during the immediately following video open.
+- Preserve semantic click and visible Share-control verification; propagate
+  stale or missing-control failures for durable defer.
+- Run focused tests, full regression, Ruff, and diff checks.
+- Run another clean five-minute six-device canary from the same checkpoint and
+  apply the existing throughput and integrity gates.

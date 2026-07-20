@@ -87,3 +87,20 @@ state remains the terminal acceptance condition.
 Do not use coordinates, cached XML, or an HTTP/Appium command response as action
 confirmation. A missing or ambiguous combined result remains uncertain, and a
 visible repost share surface still distinguishes unavailable from uncertain.
+
+## Third Canary: Reuse Semantic Post Elements
+
+The semantic action query canary completed 217 assignments in 354.872 seconds,
+or 366.9 assignments per device-hour. All 26 completed interaction attempts were
+confirmed and action mean fell to 9.6 seconds, but video mean remained 10.1
+seconds. The adapter currently queries the same visible post containers once to
+produce random-selection keys and again immediately before clicking the selected
+post.
+
+Cache the visible semantic WebElement tuple returned by `list_video_keys()` and
+consume it in the immediately following `open_and_confirm_video()` call. The
+selected element must still be clicked through Appium and the visible Share
+control must still confirm that the video opened. Invalidate the tuple on every
+route, back, restart, and after consumption. A stale element or missing visible
+Share control remains an explicit deferred failure; do not fall back to bounds,
+coordinates, compressed XML, or an unverified click result.
