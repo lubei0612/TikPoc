@@ -1,6 +1,11 @@
 from tests.test_profile_parser import PROFILE_XML
 import pytest
-from tikpoc.acquisition_models import ActionResult, OutcomeKind, PoolTarget
+from tikpoc.acquisition_models import (
+    ActionResult,
+    OutcomeKind,
+    PoolTarget,
+    ProfileAccessState,
+)
 from io import BytesIO
 
 from PIL import Image
@@ -179,6 +184,41 @@ class CurrentProfileMarkerDriver(FakeDriver):
             return [FakeElement("@sample")]
         if value == "com.zhiliaoapp.musically:id/s7e":
             return []
+        return super().find_elements(by, value)
+
+
+class CachedProfileObservationDriver(FakeDriver):
+    def __init__(self, page_source: str = PROFILE_XML) -> None:
+        super().__init__()
+        self._page_source = page_source
+        self.page_source_reads = 0
+        self.current_username = "previous"
+
+    @property
+    def page_source(self) -> str:
+        self.page_source_reads += 1
+        return self._page_source
+
+    @page_source.setter
+    def page_source(self, value: str) -> None:
+        self._page_source = value
+
+    def execute_script(self, name: str, arguments: dict[str, str]) -> None:
+        super().execute_script(name, arguments)
+        if str(arguments.get("url") or "").startswith("snssdk1233://user/profile/"):
+            self.current_username = "sample"
+
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if by == "id" and value in {
+            "com.zhiliaoapp.musically:id/s7e",
+            "com.zhiliaoapp.musically:id/rgn",
+        }:
+            return [FakeElement(f"@{self.current_username}")]
+        if by == "id" and value in {
+            "com.zhiliaoapp.musically:id/s5x",
+            "com.zhiliaoapp.musically:id/rfc",
+        }:
+            return [FakeElement("Following")]
         return super().find_elements(by, value)
 
 
@@ -599,6 +639,86 @@ def test_appium_device_retries_deep_link_while_waiting_for_profile_marker() -> N
             },
         )
     ]
+
+
+def test_profile_readiness_snapshot_is_reused_for_observation() -> None:
+    driver = CachedProfileObservationDriver()
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="uid:123",
+        target_id="123",
+        sec_uid="sec-1",
+        username="sample",
+        profile_url="",
+        source_video_id="",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    device.open_target(target)
+    device.confirm_profile_identity(target)
+    observation = device.read_profile_observation()
+
+    assert observation.observed_username == "sample"
+    assert observation.metrics == ProfileMetrics(12, 10, 4)
+    assert observation.access_state is ProfileAccessState.PUBLIC
+    assert driver.page_source_reads == 1
+
+
+def test_opening_video_invalidates_reusable_profile_snapshot() -> None:
+    driver = CachedProfileObservationDriver()
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="uid:123",
+        target_id="123",
+        sec_uid="sec-1",
+        username="sample",
+        profile_url="",
+        source_video_id="",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    device.open_target(target)
+    device.confirm_profile_identity(target)
+    device.open_post("0")
+    device.read_profile_observation()
+
+    assert driver.page_source_reads == 2
+
+
+def test_confirmed_profile_with_persistently_incomplete_metrics_is_inaccessible() -> (
+    None
+):
+    incomplete = PROFILE_XML.replace(
+        '<node text="10" resource-id="com.zhiliaoapp.musically:id/s5y" />\n'
+        '  <node text="Followers" resource-id="com.zhiliaoapp.musically:id/s5x" />',
+        "",
+    )
+    driver = CachedProfileObservationDriver(incomplete)
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="uid:123",
+        target_id="123",
+        sec_uid="sec-1",
+        username="sample",
+        profile_url="",
+        source_video_id="",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    device.open_target(target)
+    device.confirm_profile_identity(target)
+    observation = device.read_profile_observation()
+
+    assert observation.observed_username == "sample"
+    assert observation.metrics is None
+    assert observation.private_account is False
+    assert observation.access_state is ProfileAccessState.INACCESSIBLE
 
 
 def test_appium_device_classifies_profile_identity_mismatch() -> None:

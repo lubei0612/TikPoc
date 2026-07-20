@@ -16,7 +16,11 @@ from .acquisition_models import (
     ProfileObservation,
 )
 from .models import ProfileMetrics
-from .profile_parser import parse_profile_page, parse_visible_post_keys
+from .profile_parser import (
+    parse_profile_page,
+    parse_profile_username,
+    parse_visible_post_keys,
+)
 
 
 TIKTOK_PACKAGE = "com.zhiliaoapp.musically"
@@ -119,8 +123,14 @@ class AppiumTikTokDevice:
         self.clock = clock
         self.sleeper = sleeper
         self.route_opener = route_opener
+        self._profile_source: str | None = None
+        self._confirmed_profile_username = ""
+
+    def _invalidate_profile_source(self) -> None:
+        self._profile_source = None
 
     def _open_route(self, uri: str) -> None:
+        self._invalidate_profile_source()
         if self.route_opener is not None:
             self.route_opener(uri)
             return
@@ -132,6 +142,7 @@ class AppiumTikTokDevice:
         self.driver.activate_app(TIKTOK_PACKAGE)
 
     def open_profile(self, username: str) -> None:
+        self._invalidate_profile_source()
         normalized = username.strip().removeprefix("@").lower()
         self.driver.execute_script(
             "mobile: deepLink",
@@ -193,6 +204,7 @@ class AppiumTikTokDevice:
         index = int(post_id)
         if index < 0 or index >= len(elements):
             raise ValueError(f"post is no longer visible: {post_id}")
+        self._invalidate_profile_source()
         elements[index].click()
 
     def _post_elements(self):
@@ -260,7 +272,9 @@ class AppiumTikTokDevice:
 
     def open_target(self, target: PoolTarget) -> None:
         if target.target_id:
-            self._profile_before_stable_route = self._visible_profile_username()
+            self._profile_before_stable_route = (
+                self._confirmed_profile_username or self._visible_profile_username()
+            )
             self._stable_profile_uri = f"snssdk1233://user/profile/{target.target_id}"
             self._open_route(self._stable_profile_uri)
             return
@@ -275,7 +289,8 @@ class AppiumTikTokDevice:
             for attempt in range(self.metric_read_attempts):
                 actual = self._visible_profile_username()
                 if actual and (actual == expected or actual != previous):
-                    self._wait_profile_surface()
+                    self._wait_profile_surface(actual)
+                    self._confirmed_profile_username = actual
                     return
                 if attempt and attempt % 3 == 0:
                     self._open_route(stable_uri)
@@ -300,7 +315,8 @@ class AppiumTikTokDevice:
             self._open_route(username_uri)
             try:
                 self.wait_profile_ready(expected)
-                self._wait_profile_surface()
+                self._wait_profile_surface(expected)
+                self._confirmed_profile_username = expected
                 return
             except ProfileIdentityMismatch:
                 raise
@@ -309,24 +325,72 @@ class AppiumTikTokDevice:
                     "stable and username profile routes did not load"
                 ) from error
         self.wait_profile_ready(target.username)
-        self._wait_profile_surface()
+        expected = target.username.strip().removeprefix("@").lower()
+        self._wait_profile_surface(expected)
+        self._confirmed_profile_username = expected
 
     def read_profile_observation(self) -> ProfileObservation:
-        page_source = str(self.driver.page_source)
-        lowered = page_source.lower()
-        if "this account is private" in lowered or "此帐户为私密帐户" in page_source:
-            return ProfileObservation(
-                observed_username=self._visible_profile_username(),
-                metrics=None,
-                private_account=True,
-                access_state=ProfileAccessState.PRIVATE,
+        source = self._profile_source
+        last_error: ValueError | None = None
+        for attempt in range(self.metric_read_attempts):
+            if source is None:
+                source = str(self.driver.page_source)
+                self._profile_source = source
+            observed_username = (
+                parse_profile_username(source) or self._confirmed_profile_username
             )
-        return ProfileObservation(
-            observed_username=self._visible_profile_username(),
-            metrics=self.read_profile_metrics(),
-            private_account=False,
-            access_state=ProfileAccessState.PUBLIC,
-        )
+            if (
+                self._confirmed_profile_username
+                and observed_username
+                and observed_username != self._confirmed_profile_username
+            ):
+                last_error = ValueError("profile source identity is stale")
+                source = None
+                if attempt + 1 < self.metric_read_attempts:
+                    self.sleeper(self.poll_interval)
+                continue
+            lowered = source.lower()
+            if "this account is private" in lowered or "此帐户为私密帐户" in source:
+                return ProfileObservation(
+                    observed_username=observed_username,
+                    metrics=None,
+                    private_account=True,
+                    access_state=ProfileAccessState.PRIVATE,
+                )
+            try:
+                page = parse_profile_page(source)
+            except ValueError as error:
+                last_error = error
+                source = None
+                if attempt + 1 < self.metric_read_attempts:
+                    self.sleeper(self.poll_interval)
+                continue
+            metrics = page.metrics
+            if page.visible_post_count == 3:
+                self.driver.swipe(540, 1900, 540, 1050, 600)
+                self.sleeper(self.poll_interval)
+                next_source = str(self.driver.page_source)
+                self._profile_source = next_source
+                next_keys = parse_visible_post_keys(next_source)
+                metrics = ProfileMetrics(
+                    following=metrics.following,
+                    followers=metrics.followers,
+                    posts=(4 if set(next_keys) - set(page.visible_post_keys) else 3),
+                )
+            return ProfileObservation(
+                observed_username=page.username,
+                metrics=metrics,
+                private_account=False,
+                access_state=ProfileAccessState.PUBLIC,
+            )
+        if self._confirmed_profile_username:
+            return ProfileObservation(
+                observed_username=self._confirmed_profile_username,
+                metrics=None,
+                private_account=False,
+                access_state=ProfileAccessState.INACCESSIBLE,
+            )
+        raise last_error or ValueError("profile metrics are incomplete")
 
     def list_video_keys(self) -> tuple[str, ...]:
         return self.list_visible_posts()
@@ -375,26 +439,35 @@ class AppiumTikTokDevice:
                 self.sleeper(self.poll_interval)
         return False
 
-    def _wait_profile_surface(self) -> None:
+    def _wait_profile_surface(self, confirmed_username: str = "") -> None:
         for attempt in range(self.metric_read_attempts):
-            for resource_id in PROFILE_STAT_LABEL_IDS:
-                try:
-                    if self.driver.find_elements(By.ID, resource_id):
-                        return
-                except Exception:
-                    break
             page_source = str(self.driver.page_source)
+            source_username = parse_profile_username(page_source)
+            cache_source = not (
+                confirmed_username
+                and source_username
+                and source_username != confirmed_username
+            )
             lowered = page_source.lower()
             if (
                 "this account is private" in lowered
                 or "此帐户为私密帐户" in page_source
             ):
+                self._profile_source = page_source if cache_source else None
                 return
             try:
                 parse_profile_page(page_source)
+                self._profile_source = page_source if cache_source else None
                 return
             except ValueError:
                 pass
+            for resource_id in PROFILE_STAT_LABEL_IDS:
+                try:
+                    if self.driver.find_elements(By.ID, resource_id):
+                        self._profile_source = page_source if cache_source else None
+                        return
+                except Exception:
+                    break
             if attempt + 1 < self.metric_read_attempts:
                 self.sleeper(self.poll_interval)
         raise ValueError("profile surface did not become ready")
@@ -476,9 +549,11 @@ class AppiumTikTokDevice:
             self.sleeper(self.poll_interval)
 
     def return_to_baseline(self) -> None:
+        self._invalidate_profile_source()
         self.driver.back()
 
     def restart_app(self) -> None:
+        self._invalidate_profile_source()
         self.driver.terminate_app(TIKTOK_PACKAGE)
         self.driver.activate_app(TIKTOK_PACKAGE)
 

@@ -23,9 +23,18 @@ def parse_visible_post_keys(page_source: str) -> tuple[str, ...]:
     )
 
 
+def parse_profile_username(page_source: str) -> str:
+    root = ElementTree.fromstring(page_source)
+    for node in root.iter():
+        resource_id = node.attrib.get("resource-id", "")
+        if resource_id.endswith((":id/s7e", ":id/rgn")):
+            return node.attrib.get("text", "").strip().removeprefix("@").lower()
+    return ""
+
+
 def parse_profile_page(page_source: str) -> ProfilePage:
     root = ElementTree.fromstring(page_source)
-    username = ""
+    username = parse_profile_username(page_source)
     stats: dict[str, int] = {}
     pending_value: str | None = None
     visible_post_count = 0
@@ -34,9 +43,7 @@ def parse_profile_page(page_source: str) -> ProfilePage:
     for node in root.iter():
         resource_id = node.attrib.get("resource-id", "")
         text = node.attrib.get("text", "").strip()
-        if resource_id.endswith((":id/s7e", ":id/rgn")):
-            username = text.removeprefix("@").lower()
-        elif resource_id.endswith((":id/s5y", ":id/rfd")):
+        if resource_id.endswith((":id/s5y", ":id/rfd")):
             pending_value = text
         elif resource_id.endswith((":id/s5x", ":id/rfc")) and pending_value is not None:
             label = text.lower()

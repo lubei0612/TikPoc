@@ -370,6 +370,39 @@ def test_ineligible_profile_completes_without_opening_video(tmp_path: Path) -> N
     assert plan is not None and plan.effective_outcome is OutcomeKind.TRACE
 
 
+def test_inaccessible_profile_completes_as_confirmed_trace(tmp_path: Path) -> None:
+    repository, assignment = _claimed_assignment(tmp_path)
+    device = ScriptedVerifiedDevice(metrics=ProfileMetrics(20, 10, 5))
+    device.read_profile_observation = lambda: ProfileObservation(
+        observed_username="buyer",
+        metrics=None,
+        private_account=False,
+        access_state=ProfileAccessState.INACCESSIBLE,
+    )
+    worker = MobileAssignmentWorker(
+        repository,
+        device,
+        device_id="phone-01",
+        owner_id="worker-1",
+        clock_ms=lambda: 1_000,
+        plan_provider=_forced_plan(OutcomeKind.LIKE),
+    )
+
+    worker.run_assignment(assignment)
+
+    stored = repository.assignment(assignment.assignment_id)
+    snapshot = repository.profile_snapshot(assignment.round_id, assignment.identity_key)
+    plan = repository.action_plan(
+        assignment.round_id, assignment.identity_key, "phone-01"
+    )
+    assert stored.phase is AssignmentPhase.COMPLETED
+    assert snapshot is not None
+    assert snapshot.access_state is ProfileAccessState.INACCESSIBLE
+    assert snapshot.eligible is False
+    assert plan is not None and plan.effective_outcome is OutcomeKind.TRACE
+    assert device.opened_videos == []
+
+
 def test_eligible_trace_opens_video_without_interaction(tmp_path: Path) -> None:
     repository, assignment = _claimed_assignment(tmp_path)
     device = ScriptedVerifiedDevice(metrics=ProfileMetrics(20, 10, 5))
