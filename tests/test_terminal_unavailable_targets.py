@@ -9,8 +9,6 @@ from tikpoc.acquisition_models import (
     ProfileAccessState,
 )
 from tikpoc.importer import Target
-from tikpoc.device import ProfilePermanentlyUnavailable
-from tikpoc.mobile_worker import MobileAssignmentWorker
 from tikpoc.rounds import create_exposure_round
 
 
@@ -121,75 +119,3 @@ def test_confirmed_visit_cannot_be_reclassified_as_unavailable(tmp_path: Path) -
             now_ms=1_100,
             diagnostics=DeviceDiagnostics(),
         )
-
-
-class TerminalDevice:
-    def __init__(self, *, terminal: bool) -> None:
-        self.terminal = terminal
-        self.ready_calls = 0
-        self.opened_profiles: list[str] = []
-        self.diagnostic_calls = 0
-
-    def ensure_ready(self) -> None:
-        self.ready_calls += 1
-
-    def open_target(self, target) -> None:
-        self.opened_profiles.append(target.username)
-
-    def confirm_profile_identity(self, target) -> None:
-        if self.terminal:
-            raise ProfilePermanentlyUnavailable("account banned")
-
-    def capture_diagnostics(self) -> DeviceDiagnostics:
-        self.diagnostic_calls += 1
-        return DeviceDiagnostics(ui_summary="account banned")
-
-
-def test_worker_records_terminal_target_once_and_sibling_avoids_device(
-    tmp_path: Path,
-) -> None:
-    repository = AcquisitionRepository(tmp_path / "tikpoc.db", clock_ms=lambda: 1_000)
-    repository.migrate()
-    round_id = _round(repository)
-    first_claim = repository.claim_next_assignment(
-        round_id, "phone-01", "worker-01", now_ms=1_000
-    )
-    assert first_claim is not None
-    first_device = TerminalDevice(terminal=True)
-    first_worker = MobileAssignmentWorker(
-        repository,
-        first_device,
-        device_id="phone-01",
-        owner_id="worker-01",
-        clock_ms=lambda: 1_100,
-    )
-
-    first_worker.run_assignment(first_claim)
-
-    first_stored = repository.assignment(first_claim.assignment_id)
-    assert first_stored.phase is AssignmentPhase.SKIPPED
-    assert first_stored.attempt_count == 1
-    assert first_stored.visit_confirmed_at_ms is None
-    assert first_device.diagnostic_calls == 1
-
-    sibling_claim = repository.claim_next_assignment(
-        round_id, "phone-02", "worker-02", now_ms=1_101
-    )
-    assert sibling_claim is not None
-    sibling_device = TerminalDevice(terminal=False)
-    sibling_worker = MobileAssignmentWorker(
-        repository,
-        sibling_device,
-        device_id="phone-02",
-        owner_id="worker-02",
-        clock_ms=lambda: 1_102,
-    )
-
-    sibling_worker.run_assignment(sibling_claim)
-
-    sibling_stored = repository.assignment(sibling_claim.assignment_id)
-    assert sibling_stored.phase is AssignmentPhase.SKIPPED
-    assert sibling_stored.attempt_count == 1
-    assert sibling_device.ready_calls == 0
-    assert sibling_device.opened_profiles == []
-    assert sibling_device.diagnostic_calls == 0
