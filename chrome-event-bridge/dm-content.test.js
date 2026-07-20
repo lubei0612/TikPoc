@@ -801,3 +801,18 @@ test("contenteditable composer uses native text insertion", () => {
   ]);
   assert.deepEqual(events, []);
 });
+
+test("outbound reconciliation accepts the exact target conversation preview", async () => {
+  const confirmed = await dmContent.waitForOutbound("Reply draft", {
+    read: () => ({ messages: [] }),
+    readRows: () => [{
+      key: "conv:buyer",
+      preview: "buyer Reply draft 12:48",
+    }],
+    conversationId: "conv:buyer",
+    timeoutMs: 1,
+    intervalMs: 0,
+  });
+
+  assert.equal(confirmed, true);
+});

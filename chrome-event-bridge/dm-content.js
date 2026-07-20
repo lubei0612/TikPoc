@@ -165,7 +165,7 @@
       unread ? "unread" : "read",
       `${preview.length}:${(previewHash >>> 0).toString(16)}`,
     ].join("|");
-    return { key, signature, unread };
+    return { key, signature, unread, preview };
   }
 
   async function openConversation(row) {
@@ -479,6 +479,9 @@
 
   async function waitForOutbound(expectedText, options = {}) {
     const read = options.read || (() => readActiveConversation());
+    const readRows = options.readRows || (() => conversationRows().map(rowSnapshot));
+    const conversationId = core.normalizeText(options.conversationId || "");
+    const expected = core.normalizeText(expectedText);
     const timeoutMs = Number(options.timeoutMs || 5000);
     const intervalMs = Number(options.intervalMs || 100);
     const deadline = Date.now() + timeoutMs;
@@ -486,6 +489,14 @@
       const active = read();
       if (active && core.hasMatchingOutbound(expectedText, active.messages)) {
         return true;
+      }
+      if (conversationId && expected) {
+        const target = readRows().find(
+          (snapshot) => core.normalizeText(snapshot && snapshot.key) === conversationId,
+        );
+        if (target && core.normalizeText(target.preview).includes(expected)) {
+          return true;
+        }
       }
       await new Promise((resolve) => setTimeout(resolve, intervalMs));
     } while (Date.now() < deadline);
@@ -699,7 +710,10 @@
       } catch (_error) {
         submitted = false;
       }
-      const confirmed = submitted && await adapter.waitForOutbound(plan.reply_text);
+      const confirmed = submitted && await adapter.waitForOutbound(
+        plan.reply_text,
+        plan.conversation_id,
+      );
       const resultState = confirmed ? "sent" : "uncertain";
       await transport("TIKPOC_DM_RESULT", {
         account_id: settings.accountId,
@@ -854,7 +868,7 @@
       readActiveConversation: (accountId) => readActiveConversation(document, accountId),
       prepareComposer,
       sendTrusted,
-      waitForOutbound: (text) => waitForOutbound(text),
+      waitForOutbound: (text, conversationId) => waitForOutbound(text, { conversationId }),
     };
     let settings = null;
     const workflow = createSerializedWorkflow({
