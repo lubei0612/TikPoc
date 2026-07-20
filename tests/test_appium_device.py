@@ -1341,6 +1341,20 @@ class SettlingInitialActionControlDriver(SemanticActionDriver):
         return super().find_elements(by, value)
 
 
+class GestureLikeDriver(SemanticActionDriver):
+    def __init__(self) -> None:
+        super().__init__()
+        self.like.id = "like-control"
+        self.gestures: list[tuple[str, dict[str, str]]] = []
+
+    def execute_script(self, name: str, arguments: dict[str, str]) -> None:
+        self.gestures.append((name, arguments))
+        if name == "mobile: clickGesture" and arguments == {
+            "elementId": "like-control"
+        }:
+            self._click_like()
+
+
 class HiddenRepostUnavailableDriver(RepostUnavailableDriver):
     def find_elements(self, by: str, value: str):
         if self.share_open and (
@@ -1401,6 +1415,21 @@ def test_execute_like_waits_for_initial_control_to_settle_before_click() -> None
 
     assert device.execute_outcome(OutcomeKind.LIKE) is ActionResult.CONFIRMED
     assert driver.clicked_labels == ["Like"]
+
+
+def test_execute_like_uses_native_click_gesture_for_appium_element() -> None:
+    driver = GestureLikeDriver()
+    device = AppiumTikTokDevice(
+        driver,
+        poll_interval=0,
+        action_timeout=2,
+        clock=SteppingClock(),
+        sleeper=lambda _: None,
+    )
+
+    assert device.execute_outcome(OutcomeKind.LIKE) is ActionResult.CONFIRMED
+    assert driver.gestures == [("mobile: clickGesture", {"elementId": "like-control"})]
+    assert driver.like.clicked is False
 
 
 def test_execute_like_uses_one_query_before_and_after_click() -> None:

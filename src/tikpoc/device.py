@@ -294,7 +294,14 @@ class AppiumTikTokDevice:
         else:
             if control is None:
                 return ActionResult.UNCERTAIN
-            control.click()
+            if normalized is OutcomeKind.LIKE and (
+                element_id := getattr(control, "id", "")
+            ):
+                self.driver.execute_script(
+                    "mobile: clickGesture", {"elementId": element_id}
+                )
+            else:
+                control.click()
         return (
             ActionResult.CONFIRMED
             if self._wait_for_active(normalized)
