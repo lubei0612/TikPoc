@@ -40,7 +40,6 @@ class ProfileAccessState(StrEnum):
     SUSPENDED = "suspended"
     MISSING = "missing"
     INACCESSIBLE = "inaccessible"
-    PERMANENTLY_UNAVAILABLE = "permanently_unavailable"
 
 
 class OutcomeKind(StrEnum):

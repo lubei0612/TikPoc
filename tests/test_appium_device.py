@@ -13,7 +13,6 @@ from PIL import Image
 from tikpoc.device import (
     AppiumTikTokDevice,
     ProfileIdentityMismatch,
-    ProfilePermanentlyUnavailable,
     _favorite_pixel_state,
 )
 from tikpoc.models import ProfileMetrics
@@ -585,53 +584,6 @@ class MissingProfileMarkerDriver(FakeDriver):
         if value == "com.zhiliaoapp.musically:id/s7e":
             return []
         return super().find_elements(by, value)
-
-
-class TerminalProfileDriver(FakeDriver):
-    def __init__(self, marker: str) -> None:
-        super().__init__()
-        self.page_source = f'<node text="{marker}" />'
-
-
-def _stable_target() -> PoolTarget:
-    return PoolTarget(
-        pool_id="pool-1",
-        identity_key="uid:123",
-        target_id="123",
-        sec_uid="sec-1",
-        username="sample",
-        profile_url="https://www.tiktok.com/@sample",
-        source_video_id="",
-        source_line_numbers=(2,),
-        ordinal=0,
-    )
-
-
-def test_explicit_banned_profile_is_terminal() -> None:
-    device = AppiumTikTokDevice(
-        TerminalProfileDriver("Account banned - this account is no longer available"),
-        metric_read_attempts=1,
-        poll_interval=0,
-    )
-    target = _stable_target()
-
-    device.open_target(target)
-
-    with pytest.raises(ProfilePermanentlyUnavailable, match="account banned"):
-        device.confirm_profile_identity(target)
-
-
-def test_blank_profile_is_not_terminal() -> None:
-    device = AppiumTikTokDevice(
-        TerminalProfileDriver(""), metric_read_attempts=1, poll_interval=0
-    )
-    target = _stable_target()
-
-    device.open_target(target)
-
-    with pytest.raises(ValueError) as captured:
-        device.confirm_profile_identity(target)
-    assert not isinstance(captured.value, ProfilePermanentlyUnavailable)
 
 
 def test_appium_device_opens_profile_with_deep_link() -> None:
