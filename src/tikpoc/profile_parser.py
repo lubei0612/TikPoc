@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-import re
 from xml.etree import ElementTree
 
 from .counts import parse_visible_count
@@ -12,9 +11,6 @@ class ProfilePage:
     metrics: ProfileMetrics
     visible_post_count: int
     visible_post_keys: tuple[str, ...]
-
-
-_BOUNDS_PATTERN = re.compile(r"^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$")
 
 
 def parse_visible_post_keys(page_source: str) -> tuple[str, ...]:
@@ -51,20 +47,6 @@ def profile_surface_visible(page_source: str) -> bool:
         ):
             return True
     return False
-
-
-def parse_profile_post_bounds(
-    page_source: str,
-) -> tuple[tuple[int, int, int, int], ...]:
-    root = ElementTree.fromstring(page_source)
-    bounds = []
-    for node in root.iter():
-        if not node.attrib.get("resource-id", "").endswith(":id/cover"):
-            continue
-        match = _BOUNDS_PATTERN.fullmatch(node.attrib.get("bounds", ""))
-        if match is not None:
-            bounds.append(tuple(int(value) for value in match.groups()))
-    return tuple(bounds)
 
 
 def video_controls_visible(page_source: str) -> bool:

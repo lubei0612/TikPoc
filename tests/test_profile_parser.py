@@ -1,7 +1,6 @@
 from tikpoc.models import ProfileMetrics
 from tikpoc.profile_parser import (
     parse_profile_page,
-    parse_profile_post_bounds,
     video_controls_visible,
 )
 
@@ -43,16 +42,6 @@ def test_parse_profile_page_accepts_appium_element_tags() -> None:
 
     assert page.username == "sample"
     assert page.metrics == ProfileMetrics(following=12, followers=10, posts=4)
-
-
-def test_parse_profile_post_bounds_reads_only_bounded_cover_nodes() -> None:
-    bounded = PROFILE_XML.replace(
-        'resource-id="com.zhiliaoapp.musically:id/cover"',
-        'resource-id="com.zhiliaoapp.musically:id/cover" bounds="[10,20][110,220]"',
-        1,
-    )
-
-    assert parse_profile_post_bounds(bounded) == ((10, 20, 110, 220),)
 
 
 def test_video_controls_visible_reads_semantic_share_description() -> None:

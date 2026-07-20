@@ -252,6 +252,13 @@ class BoundedVideoDriver(CachedProfileObservationDriver):
         super().__init__(bounded)
         self.gestures: list[dict[str, int]] = []
         self.post_queries = 0
+        self.posts = [FakeElement(on_click=self._open_video) for _ in range(4)]
+
+    def _open_video(self) -> None:
+        self._page_source = (
+            '<hierarchy><node content-desc="Share video. 42 shares" '
+            'bounds="[900,1000][1000,1100]" /></hierarchy>'
+        )
 
     def execute_script(self, name: str, arguments: dict[str, str]) -> None:
         if name == "mobile: clickGesture":
@@ -756,7 +763,9 @@ def test_profile_readiness_snapshot_is_reused_for_observation() -> None:
     assert driver.username_queries == 1
 
 
-def test_cached_profile_bounds_open_and_confirm_video_without_element_search() -> None:
+def test_cached_profile_opens_video_semantically_with_single_source_verification() -> (
+    None
+):
     driver = BoundedVideoDriver()
     device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
     target = PoolTarget(
@@ -777,8 +786,8 @@ def test_cached_profile_bounds_open_and_confirm_video_without_element_search() -
     assert device.list_video_keys() == ("0", "1", "2", "3")
     device.open_and_confirm_video("2")
 
-    assert driver.gestures == [{"x": 200, "y": 400}]
-    assert driver.post_queries == 0
+    assert driver.posts[2].clicked is True
+    assert driver.post_queries == 1
     assert driver.page_source_reads == 2
 
 

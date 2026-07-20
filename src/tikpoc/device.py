@@ -18,7 +18,6 @@ from .acquisition_models import (
 from .models import ProfileMetrics
 from .profile_parser import (
     parse_profile_page,
-    parse_profile_post_bounds,
     parse_profile_username,
     parse_visible_post_keys,
     profile_surface_visible,
@@ -428,21 +427,7 @@ class AppiumTikTokDevice:
         return self.list_visible_posts()
 
     def open_and_confirm_video(self, video_key: str) -> None:
-        bounds = (
-            parse_profile_post_bounds(self._profile_source)
-            if self._profile_source is not None
-            else ()
-        )
-        index = int(video_key)
-        if bounds and 0 <= index < len(bounds):
-            left, top, right, bottom = bounds[index]
-            self._invalidate_profile_source()
-            self.driver.execute_script(
-                "mobile: clickGesture",
-                {"x": (left + right) // 2, "y": (top + bottom) // 2},
-            )
-        else:
-            self.open_post(video_key)
+        self.open_post(video_key)
         if self._wait_for_video_source() is None:
             raise RuntimeError("video controls did not become visible")
 
