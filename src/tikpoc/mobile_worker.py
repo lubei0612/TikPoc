@@ -148,7 +148,14 @@ class MobileAssignmentWorker:
             ):
                 self._skip_unreachable(current.assignment_id, error)
             else:
-                self._defer(current.assignment_id, type(error).__name__)
+                self._defer(
+                    current.assignment_id,
+                    type(error).__name__,
+                    manual_retry_only=(
+                        type(error) is ProfileUnreachable
+                        and stored.visit_confirmed_at_ms is not None
+                    ),
+                )
 
     def _run_claimed(self, assignment: RoundAssignment) -> None:
         target = PoolTarget(
@@ -415,7 +422,11 @@ class MobileAssignmentWorker:
                     self._record_stage(
                         assignment_id, AssignmentStage.ACTION, started_at_ms
                     )
-                    self._defer(assignment_id, f"action_{result.value}")
+                    self._defer(
+                        assignment_id,
+                        f"action_{result.value}",
+                        manual_retry_only=True,
+                    )
                     return
                 if phase is AssignmentPhase.ACTION_EXECUTING:
                     self.repository.transition_assignment(
@@ -460,7 +471,13 @@ class MobileAssignmentWorker:
             self._renew_lease(assignment_id)
             result = self.device.execute_outcome(plan.effective_outcome)
 
-    def _defer(self, assignment_id: int, error_code: str) -> None:
+    def _defer(
+        self,
+        assignment_id: int,
+        error_code: str,
+        *,
+        manual_retry_only: bool = False,
+    ) -> None:
         diagnostics = self._capture_diagnostics()
         self.repository.defer_assignment(
             assignment_id,
@@ -469,6 +486,7 @@ class MobileAssignmentWorker:
             retry_delay_ms=self.retry_delay_ms,
             error_code=error_code,
             diagnostics=diagnostics,
+            manual_retry_only=manual_retry_only,
             **self._assignment_fence_kwargs(),
         )
 

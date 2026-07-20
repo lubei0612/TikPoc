@@ -1,5 +1,6 @@
 from collections import deque
 from pathlib import Path
+import sqlite3
 
 import pytest
 
@@ -20,6 +21,8 @@ from tikpoc.mobile_worker import MobileAssignmentWorker
 from tikpoc.models import ProfileMetrics
 from tikpoc.outcome_planner import get_or_create_plan
 from tikpoc.rounds import create_exposure_round
+
+MANUAL_RETRY_AT_MS = 9_223_372_036_854_775_807
 
 
 class ScriptedVerifiedDevice:
@@ -369,12 +372,46 @@ def test_persistent_uncertain_action_is_deferred_without_reclick(
         assignment.round_id, assignment.identity_key, "phone-01"
     )
     assert stored.phase is AssignmentPhase.DEFERRED
+    assert stored.next_attempt_at_ms == MANUAL_RETRY_AT_MS
     assert stored.completed_at_ms is None
     assert repository.round_completion(assignment.round_id).completed == 0
     assert plan is not None and plan.state is ActionPlanState.UNCERTAIN
     assert device.action_calls == [OutcomeKind.REPOST]
     assert device.reconcile_calls == [OutcomeKind.REPOST]
     assert device.diagnostic_calls == 1
+
+
+def test_confirmed_visit_profile_unreachable_is_held_for_manual_retry(
+    tmp_path: Path,
+) -> None:
+    repository, assignment = _claimed_assignment(tmp_path)
+    with sqlite3.connect(repository.path) as connection:
+        connection.execute(
+            "UPDATE round_assignments SET visit_confirmed_at_ms = ? "
+            "WHERE assignment_id = ?",
+            (900, assignment.assignment_id),
+        )
+
+    class UnreachableAfterConfirmedVisitDevice(ScriptedVerifiedDevice):
+        def confirm_profile_identity(self, target) -> None:
+            raise ValueError("profile route stayed blank")
+
+    device = UnreachableAfterConfirmedVisitDevice(metrics=ProfileMetrics(20, 10, 5))
+    worker = MobileAssignmentWorker(
+        repository,
+        device,
+        device_id="phone-01",
+        owner_id="worker-1",
+        clock_ms=lambda: 1_000,
+    )
+
+    worker.run_assignment(assignment)
+
+    stored = repository.assignment(assignment.assignment_id)
+    assert stored.phase is AssignmentPhase.DEFERRED
+    assert stored.visit_confirmed_at_ms == 900
+    assert stored.next_attempt_at_ms == MANUAL_RETRY_AT_MS
+    assert stored.last_error_code == "ProfileUnreachable"
 
 
 def test_reconciled_not_applied_action_is_not_clicked_again(tmp_path: Path) -> None:
@@ -401,6 +438,7 @@ def test_reconciled_not_applied_action_is_not_clicked_again(tmp_path: Path) -> N
     assert first_device.reconcile_calls == [OutcomeKind.REPOST]
     assert first_quota is not None and first_quota.uncertain_count == 1
 
+    repository.retry_assignment(assignment.assignment_id)
     retry = repository.claim_next_assignment(
         assignment.round_id,
         "phone-01",
@@ -459,6 +497,7 @@ def test_reconciled_unavailable_like_never_returns_to_execution(
     )
     first_worker.run_assignment(assignment)
 
+    repository.retry_assignment(assignment.assignment_id)
     retry = repository.claim_next_assignment(
         assignment.round_id,
         "phone-01",
@@ -486,6 +525,7 @@ def test_reconciled_unavailable_like_never_returns_to_execution(
     assert second_device.action_calls == []
     assert second_device.reconcile_calls == [OutcomeKind.LIKE]
 
+    repository.retry_assignment(assignment.assignment_id)
     final_retry = repository.claim_next_assignment(
         assignment.round_id,
         "phone-01",
@@ -869,6 +909,7 @@ def test_restart_reconciles_uncertain_plan_without_second_click_or_reservation(
     assert first_plan is not None and first_plan.state is ActionPlanState.UNCERTAIN
     assert first_device.reconcile_calls == [OutcomeKind.LIKE]
 
+    repository.retry_assignment(assignment.assignment_id)
     retry = repository.claim_next_assignment(
         assignment.round_id,
         "phone-01",

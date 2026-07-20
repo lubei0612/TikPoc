@@ -34,6 +34,7 @@ from .rules import evaluate_profile
 
 
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
+MANUAL_RETRY_AT_MS = 2**63 - 1
 _ALLOWED_PHASE_TRANSITIONS = {
     AssignmentPhase.PROFILE_OPENING: {
         AssignmentPhase.IDENTITY_CONFIRMED,
@@ -1223,7 +1224,7 @@ class AcquisitionRepository:
                         )
                   )
                 ORDER BY
-                    CASE assignment.phase WHEN 'deferred' THEN 0 ELSE 1 END,
+                    CASE assignment.phase WHEN 'pending' THEN 0 ELSE 1 END,
                     assignment.order_key
                 LIMIT 1
                 """,
@@ -1632,6 +1633,7 @@ class AcquisitionRepository:
         retry_delay_ms: int,
         error_code: str,
         diagnostics: DeviceDiagnostics,
+        manual_retry_only: bool = False,
         worker_account_id: str | None = None,
         worker_fence_token: int | None = None,
     ) -> RoundAssignment:
@@ -1671,7 +1673,13 @@ class AcquisitionRepository:
                     lease_expires_at_ms = 0
                 WHERE assignment_id = ?
                 """,
-                (now_ms + retry_delay_ms, error_code, assignment_id),
+                (
+                    MANUAL_RETRY_AT_MS
+                    if manual_retry_only
+                    else now_ms + retry_delay_ms,
+                    error_code,
+                    assignment_id,
+                ),
             )
             self._insert_phase_history(
                 connection,

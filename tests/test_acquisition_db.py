@@ -144,6 +144,44 @@ def test_claim_honors_durable_device_and_assignment_control_states(
     assert claimed.assignment_id == assignment_id
 
 
+def test_claim_selects_pending_assignment_before_due_deferred_assignment(
+    tmp_path: Path,
+) -> None:
+    repository = AcquisitionRepository(tmp_path / "tikpoc.db", clock_ms=lambda: 1_000)
+    repository.migrate()
+    imported = repository.import_pool(
+        "comments.csv", "9" * 64, (_target("sec:s1"), _target("sec:s2"))
+    )
+    round_id = create_exposure_round(
+        repository,
+        pool_id=imported.pool_id,
+        device_seeds={"phone-01": "seed-01"},
+        starts_at_ms=1_000,
+        min_inter_device_gap_ms=0,
+        min_repeat_gap_ms=0,
+    )
+    first = repository.claim_next_assignment(
+        round_id, "phone-01", "worker-01", now_ms=1_000
+    )
+    assert first is not None
+    repository.defer_assignment(
+        first.assignment_id,
+        "worker-01",
+        now_ms=1_001,
+        retry_delay_ms=0,
+        error_code="temporary",
+        diagnostics=DeviceDiagnostics(),
+    )
+
+    claimed = repository.claim_next_assignment(
+        round_id, "phone-01", "worker-02", now_ms=1_002
+    )
+
+    assert claimed is not None
+    assert claimed.assignment_id != first.assignment_id
+    assert claimed.identity_key != first.identity_key
+
+
 def test_stale_device_fence_cannot_claim_assignment(tmp_path: Path) -> None:
     repository = AcquisitionRepository(tmp_path / "tikpoc.db", clock_ms=lambda: 1_101)
     repository.migrate()
