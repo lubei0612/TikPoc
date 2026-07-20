@@ -19,6 +19,7 @@
   const BINDING_STATUS_KEY = "tikpocBindingStatus";
   const BASELINES_KEY = "tikpocDmBaselines";
   const PROCESSED_KEY = "tikpocDmProcessed";
+  const ACTIVE_BASELINE_PREFIX = "active:";
   const HEALTH_TICK = "TIKPOC_HEALTH_TICK";
   const MAX_PROCESSED = 1000;
   const BINDING_EVIDENCE_MAX_AGE_MS = 120 * 1000;
@@ -501,25 +502,59 @@
         .map((row) => ({ row, snapshot: adapter.rowSnapshot(row) }))
         .filter(({ snapshot }) => snapshot && snapshot.key);
       const baselines = await storage.get(BASELINES_KEY) || {};
-      const baseline = baselines[settings.accountId];
+      let baseline = baselines[settings.accountId];
       if (!baseline) {
-        baselines[settings.accountId] = Object.fromEntries(
+        baseline = Object.fromEntries(
           snapshots.map(({ snapshot }) => [snapshot.key, snapshot.signature]),
         );
+        const active = adapter.readActiveConversation(settings.accountId);
+        if (core.isActionableInbound(active)) {
+          const activeKey = core.normalizeText(active.conversationId);
+          baseline[`${ACTIVE_BASELINE_PREFIX}${activeKey}`] =
+            await core.fingerprintMessage(active);
+        }
+        baselines[settings.accountId] = baseline;
         await storage.set(BASELINES_KEY, baselines);
         return "baseline";
       }
-      const candidate = snapshots.find(({ snapshot }) =>
+      let candidate = snapshots.find(({ snapshot }) =>
         snapshot.unread || baseline[snapshot.key] !== snapshot.signature,
       );
+      let inbound = null;
+      let fingerprint = "";
       if (!candidate) {
-        return scanWelcome(settings);
+        const active = adapter.readActiveConversation(settings.accountId);
+        if (!core.isActionableInbound(active)) {
+          return scanWelcome(settings);
+        }
+        const activeKey = core.normalizeText(active.conversationId);
+        const activeBaselineKey = `${ACTIVE_BASELINE_PREFIX}${activeKey}`;
+        fingerprint = await core.fingerprintMessage(active);
+        if (!baseline[activeBaselineKey]) {
+          baseline[activeBaselineKey] = fingerprint;
+          await storage.set(BASELINES_KEY, baselines);
+          return "active_baseline";
+        }
+        if (baseline[activeBaselineKey] === fingerprint) {
+          return scanWelcome(settings);
+        }
+        candidate = {
+          row: null,
+          snapshot: {
+            key: activeKey,
+            signature: baseline[activeKey] || "",
+          },
+          active: true,
+        };
+        inbound = active;
       }
-      const opened = await adapter.openConversation(candidate.row);
-      if (opened === false) {
-        return "navigation_failed";
+      if (!candidate.active) {
+        const opened = await adapter.openConversation(candidate.row);
+        if (opened === false) {
+          return "navigation_failed";
+        }
+        inbound = adapter.readActiveConversation(settings.accountId);
       }
-      const inbound = adapter.readActiveConversation(settings.accountId);
       if (!core.isActionableInbound(inbound)) {
         baseline[candidate.snapshot.key] = candidate.snapshot.signature;
         await storage.set(BASELINES_KEY, baselines);
@@ -529,10 +564,15 @@
       if (activeKey !== candidate.snapshot.key) {
         return "navigation_pending";
       }
-      const fingerprint = await core.fingerprintMessage(inbound);
+      fingerprint = fingerprint || await core.fingerprintMessage(inbound);
+      const activeBaselineKey = `${ACTIVE_BASELINE_PREFIX}${activeKey}`;
+      function rememberInbound() {
+        baseline[candidate.snapshot.key] = candidate.snapshot.signature;
+        baseline[activeBaselineKey] = fingerprint;
+      }
       const processed = await storage.get(PROCESSED_KEY) || {};
       if (processed[fingerprint]) {
-        baseline[candidate.snapshot.key] = candidate.snapshot.signature;
+        rememberInbound();
         await storage.set(BASELINES_KEY, baselines);
         return "duplicate";
       }
@@ -570,7 +610,7 @@
           updatedAt: now(),
         };
         await storage.set(PROCESSED_KEY, trimProcessed(processed));
-        baseline[candidate.snapshot.key] = candidate.snapshot.signature;
+        rememberInbound();
         await storage.set(BASELINES_KEY, baselines);
         return "superseded";
       }
@@ -624,7 +664,7 @@
         updatedAt: now(),
       };
       await storage.set(PROCESSED_KEY, trimProcessed(processed));
-      baseline[candidate.snapshot.key] = candidate.snapshot.signature;
+      rememberInbound();
       await storage.set(BASELINES_KEY, baselines);
       return resultState;
     }

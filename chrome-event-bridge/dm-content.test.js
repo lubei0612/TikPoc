@@ -265,9 +265,9 @@ test("startup establishes an account baseline without requesting a plan", async 
   const run = harness();
   assert.equal(await run.workflow.scan(SETTINGS), "baseline");
   assert.equal(run.calls.length, 0);
-  assert.deepEqual(run.storage.values.tikpocDmBaselines[SETTINGS.accountId], {
-    [inbound().conversationId]: "old",
-  });
+  const baseline = run.storage.values.tikpocDmBaselines[SETTINGS.accountId];
+  assert.equal(baseline[inbound().conversationId], "old");
+  assert.match(baseline[`active:${inbound().conversationId}`], /^[a-f0-9]{64}$/);
 });
 
 test("one inbound fingerprint is planned and sent only once", async () => {
@@ -287,6 +287,30 @@ test("one inbound fingerprint is planned and sent only once", async () => {
     assert.equal(call.body.observed_username, "shop_one");
     assert.equal(call.body.binding_state, "ready");
   }
+});
+
+test("an open conversation detects a new inbound when its row is unchanged", async () => {
+  const earlier = inbound({
+    messageId: "message-old",
+    timestamp: "10:29",
+    timestampMs: 1_719_999_999_000,
+    text: "Earlier message",
+  });
+  const current = inbound({
+    messageId: "message-new",
+    timestamp: "10:30",
+    timestampMs: 1_720_000_000_000,
+    text: "I am interested in a bag",
+  });
+  const run = harness({ reads: [earlier, current, current] });
+
+  assert.equal(await run.workflow.scan(SETTINGS), "baseline");
+  assert.equal(await run.workflow.scan(SETTINGS), "sent");
+  assert.equal(run.clicks, 1);
+  assert.equal(
+    run.calls.filter((call) => call.type === "TIKPOC_DM_PLAN").length,
+    1,
+  );
 });
 
 test("a stable TikTok conversation id reaches planning after navigation", async () => {
@@ -374,7 +398,13 @@ test("two accounts isolate equal inbound workflows in shared extension storage",
 });
 
 test("a changed active inbound supersedes the plan before claim or send", async () => {
-  const run = harness({ reads: [inbound(), inbound({ messageId: "message-2", text: "Changed" })] });
+  const run = harness({
+    reads: [
+      inbound(),
+      inbound(),
+      inbound({ messageId: "message-2", text: "Changed" }),
+    ],
+  });
   await run.workflow.scan(SETTINGS);
   run.setRows([{ key: inbound().conversationId, signature: "new", unread: true }]);
   assert.equal(await run.workflow.scan(SETTINGS), "superseded");
