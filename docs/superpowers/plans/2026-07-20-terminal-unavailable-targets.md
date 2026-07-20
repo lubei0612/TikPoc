@@ -4,7 +4,7 @@
 
 **Goal:** Record an explicitly banned, deleted, nonexistent, or visibly unavailable TikTok target once and skip all later assignments for that round/identity without opening the device.
 
-**Architecture:** The Appium adapter raises a dedicated exception only from explicit terminal UI text. The repository persists a round-level terminal target state and provides a fenced one-attempt skip operation. The mobile worker checks that marker before device activity and preserves the existing three-attempt retry behavior for generic loading failures.
+**Architecture:** The Appium adapter raises a dedicated exception only from explicit terminal UI text. The repository persists a round-level terminal profile snapshot and provides a fenced one-attempt skip operation. The mobile worker checks that marker before device activity and preserves the existing three-attempt retry behavior for generic loading failures.
 
 **Tech Stack:** Python 3.14, Appium/Selenium adapter, SQLite, pytest, Ruff.
 
@@ -12,7 +12,7 @@
 
 ## File Structure
 
-- Modify `src/tikpoc/acquisition_models.py`: add the durable terminal target model.
+- Modify `src/tikpoc/acquisition_models.py`: add the durable terminal access state.
 - Modify `src/tikpoc/device.py`: classify explicit terminal profile pages.
 - Modify `src/tikpoc/acquisition_db.py`: atomically publish the terminal marker and skip unconfirmed assignments.
 - Modify `src/tikpoc/mobile_worker.py`: immediate current skip and marker-based preflight skip.
@@ -120,7 +120,7 @@ git commit -m "feat: classify terminal unavailable profiles"
 Add tests that claim the first device assignment and call the wished-for API:
 
 ```python
-state, skipped = repository.record_permanently_unavailable(
+snapshot, skipped = repository.record_permanently_unavailable(
     claimed.assignment_id,
     "worker-01",
     observed_username="target",
@@ -129,8 +129,9 @@ state, skipped = repository.record_permanently_unavailable(
     diagnostics=DeviceDiagnostics(ui_summary="explicit unavailable marker"),
 )
 
-assert state.access_state is ProfileAccessState.PERMANENTLY_UNAVAILABLE
-assert state.reason == "permanently_unavailable"
+assert snapshot.access_state is ProfileAccessState.PERMANENTLY_UNAVAILABLE
+assert snapshot.eligible is False
+assert snapshot.reason == "permanently_unavailable"
 assert skipped.phase is AssignmentPhase.SKIPPED
 assert skipped.attempt_count == 1
 assert skipped.visit_confirmed_at_ms is None
@@ -165,14 +166,14 @@ def record_permanently_unavailable(
     diagnostics: DeviceDiagnostics,
     worker_account_id: str | None = None,
     worker_fence_token: int | None = None,
-) -> tuple[TerminalTargetState, RoundAssignment]:
+) -> tuple[ProfileSnapshot, RoundAssignment]:
     ...
 ```
 
 Within one `BEGIN IMMEDIATE` transaction:
 
 1. Validate the active owner, device fence, `profile_opening` phase, and absent confirmed visit.
-2. Insert the round/identity terminal state with `access_state='permanently_unavailable'` and `reason='permanently_unavailable'`; preserve any immutable historical profile snapshot.
+2. Insert or replace the round/identity snapshot with null metrics, `private_account=0`, `access_state='permanently_unavailable'`, `eligible=0`, and `reason='permanently_unavailable'`.
 3. Set the current assignment to `skipped`, release the lease, and set `completed_at_ms` plus `last_error_code='profile_permanently_unavailable'` without requiring three attempts.
 4. Insert phase history containing attempt count, error code, screenshot path, and UI summary.
 
@@ -191,7 +192,7 @@ def skip_marked_permanently_unavailable(
     ...
 ```
 
-It must verify the matching terminal target state exists before skipping.
+It must verify the matching terminal snapshot exists before skipping.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -243,7 +244,7 @@ Expected: terminal tests fail because the worker defers the dedicated error and 
 
 - [ ] **Step 3: Implement minimal worker branching**
 
-At the start of `_run_claimed`, before `ensure_ready()`, load the terminal target state. If it exists, call `skip_marked_permanently_unavailable()` and return.
+At the start of `_run_claimed`, before `ensure_ready()`, load the profile snapshot. If its access state is `PERMANENTLY_UNAVAILABLE`, call `skip_marked_permanently_unavailable()` and return.
 
 Catch `ProfilePermanentlyUnavailable` separately around profile confirmation and call:
 

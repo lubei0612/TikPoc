@@ -24,7 +24,7 @@ existing bounded retry policy.
 
 ## Durable State And Assignment Behavior
 
-A dedicated round-level terminal target state records:
+The round-level profile snapshot for the identity records:
 
 - `access_state = permanently_unavailable`
 - `eligible = false`
@@ -68,8 +68,8 @@ skip the claimed assignment without device activity.
 
 ### Acquisition repository
 
-Provide atomic operations in a dedicated terminal-target table to record the
-terminal marker and skip an unconfirmed assignment. The operation must preserve leases/fences, reject confirmed visits,
+Provide atomic operations to record the terminal marker and skip an unconfirmed
+assignment. The operation must preserve leases/fences, reject confirmed visits,
 and retain phase-history diagnostics.
 
 ## Verification
