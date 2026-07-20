@@ -519,8 +519,8 @@
         await storage.set(BASELINES_KEY, baselines);
         return "baseline";
       }
-      let candidate = snapshots.find(({ snapshot }) =>
-        snapshot.unread || baseline[snapshot.key] !== snapshot.signature,
+      let candidate = snapshots.find(
+        ({ snapshot }) => baseline[snapshot.key] !== snapshot.signature,
       );
       let inbound = null;
       let fingerprint = "";

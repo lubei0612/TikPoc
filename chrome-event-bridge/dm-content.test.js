@@ -270,6 +270,22 @@ test("startup establishes an account baseline without requesting a plan", async 
   assert.match(baseline[`active:${inbound().conversationId}`], /^[a-f0-9]{64}$/);
 });
 
+test("an unread row already present at startup remains baseline history", async () => {
+  const run = harness();
+  run.setRows([{
+    key: inbound().conversationId,
+    signature: "historical-unread",
+    unread: true,
+  }]);
+
+  assert.equal(await run.workflow.scan(SETTINGS), "baseline");
+  assert.equal(await run.workflow.scan(SETTINGS), "idle");
+  assert.equal(
+    run.calls.some((call) => call.type === "TIKPOC_DM_PLAN"),
+    false,
+  );
+});
+
 test("one inbound fingerprint is planned and sent only once", async () => {
   const run = harness();
   await run.workflow.scan(SETTINGS);
