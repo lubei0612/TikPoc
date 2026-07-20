@@ -721,6 +721,7 @@ test("uses only fresh account-scoped activity binding evidence in a Messages fra
 
 test("contenteditable composer uses native text insertion", () => {
   const commands = [];
+  const events = [];
   const composer = {
     isContentEditable: true,
     textContent: "",
@@ -728,7 +729,9 @@ test("contenteditable composer uses native text insertion", () => {
     getAttribute(name) {
       return name === "contenteditable" ? "true" : null;
     },
-    dispatchEvent() {},
+    dispatchEvent(event) {
+      events.push(event.type);
+    },
   };
   composer.ownerDocument = {
     defaultView: { Event },
@@ -746,4 +749,5 @@ test("contenteditable composer uses native text insertion", () => {
     ["selectAll", undefined],
     ["insertText", "Reply draft"],
   ]);
+  assert.deepEqual(events, []);
 });

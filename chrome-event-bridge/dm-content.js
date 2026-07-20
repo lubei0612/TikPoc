@@ -405,6 +405,7 @@
     }
     composer.focus();
     const view = composer.ownerDocument && composer.ownerDocument.defaultView || globalThis;
+    let dispatchFallbackEvents = true;
     if (composer.isContentEditable || composer.getAttribute && composer.getAttribute("contenteditable") === "true") {
       const documentValue = composer.ownerDocument;
       let inserted = false;
@@ -418,6 +419,8 @@
       }
       if (!inserted || core.normalizeText(composer.textContent) !== expected) {
         composer.textContent = expected;
+      } else {
+        dispatchFallbackEvents = false;
       }
     } else {
       const prototype = Object.getPrototypeOf(composer);
@@ -428,8 +431,10 @@
         composer.value = expected;
       }
     }
-    composer.dispatchEvent(new view.Event("input", { bubbles: true, composed: true }));
-    composer.dispatchEvent(new view.Event("change", { bubbles: true }));
+    if (dispatchFallbackEvents) {
+      composer.dispatchEvent(new view.Event("input", { bubbles: true, composed: true }));
+      composer.dispatchEvent(new view.Event("change", { bubbles: true }));
+    }
     return core.normalizeText(composer.value !== undefined ? composer.value : composer.textContent) === expected;
   }
 
