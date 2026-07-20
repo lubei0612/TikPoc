@@ -406,7 +406,19 @@
     composer.focus();
     const view = composer.ownerDocument && composer.ownerDocument.defaultView || globalThis;
     if (composer.isContentEditable || composer.getAttribute && composer.getAttribute("contenteditable") === "true") {
-      composer.textContent = expected;
+      const documentValue = composer.ownerDocument;
+      let inserted = false;
+      if (documentValue && typeof documentValue.execCommand === "function") {
+        try {
+          documentValue.execCommand("selectAll");
+          inserted = documentValue.execCommand("insertText", false, expected);
+        } catch (_error) {
+          inserted = false;
+        }
+      }
+      if (!inserted || core.normalizeText(composer.textContent) !== expected) {
+        composer.textContent = expected;
+      }
     } else {
       const prototype = Object.getPrototypeOf(composer);
       const descriptor = prototype && Object.getOwnPropertyDescriptor(prototype, "value");

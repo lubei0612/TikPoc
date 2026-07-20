@@ -718,3 +718,32 @@ test("uses only fresh account-scoped activity binding evidence in a Messages fra
     { ...direct, source: "direct" },
   );
 });
+
+test("contenteditable composer uses native text insertion", () => {
+  const commands = [];
+  const composer = {
+    isContentEditable: true,
+    textContent: "",
+    focus() {},
+    getAttribute(name) {
+      return name === "contenteditable" ? "true" : null;
+    },
+    dispatchEvent() {},
+  };
+  composer.ownerDocument = {
+    defaultView: { Event },
+    execCommand(command, _showUi, value) {
+      commands.push([command, value]);
+      if (command === "insertText") {
+        composer.textContent = value;
+      }
+      return true;
+    },
+  };
+
+  assert.equal(dmContent.setComposerText(composer, "Reply draft"), true);
+  assert.deepEqual(commands, [
+    ["selectAll", undefined],
+    ["insertText", "Reply draft"],
+  ]);
+});
