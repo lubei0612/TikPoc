@@ -187,7 +187,7 @@ def _post_json(base_url: str, path: str, body: dict[str, object]):
             data=json.dumps(body).encode(),
             headers={
                 "Content-Type": "application/json",
-                "Origin": "https://www.tiktok.com",
+                "Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
             },
             method="POST",
         )
@@ -309,7 +309,7 @@ def test_browser_endpoints_reject_unverified_visible_identity(
     response = client.post(
         path,
         json=body,
-        headers={"Origin": "https://www.tiktok.com"},
+        headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
     )
 
     assert response.status_code == 409
@@ -335,7 +335,7 @@ def test_browser_health_persists_visible_identity_before_binding_conflict(
     response = client.post(
         "/api/browser-health",
         json=body,
-        headers={"Origin": "https://www.tiktok.com"},
+        headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
     )
 
     assert response.status_code == 409
@@ -372,7 +372,7 @@ def test_browser_health_rejects_inconsistent_scan_timestamps(
 
     response = client.post(
         "/api/browser-health",
-        headers={"Origin": "https://www.tiktok.com"},
+        headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
         json=body,
     )
 
@@ -396,7 +396,7 @@ def test_browser_health_accepts_completed_observer_timestamp_order(
 
     response = client.post(
         "/api/browser-health",
-        headers={"Origin": "https://www.tiktok.com"},
+        headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
         json=body,
     )
 
@@ -424,7 +424,7 @@ def test_browser_health_normalizes_future_client_clock_to_server_time(
 
     response = client.post(
         "/api/browser-health",
-        headers={"Origin": "https://www.tiktok.com"},
+        headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
         json=body,
     )
 
@@ -449,7 +449,7 @@ def test_browser_account_without_expected_username_reports_unverified_health(
     response = client.post(
         "/api/browser-health",
         json=body,
-        headers={"Origin": "https://www.tiktok.com"},
+        headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
     )
 
     assert response.status_code == 409
@@ -471,7 +471,7 @@ def test_browser_account_without_expected_username_reports_unverified_health(
     claim = client.post(
         "/api/browser-actions/claim",
         json=claim_body,
-        headers={"Origin": "https://www.tiktok.com"},
+        headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
     )
     assert claim.status_code == 409
     assert claim.json() == {"error": "binding_unverified"}
@@ -515,7 +515,7 @@ def test_browser_post_routes_validate_origin_and_json_before_side_effects(
                     base_url,
                     path,
                     body,
-                    origin="https://www.tiktok.com",
+                    origin=extension_origin,
                     content_type="text/plain",
                 )
             assert wrong_media_type.value.code == 415
@@ -572,6 +572,87 @@ def test_browser_post_routes_accept_verified_chrome_extension_origin(
             extension_origin
         )
         assert service.inbounds[0].fingerprint == "fp-01"
+    finally:
+        server.shutdown()
+
+
+def test_tiktok_page_origin_cannot_call_browser_control_apis(tmp_path: Path) -> None:
+    extension_origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+    database_path = tmp_path / "db.sqlite"
+    service = FakeBrowserDmService()
+    client = TestClient(
+        create_app(
+            database_path,
+            registry=_registry(tmp_path),
+            browser_dm_service=service,
+            browser_extension_origins=(extension_origin,),
+        )
+    )
+
+    bindings = client.get(
+        "/api/browser-bindings",
+        headers={"Origin": "https://www.tiktok.com"},
+    )
+    bindings_without_origin = client.get("/api/browser-bindings")
+    post_responses = [
+        client.post(
+            path,
+            headers={"Origin": "https://www.tiktok.com"},
+            json=body,
+        )
+        for path, body in _browser_post_bodies().items()
+    ]
+
+    assert bindings.status_code == 403
+    assert bindings_without_origin.status_code == 403
+    assert all(response.status_code == 403 for response in post_responses)
+    assert service.inbounds == []
+    assert service.results == []
+    assert Database(database_path).claim_web_event("account-01") is None
+
+
+def test_browser_control_apis_fail_closed_without_configured_extension_origin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TIKPOC_BROWSER_EXTENSION_ORIGINS")
+    origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+    client = TestClient(
+        create_app(
+            tmp_path / "db.sqlite",
+            registry=_registry(tmp_path),
+            browser_dm_service=FakeBrowserDmService(),
+        )
+    )
+
+    response = client.get("/api/browser-bindings", headers={"Origin": origin})
+
+    assert response.status_code == 403
+    assert response.json() == {"error": "browser origin is not allowed"}
+
+
+def test_dashboard_compatibility_server_rejects_tiktok_page_origin(
+    tmp_path: Path,
+) -> None:
+    extension_origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+    database_path = tmp_path / "db.sqlite"
+    server, base_url = _start_server(
+        database_path,
+        web_account_registry=_registry(tmp_path),
+        browser_dm_service=FakeBrowserDmService(),
+        browser_extension_origins=(extension_origin,),
+    )
+    try:
+        with pytest.raises(HTTPError) as event_error:
+            _post_browser_request(
+                base_url,
+                "/api/browser-events",
+                _browser_post_bodies()["/api/browser-events"],
+                origin="https://www.tiktok.com",
+            )
+
+        assert event_error.value.code == 403
+        assert Database(database_path).claim_web_event("account-01") is None
     finally:
         server.shutdown()
 
@@ -674,7 +755,7 @@ def test_browser_dm_plan_and_result_endpoints(tmp_path: Path) -> None:
             "stage": "invited",
         }
         assert plan_response.headers["Access-Control-Allow-Origin"] == (
-            "https://www.tiktok.com"
+            "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
         )
         assert recorded == {"recorded": True}
         assert service.results == [(planned["plan_id"], "sent")]
@@ -799,7 +880,7 @@ def test_two_browser_accounts_isolate_equal_events_actions_and_health(
                 "dedup_key": "follower:same-user:same-event",
                 "payload": {"username": "same.user"},
             },
-            headers={"Origin": "https://www.tiktok.com"},
+            headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
         ).json() == {"accepted": True}
         assert client.post(
             "/api/browser-actions/claim",
@@ -811,7 +892,7 @@ def test_two_browser_accounts_isolate_equal_events_actions_and_health(
                 "timestamp_ms": 1_000,
                 "lease_seconds": 30,
             },
-            headers={"Origin": "https://www.tiktok.com"},
+            headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
         ).json() == {"claimed": True}
         assert client.post(
             "/api/browser-actions/result",
@@ -822,7 +903,7 @@ def test_two_browser_accounts_isolate_equal_events_actions_and_health(
                 "owner_id": f"tab-{identity['account_id']}",
                 "state": "completed",
             },
-            headers={"Origin": "https://www.tiktok.com"},
+            headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
         ).json() == {"recorded": True}
         assert client.post(
             "/api/browser-health",
@@ -833,7 +914,7 @@ def test_two_browser_accounts_isolate_equal_events_actions_and_health(
                 "signed_in": True,
                 "timestamp_ms": 2_000,
             },
-            headers={"Origin": "https://www.tiktok.com"},
+            headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
         ).json() == {"recorded": True}
 
     database = Database(database_path)
@@ -928,7 +1009,7 @@ def test_suppressed_follower_cannot_claim_followback_action(tmp_path: Path) -> N
 
     response = client.post(
         "/api/browser-actions/claim",
-        headers={"Origin": "https://www.tiktok.com"},
+        headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
         json={
             **_browser_identity(),
             "action_type": "followback",
@@ -958,7 +1039,7 @@ def test_completed_followback_triggers_welcome_and_messages_api_reconciles_it(
 
     assert client.post(
         "/api/browser-events",
-        headers={"Origin": "https://www.tiktok.com"},
+        headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
         json={
             **identity,
             "event_type": "followback_completed",
@@ -968,7 +1049,7 @@ def test_completed_followback_triggers_welcome_and_messages_api_reconciles_it(
     ).json() == {"accepted": True}
     assert client.post(
         "/api/browser-actions/claim",
-        headers={"Origin": "https://www.tiktok.com"},
+        headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
         json={
             **identity,
             "action_type": "followback",
@@ -979,7 +1060,7 @@ def test_completed_followback_triggers_welcome_and_messages_api_reconciles_it(
     ).json() == {"claimed": True}
     assert client.post(
         "/api/browser-actions/result",
-        headers={"Origin": "https://www.tiktok.com"},
+        headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
         json={
             **identity,
             "action_type": "followback",
@@ -992,12 +1073,12 @@ def test_completed_followback_triggers_welcome_and_messages_api_reconciles_it(
 
     plan = client.post(
         "/api/browser-dm/welcome-plan",
-        headers={"Origin": "https://www.tiktok.com"},
+        headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
         json=identity,
     )
     result = client.post(
         "/api/browser-dm/welcome-result",
-        headers={"Origin": "https://www.tiktok.com"},
+        headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
         json={**identity, "plan_id": 23, "state": "sent"},
     )
 
@@ -1028,7 +1109,7 @@ def test_welcome_endpoints_apply_visible_account_binding(tmp_path: Path) -> None
 
     response = client.post(
         "/api/browser-dm/welcome-plan",
-        headers={"Origin": "https://www.tiktok.com"},
+        headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
         json=mismatched,
     )
 
@@ -1184,13 +1265,15 @@ def test_browser_post_options_returns_cors_headers(tmp_path: Path, path: str) ->
         response = urlopen(
             Request(
                 base_url + path,
-                headers={"Origin": "https://www.tiktok.com"},
+                headers={
+                    "Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+                },
                 method="OPTIONS",
             )
         )
         assert response.status == 204
         assert response.headers["Access-Control-Allow-Origin"] == (
-            "https://www.tiktok.com"
+            "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
         )
         assert response.headers["Access-Control-Allow-Methods"] == "POST, OPTIONS"
     finally:
@@ -1320,7 +1403,7 @@ def test_browser_event_endpoint_enqueues_and_returns_cors_header(
                 data=body,
                 headers={
                     "Content-Type": "application/json",
-                    "Origin": "https://www.tiktok.com",
+                    "Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
                 },
                 method="POST",
             )
@@ -1328,7 +1411,7 @@ def test_browser_event_endpoint_enqueues_and_returns_cors_header(
 
         assert json.load(response) == {"accepted": True}
         assert response.headers["Access-Control-Allow-Origin"] == (
-            "https://www.tiktok.com"
+            "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
         )
         event = Database(database_path).claim_web_event("account-01")
         assert event is not None
@@ -1394,7 +1477,7 @@ def test_fastapi_status_remains_available_while_reply_planner_is_blocked(
         registry=_registry(tmp_path),
         browser_dm_service=service,
     )
-    headers = {"Origin": "https://www.tiktok.com"}
+    headers = {"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"}
     status_finished = threading.Event()
 
     def request_status(client: TestClient):
@@ -1554,7 +1637,7 @@ def test_fastapi_browser_routes_reject_origin_and_media_type_before_side_effects
         "/api/browser-dm/reply-plan",
         content=json.dumps(_browser_inbound_body()),
         headers={
-            "Origin": "https://www.tiktok.com",
+            "Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
             "Content-Type": "text/plain",
         },
     )
@@ -1615,7 +1698,7 @@ def test_browser_bindings_expose_only_nonsecret_profile_mapping(
     client = TestClient(create_app(tmp_path / "bindings.db", registry=registry))
     response = client.get(
         "/api/browser-bindings",
-        headers={"Origin": "https://www.tiktok.com"},
+        headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
     )
     assert response.status_code == 200
     assert response.json() == {

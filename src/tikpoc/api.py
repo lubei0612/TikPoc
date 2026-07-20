@@ -224,13 +224,9 @@ def create_app(
             "TIKPOC_BROWSER_EXTENSION_ORIGINS", ""
         ).split(",")
     browser_origins = {
-        "https://tiktok.com",
-        "https://www.tiktok.com",
-        *(
-            origin.strip()
-            for origin in browser_extension_origins
-            if _EXTENSION_ORIGIN.fullmatch(origin.strip())
-        ),
+        origin.strip()
+        for origin in browser_extension_origins
+        if _EXTENSION_ORIGIN.fullmatch(origin.strip())
     }
 
     app = FastAPI(title="TikPoc Operator API", docs_url=None, redoc_url=None)
@@ -288,7 +284,7 @@ def create_app(
                 )
             else:
                 response = await call_next(request)
-        elif request.method == "GET" and origin is not None and allowed_origin is None:
+        elif request.method == "GET" and allowed_origin is None:
             return _json({"error": "browser origin is not allowed"}, 403)
         else:
             response = await call_next(request)

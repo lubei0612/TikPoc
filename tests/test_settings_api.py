@@ -249,7 +249,7 @@ def test_browser_bindings_return_persisted_operator_switches(tmp_path) -> None:
 
     response = client.get(
         "/api/browser-bindings",
-        headers={"Origin": "https://www.tiktok.com"},
+        headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
     )
 
     account = response.json()["accounts"][0]

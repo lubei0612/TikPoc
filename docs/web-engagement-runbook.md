@@ -49,6 +49,19 @@ accounts:
 
 环境变量放在忽略提交的 `.env.local`。数据库使用本机私有运行目录：
 
+首次加载扩展后，在 `chrome://extensions` 打开“开发者模式”，从
+`TikPoc Event Bridge` 卡片读取 32 位扩展 ID，并把精确来源写入 `.env.local`：
+
+```bash
+TIKPOC_BROWSER_EXTENSION_ORIGINS=chrome-extension://EXTENSION_ID
+```
+
+只从 Chrome 的可见扩展管理页面读取该 ID，不读取 Chrome Profile 文件、Cookie、
+Token 或登录存储。多个受控 Profile 使用不同扩展 ID 时，以英文逗号分隔多个完整
+`chrome-extension://...` 来源。服务未配置有效扩展来源时，浏览器控制 API 默认关闭；
+TikTok 页面来源不会获得绑定、事件、计划、租约、结果或健康接口权限。修改配置后需
+重启本机服务，再重载扩展和 TikTok 页面。
+
 ```bash
 mkdir -p /Users/Shared/TikPoc
 

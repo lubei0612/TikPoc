@@ -63,13 +63,9 @@ class DashboardServer(ThreadingHTTPServer):
                 "TIKPOC_BROWSER_EXTENSION_ORIGINS", ""
             ).split(",")
         self.browser_origins = {
-            "https://tiktok.com",
-            "https://www.tiktok.com",
-            *(
-                origin.strip()
-                for origin in browser_extension_origins
-                if re.fullmatch(r"chrome-extension://[a-p]{32}", origin.strip())
-            ),
+            origin.strip()
+            for origin in browser_extension_origins
+            if re.fullmatch(r"chrome-extension://[a-p]{32}", origin.strip())
         }
         self.tiktok_app_secret = tiktok_app_secret
         self.webhook_max_age_seconds = webhook_max_age_seconds

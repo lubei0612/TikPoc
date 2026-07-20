@@ -153,7 +153,7 @@ def test_takeover_is_idempotent_and_disables_future_ai_plans(tmp_path: Path) -> 
     ).human_required
     blocked = client.post(
         "/api/browser-dm/reply-plan",
-        headers={"origin": "https://www.tiktok.com"},
+        headers={"origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
         json={
             **_browser_identity(),
             "conversation_id": "conversation-01",
@@ -447,7 +447,7 @@ def test_ai_off_still_allows_taken_over_manual_plan_to_claim_send_lease(
     assert manual.status_code == 200
     claim = client.post(
         "/api/browser-actions/claim",
-        headers={"Origin": "https://www.tiktok.com"},
+        headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
         json={
             **_browser_identity(),
             "action_type": "dm_send",
@@ -475,7 +475,7 @@ def test_takeover_supersedes_ai_draft_before_atomic_dm_claim(tmp_path: Path) -> 
     )
     claim = client.post(
         "/api/browser-actions/claim",
-        headers={"Origin": "https://www.tiktok.com"},
+        headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
         json={
             **_browser_identity(),
             "action_type": "dm_send",
@@ -514,7 +514,7 @@ def test_dm_claim_rejects_plan_id_aliases_and_creates_only_canonical_lease(
     for alias in (str(draft.id), f"dm_send:+{draft.id}", f"dm_send:0{draft.id}"):
         response = client.post(
             route,
-            headers={"Origin": "https://www.tiktok.com"},
+            headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
             json={**base, "action_key": alias},
         )
         assert response.status_code == 200
@@ -522,7 +522,7 @@ def test_dm_claim_rejects_plan_id_aliases_and_creates_only_canonical_lease(
 
     canonical = client.post(
         route,
-        headers={"Origin": "https://www.tiktok.com"},
+        headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
         json={**base, "action_key": f"dm_send:{draft.id}"},
     )
     assert canonical.status_code == 200
@@ -652,7 +652,7 @@ def test_disabled_account_readiness_masks_persisted_operator_switches_and_blocks
     assert readiness["followback_enabled"] is False
     claim = client.post(
         "/api/browser-actions/claim",
-        headers={"Origin": "https://www.tiktok.com"},
+        headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
         json={
             **_browser_identity(),
             "action_type": "followback",
@@ -676,7 +676,7 @@ def test_disabled_account_controls_reject_browser_action_claims_without_leases(
 ) -> None:
     app, database = _seeded_app(tmp_path)
     client = TestClient(app)
-    headers = {"origin": "https://www.tiktok.com"}
+    headers = {"origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"}
     assert (
         client.post(
             "/api/accounts/account-01/followback-enable",
