@@ -410,3 +410,116 @@ test("a completed followback wakes open TikTok tabs for welcome scanning", async
     { tabId: 12, message: { type: "TIKPOC_HEALTH_TICK" } },
   ]);
 });
+
+function monitoringHarness() {
+  let messageListener;
+  const createdUrls = [];
+  const requests = [];
+  const settings = {
+    dashboardUrl: "http://127.0.0.1:8766",
+    accountId: "account-01",
+    enabled: false,
+    monitoringStarted: false,
+  };
+  const tabs = [];
+  const context = {
+    URL,
+    Set,
+    Map,
+    Date,
+    chrome: {
+      runtime: {
+        onMessage: { addListener(listener) { messageListener = listener; } },
+        onInstalled: { addListener() {} },
+        onStartup: { addListener() {} },
+        openOptionsPage() {},
+      },
+      storage: {
+        local: {
+          get(_keys, callback) { callback({ tikpocSettings: { ...settings } }); },
+          set(update, callback) {
+            Object.assign(settings, update.tikpocSettings || {});
+            if (callback) callback();
+          },
+        },
+        onChanged: { addListener() {} },
+      },
+      alarms: { create() {}, onAlarm: { addListener() {} } },
+      tabs: {
+        async query() { return tabs.map((tab) => ({ ...tab })); },
+        async create({ url }) {
+          const tab = { id: tabs.length + 1, url };
+          tabs.push(tab);
+          createdUrls.push(url);
+          return tab;
+        },
+        async sendMessage() {},
+        onRemoved: { addListener() {} },
+      },
+      debugger: {
+        async attach() {}, async sendCommand() {}, async detach() {},
+      },
+    },
+    async fetch(url, options = {}) {
+      requests.push({ url, options });
+      return { ok: true, async json() { return { ok: true }; } };
+    },
+  };
+  vm.runInNewContext(
+    fs.readFileSync(path.join(__dirname, "background.js"), "utf8"),
+    context,
+  );
+  function setMonitoring(started) {
+    return new Promise((resolve) => {
+      assert.equal(messageListener({
+        type: "TIKPOC_SET_MONITORING",
+        dashboardUrl: settings.dashboardUrl,
+        started,
+      }, {}, resolve), true);
+    });
+  }
+  return { createdUrls, requests, setMonitoring, settings, tabs };
+}
+
+test("one-click monitoring opens missing pages and enables the bound account", async () => {
+  const run = monitoringHarness();
+
+  const response = await run.setMonitoring(true);
+
+  assert.equal(response.ok, true);
+  assert.equal(run.settings.monitoringStarted, true);
+  assert.equal(run.settings.enabled, true);
+  assert.deepEqual(run.createdUrls, [
+    "https://www.tiktok.com/",
+    "https://www.tiktok.com/messages",
+  ]);
+  assert.deepEqual(
+    run.requests.filter(({ url }) => url.includes("/api/accounts/"))
+      .map(({ url, options }) => [url, JSON.parse(options.body).enabled]),
+    [
+      ["http://127.0.0.1:8766/api/accounts/account-01/ai-enable", true],
+      ["http://127.0.0.1:8766/api/accounts/account-01/followback-enable", true],
+    ],
+  );
+
+  await run.setMonitoring(true);
+  assert.equal(run.createdUrls.length, 2);
+});
+
+test("stopping monitoring disables actions without closing observer tabs", async () => {
+  const run = monitoringHarness();
+  await run.setMonitoring(true);
+
+  const response = await run.setMonitoring(false);
+
+  assert.equal(response.ok, true);
+  assert.equal(run.settings.monitoringStarted, false);
+  assert.equal(run.settings.enabled, false);
+  assert.equal(run.tabs.length, 2);
+  assert.deepEqual(
+    run.requests.filter(({ url }) => url.includes("/api/accounts/"))
+      .slice(-2)
+      .map(({ options }) => JSON.parse(options.body).enabled),
+    [false, false],
+  );
+});

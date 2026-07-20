@@ -1,9 +1,21 @@
+let popupSettings = {};
+let monitoringPending = false;
+
+function renderMonitoring() {
+  const state = TikPocPopupCore.monitoringButton(popupSettings, monitoringPending);
+  const button = document.querySelector("#toggle-monitoring");
+  button.textContent = state.label;
+  button.disabled = state.disabled;
+  button.dataset.action = state.action;
+}
+
 chrome.storage.local.get([
   "tikpocSettings",
   "tikpocBindingStatus",
   "tikpocAutoConnectStatus",
 ], (stored) => {
   const settings = stored.tikpocSettings || {};
+  popupSettings = settings;
   const binding = TikPocOptionsCore.popupBinding(settings, stored.tikpocBindingStatus);
   const state = document.querySelector("#state");
   state.textContent = settings.enabled ? "运行中" : "未启用";
@@ -34,6 +46,44 @@ chrome.storage.local.get([
   document.querySelector("#connection").textContent = connection
     ? `${connection.ok ? "正常" : "失败"} ${new Date(connection.testedAt).toLocaleString()}`
     : "未测试";
+  renderMonitoring();
+});
+
+document.querySelector("#toggle-monitoring").addEventListener("click", () => {
+  if (monitoringPending) {
+    return;
+  }
+  monitoringPending = true;
+  renderMonitoring();
+  const started = !popupSettings.monitoringStarted;
+  document.querySelector("#monitoring-detail").textContent = started
+    ? "正在连接服务并准备 TikTok 页面..."
+    : "正在停止账号动作...";
+  chrome.runtime.sendMessage(
+    {
+      type: "TIKPOC_SET_MONITORING",
+      dashboardUrl: popupSettings.dashboardUrl || "http://127.0.0.1:8766",
+      started,
+    },
+    (response) => {
+      monitoringPending = false;
+      if (chrome.runtime.lastError || !response || !response.ok) {
+        document.querySelector("#monitoring-detail").textContent =
+          response && response.error ||
+          chrome.runtime.lastError && chrome.runtime.lastError.message ||
+          "监控状态更新失败。";
+        renderMonitoring();
+        return;
+      }
+      chrome.storage.local.get(["tikpocSettings"], (stored) => {
+        popupSettings = stored.tikpocSettings || popupSettings;
+        document.querySelector("#monitoring-detail").textContent = started
+          ? "监控已开始，缺失页面会自动恢复。"
+          : "监控已停止，账号和页面配置已保留。";
+        renderMonitoring();
+      });
+    },
+  );
 });
 
 document.querySelector("#open-options").addEventListener("click", () => {

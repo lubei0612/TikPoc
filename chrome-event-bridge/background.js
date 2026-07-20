@@ -4,6 +4,8 @@ const GET_BINDINGS = "TIKPOC_GET_BINDINGS";
 const HEALTH_ALARM = "tikpoc-browser-health";
 const HEALTH_TICK = "TIKPOC_HEALTH_TICK";
 const TRUSTED_SEND = "TIKPOC_TRUSTED_SEND";
+const SET_MONITORING = "TIKPOC_SET_MONITORING";
+const SETTINGS_KEY = "tikpocSettings";
 const trustedSendQueues = new Map();
 const POST_ROUTES = new Map([
   [REPORT_EVENT, "/api/browser-events"],
@@ -155,19 +157,127 @@ function trustedSend(message, sender) {
   return queueTrustedSend(tabId, text);
 }
 
+function storageSettings() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get([SETTINGS_KEY], (stored) => {
+      resolve(stored && stored[SETTINGS_KEY] || {});
+    });
+  });
+}
+
+function storeSettings(settings) {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ [SETTINGS_KEY]: settings }, resolve);
+  });
+}
+
+function isMessagesTab(tab) {
+  return trustedMessagesUrl(tab && tab.url);
+}
+
+function isTikTokObserverTab(tab) {
+  let url;
+  try {
+    url = new URL(String(tab && tab.url || ""));
+  } catch (_error) {
+    return false;
+  }
+  return url.origin === "https://www.tiktok.com" && !isMessagesTab(tab);
+}
+
+async function ensureMonitoringTabs() {
+  if (!chrome.tabs || typeof chrome.tabs.query !== "function" ||
+      typeof chrome.tabs.create !== "function") {
+    throw new Error("Chrome tab management is unavailable");
+  }
+  const tabs = await chrome.tabs.query({ url: "https://www.tiktok.com/*" });
+  const created = [];
+  if (!tabs.some(isTikTokObserverTab)) {
+    await chrome.tabs.create({ url: "https://www.tiktok.com/" });
+    created.push("https://www.tiktok.com/");
+  }
+  if (!tabs.some(isMessagesTab)) {
+    await chrome.tabs.create({ url: "https://www.tiktok.com/messages" });
+    created.push("https://www.tiktok.com/messages");
+  }
+  return created;
+}
+
+async function setAccountAutomation(settings, enabled) {
+  const accountId = String(settings && settings.accountId || "").trim();
+  if (!accountId) {
+    return false;
+  }
+  const dashboardUrl = settings.dashboardUrl || "http://127.0.0.1:8766";
+  const prefix = `monitor-${enabled ? "start" : "stop"}-${Date.now()}`;
+  await postLocal(
+    dashboardUrl,
+    `/api/accounts/${encodeURIComponent(accountId)}/ai-enable`,
+    { command_id: `${prefix}-ai`, enabled: Boolean(enabled) },
+  );
+  await postLocal(
+    dashboardUrl,
+    `/api/accounts/${encodeURIComponent(accountId)}/followback-enable`,
+    { command_id: `${prefix}-followback`, enabled: Boolean(enabled) },
+  );
+  return true;
+}
+
+async function setMonitoring(message) {
+  const started = message && message.started === true;
+  const dashboardUrl = localDashboardUrl(message && message.dashboardUrl);
+  if (!dashboardUrl) {
+    throw new Error("Dashboard URL must use http://127.0.0.1 or http://localhost");
+  }
+  if (started) {
+    await pingDashboard({ dashboardUrl });
+  }
+  const current = await storageSettings();
+  const settings = {
+    ...current,
+    dashboardUrl,
+    enabled: started,
+    monitoringStarted: started,
+    browserFollowbackEnabled: started,
+    browserDmEnabled: started,
+  };
+  await storeSettings(settings);
+  if (started) {
+    await ensureMonitoringTabs();
+  }
+  await setAccountAutomation(settings, started);
+  return { started, account_id: settings.accountId || "" };
+}
+
+async function recoverMonitoring() {
+  if (!chrome.storage || !chrome.storage.local) {
+    return false;
+  }
+  const settings = await storageSettings();
+  if (!settings.monitoringStarted) {
+    return false;
+  }
+  await ensureMonitoringTabs();
+  await setAccountAutomation(settings, true);
+  return true;
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (
     !message ||
     (!POST_ROUTES.has(message.type) &&
       message.type !== PING_DASHBOARD &&
       message.type !== GET_BINDINGS &&
-      message.type !== TRUSTED_SEND)
+      message.type !== TRUSTED_SEND &&
+      message.type !== SET_MONITORING)
   ) {
     return false;
   }
   let task;
   if (message.type === TRUSTED_SEND) {
     task = Promise.resolve().then(() => trustedSend(message, sender));
+  } else if (message.type === SET_MONITORING) {
+    task = setMonitoring(message);
   } else if (message.type === PING_DASHBOARD) {
     task = pingDashboard(message);
   } else if (message.type === GET_BINDINGS) {
@@ -215,12 +325,32 @@ if (chrome.alarms && chrome.alarms.onAlarm) {
   chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm && alarm.name === HEALTH_ALARM) {
       notifyTikTokTabs().catch(() => {});
+      recoverMonitoring().catch(() => {});
     }
   });
 }
 
 if (chrome.runtime.onStartup) {
-  chrome.runtime.onStartup.addListener(ensureHealthAlarm);
+  chrome.runtime.onStartup.addListener(() => {
+    ensureHealthAlarm();
+    recoverMonitoring().catch(() => {});
+  });
+}
+
+if (chrome.storage && chrome.storage.onChanged) {
+  chrome.storage.onChanged.addListener((changes) => {
+    if (changes && changes[SETTINGS_KEY] &&
+        changes[SETTINGS_KEY].newValue &&
+        changes[SETTINGS_KEY].newValue.monitoringStarted) {
+      recoverMonitoring().catch(() => {});
+    }
+  });
+}
+
+if (chrome.tabs && chrome.tabs.onRemoved) {
+  chrome.tabs.onRemoved.addListener(() => {
+    recoverMonitoring().catch(() => {});
+  });
 }
 
 chrome.runtime.onInstalled.addListener(({ reason }) => {

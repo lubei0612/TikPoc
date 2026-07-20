@@ -11,6 +11,10 @@
       dt { color: #6b727b; }
       dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
       button { width: 100%; min-height: 36px; border: 1px solid #d62950; border-radius: 6px; background: #d62950; color: #fff; font-weight: 700; cursor: pointer; }
+      button + button { margin-top: 8px; }
+      button.secondary { background: #fff; color: #d62950; }
+      button:disabled { cursor: wait; opacity: .65; }
+      #monitoring-detail { min-height: 18px; margin: -8px 0 10px; color: #6b727b; font-size: 11px; }
       .state { color: #126b4b; }
       .state.off { color: #9b2435; }
     </style>
@@ -31,8 +35,11 @@
       <dt>私信回复</dt><dd id="dm">-</dd>
       <dt>连接测试</dt><dd id="connection">未测试</dd>
     </dl>
-    <button id="open-options" type="button">打开设置</button>
+    <div id="monitoring-detail">点击开始后自动打开并维护监控页面。</div>
+    <button id="toggle-monitoring" type="button">开始监控</button>
+    <button id="open-options" class="secondary" type="button">打开设置</button>
     <script src="options-core.js"></script>
+    <script src="popup-core.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>
