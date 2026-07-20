@@ -414,6 +414,7 @@ test("a completed followback wakes open TikTok tabs for welcome scanning", async
 function monitoringHarness() {
   let messageListener;
   let alarmListener;
+  let installedListener;
   const createdUrls = [];
   const reloadedTabIds = [];
   const requests = [];
@@ -432,7 +433,7 @@ function monitoringHarness() {
     chrome: {
       runtime: {
         onMessage: { addListener(listener) { messageListener = listener; } },
-        onInstalled: { addListener() {} },
+        onInstalled: { addListener(listener) { installedListener = listener; } },
         onStartup: { addListener() {} },
         openOptionsPage() {},
       },
@@ -488,9 +489,14 @@ function monitoringHarness() {
     alarmListener({ name: "tikpoc-browser-health" });
     await new Promise((resolve) => setImmediate(resolve));
   }
+  async function fireInstalled(reason) {
+    installedListener({ reason });
+    await new Promise((resolve) => setImmediate(resolve));
+  }
   return {
     createdUrls,
     fireHealthAlarm,
+    fireInstalled,
     reloadedTabIds,
     requests,
     setMonitoring,
@@ -554,6 +560,19 @@ test("starting monitoring refreshes reused observer pages once", async () => {
   await run.setMonitoring(true);
 
   assert.deepEqual(run.createdUrls, []);
+  assert.deepEqual(run.reloadedTabIds, [10, 11]);
+});
+
+test("extension updates refresh running monitoring pages automatically", async () => {
+  const run = monitoringHarness();
+  run.settings.monitoringStarted = true;
+  run.tabs.push(
+    { id: 10, url: "https://www.tiktok.com/@shop" },
+    { id: 11, url: "https://www.tiktok.com/messages" },
+  );
+
+  await run.fireInstalled("update");
+
   assert.deepEqual(run.reloadedTabIds, [10, 11]);
 });
 

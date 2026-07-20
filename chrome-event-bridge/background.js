@@ -267,7 +267,7 @@ async function setMonitoring(message) {
   return { started, account_id: settings.accountId || "" };
 }
 
-async function recoverMonitoring() {
+async function recoverMonitoring(options = {}) {
   if (!chrome.storage || !chrome.storage.local) {
     return false;
   }
@@ -275,7 +275,7 @@ async function recoverMonitoring() {
   if (!settings.monitoringStarted) {
     return false;
   }
-  await ensureMonitoringTabs();
+  await ensureMonitoringTabs(options);
   return true;
 }
 
@@ -378,5 +378,7 @@ chrome.runtime.onInstalled.addListener(({ reason }) => {
   ensureHealthAlarm();
   if (reason === "install") {
     chrome.runtime.openOptionsPage();
+  } else if (reason === "update") {
+    recoverMonitoring({ refreshExisting: true }).catch(() => {});
   }
 });
