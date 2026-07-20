@@ -58,17 +58,18 @@ class FakeDriver:
         self.reposted = False
         self.action_elements = {
             '//*[starts-with(@content-desc, "Like video.")]': FakeElement(
-                on_click=lambda: setattr(self, "liked", True)
+                "Like video.", on_click=lambda: setattr(self, "liked", True)
             ),
             '//*[@content-desc="Add or remove this video from Favorites."]': FakeElement(
+                "Add or remove this video from Favorites.",
                 on_click=lambda: setattr(self, "favorite", True),
                 attributes={"selected": lambda: "true" if self.favorite else "false"},
             ),
             '//*[starts-with(@content-desc, "Share video.")]': FakeElement(
-                on_click=lambda: setattr(self, "share_open", True)
+                "Share video.", on_click=lambda: setattr(self, "share_open", True)
             ),
             '//*[@text="Repost" or @content-desc="Repost"]': FakeElement(
-                on_click=lambda: setattr(self, "reposted", True)
+                "Repost", on_click=lambda: setattr(self, "reposted", True)
             ),
         }
         self.back_calls = 0
@@ -85,6 +86,38 @@ class FakeDriver:
                 return []
             assert value == "com.zhiliaoapp.musically:id/eqx"
             return self.posts
+        if "Video liked" in value and "Like video" in value:
+            return (
+                [FakeElement("Video liked")]
+                if self.liked
+                else [
+                    self.action_elements[
+                        '//*[starts-with(@content-desc, "Like video.")]'
+                    ]
+                ]
+            )
+        if "Remove from Favorites" in value and "Add or remove" in value:
+            return (
+                [FakeElement("Added to Favorites")]
+                if self.favorite
+                else [
+                    self.action_elements[
+                        '//*[@content-desc="Add or remove this video from Favorites."]'
+                    ]
+                ]
+            )
+        if "You reposted" in value and "Share video" in value:
+            if self.reposted:
+                return [FakeElement("You reposted")]
+            if self.share_open:
+                return [
+                    self.action_elements[
+                        '//*[@text="Repost" or @content-desc="Repost"]'
+                    ]
+                ]
+            return [
+                self.action_elements['//*[starts-with(@content-desc, "Share video.")]']
+            ]
         if "Video liked" in value or "Unlike video" in value:
             return [FakeElement()] if self.liked else []
         if "Like video" in value:
@@ -1023,6 +1056,7 @@ class SemanticElement(FakeElement):
 class SemanticActionDriver:
     def __init__(self, *, delayed_like_reads: int = 0) -> None:
         self.clicked_labels: list[str] = []
+        self.semantic_queries: list[str] = []
         self.liked = False
         self.favorite = False
         self.share_open = False
@@ -1036,7 +1070,7 @@ class SemanticActionDriver:
             {"selected": lambda: "true" if self.favorite else "false"},
         )
         self.share = SemanticElement("Share", self._click_share)
-        self.repost = SemanticElement("Repost", self._click_repost)
+        self.repost = SemanticElement("Repost", self._click_repost, {"text": "Repost"})
 
     @property
     def page_source(self) -> str:
@@ -1059,6 +1093,21 @@ class SemanticActionDriver:
         self.reposted = True
 
     def find_elements(self, by: str, value: str):
+        self.semantic_queries.append(value)
+        if "Video liked" in value and "Like video" in value:
+            return [SemanticElement("Video liked")] if self.liked else [self.like]
+        if "Remove from Favorites" in value and "Add or remove" in value:
+            return (
+                [SemanticElement("Added to Favorites")]
+                if self.favorite
+                else [self.favorite_control]
+            )
+        if "You reposted" in value and "Share video" in value:
+            if self.reposted:
+                return [SemanticElement("You reposted")]
+            if self.share_open:
+                return [self.repost]
+            return [self.share]
         if "Video liked" in value or "Unlike video" in value:
             if self.liked:
                 self.like_active_reads += 1
@@ -1090,6 +1139,11 @@ class SemanticActionDriver:
 
 class RepostUnavailableDriver(SemanticActionDriver):
     def find_elements(self, by: str, value: str):
+        if "You reposted" in value and "Share video" in value:
+            if self.share_open:
+                self.semantic_queries.append(value)
+                return []
+            return super().find_elements(by, value)
         if "Repost" in value:
             return []
         if self.share_open and (
@@ -1097,6 +1151,25 @@ class RepostUnavailableDriver(SemanticActionDriver):
         ):
             return [SemanticElement("Share surface")]
         return super().find_elements(by, value)
+
+
+class AmbiguousSemanticActionDriver(SemanticActionDriver):
+    def __init__(self, ambiguous_outcome: OutcomeKind) -> None:
+        super().__init__()
+        self.ambiguous_outcome = ambiguous_outcome
+
+    def find_elements(self, by: str, value: str):
+        elements = super().find_elements(by, value)
+        matches_outcome = {
+            OutcomeKind.LIKE: "Video liked" in value and "Like video" in value,
+            OutcomeKind.FAVORITE: (
+                "Remove from Favorites" in value and "Add or remove" in value
+            ),
+            OutcomeKind.REPOST: "You reposted" in value and "Share video" in value,
+        }
+        if matches_outcome[self.ambiguous_outcome] and elements:
+            return [elements[0], elements[0]]
+        return elements
 
 
 class HiddenRepostUnavailableDriver(RepostUnavailableDriver):
@@ -1133,6 +1206,23 @@ def test_execute_like_waits_for_delayed_selected_state() -> None:
     assert driver.clicked_labels == ["Like"]
 
 
+def test_execute_like_uses_one_query_before_and_after_click() -> None:
+    driver = SemanticActionDriver()
+    device = AppiumTikTokDevice(driver, poll_interval=0, action_timeout=0)
+
+    assert device.execute_outcome(OutcomeKind.LIKE) is ActionResult.CONFIRMED
+
+    assert len(driver.semantic_queries) == 2
+
+
+def test_execute_like_keeps_duplicate_controls_uncertain() -> None:
+    driver = AmbiguousSemanticActionDriver(OutcomeKind.LIKE)
+    device = AppiumTikTokDevice(driver, poll_interval=0, action_timeout=0)
+
+    assert device.execute_outcome(OutcomeKind.LIKE) is ActionResult.UNCERTAIN
+    assert driver.clicked_labels == []
+
+
 def test_execute_favorite_requires_semantic_selected_state() -> None:
     driver = SemanticActionDriver()
     device = AppiumTikTokDevice(driver, poll_interval=0, action_timeout=0)
@@ -1141,12 +1231,47 @@ def test_execute_favorite_requires_semantic_selected_state() -> None:
     assert driver.clicked_labels == ["Favorite"]
 
 
+def test_execute_favorite_uses_one_query_before_and_after_click() -> None:
+    driver = SemanticActionDriver()
+    device = AppiumTikTokDevice(driver, poll_interval=0, action_timeout=0)
+
+    assert device.execute_outcome(OutcomeKind.FAVORITE) is ActionResult.CONFIRMED
+
+    assert len(driver.semantic_queries) == 2
+
+
+def test_execute_favorite_keeps_duplicate_controls_uncertain() -> None:
+    driver = AmbiguousSemanticActionDriver(OutcomeKind.FAVORITE)
+    device = AppiumTikTokDevice(driver, poll_interval=0, action_timeout=0)
+
+    assert device.execute_outcome(OutcomeKind.FAVORITE) is ActionResult.UNCERTAIN
+    assert driver.clicked_labels == []
+
+
 def test_execute_repost_clicks_share_then_repost_and_verifies_state() -> None:
     driver = SemanticActionDriver()
     device = AppiumTikTokDevice(driver, poll_interval=0, action_timeout=0)
 
     assert device.execute_outcome(OutcomeKind.REPOST) is ActionResult.CONFIRMED
     assert driver.clicked_labels == ["Share", "Repost"]
+
+
+def test_execute_repost_consolidates_semantic_state_queries() -> None:
+    driver = SemanticActionDriver()
+    device = AppiumTikTokDevice(driver, poll_interval=0, action_timeout=0)
+
+    assert device.execute_outcome(OutcomeKind.REPOST) is ActionResult.CONFIRMED
+
+    assert len(driver.semantic_queries) == 3
+
+
+def test_execute_repost_keeps_duplicate_controls_uncertain() -> None:
+    driver = AmbiguousSemanticActionDriver(OutcomeKind.REPOST)
+    driver.share_open = True
+    device = AppiumTikTokDevice(driver, poll_interval=0, action_timeout=0)
+
+    assert device.execute_outcome(OutcomeKind.REPOST) is ActionResult.UNCERTAIN
+    assert driver.clicked_labels == []
 
 
 def test_execute_repost_reports_visible_unavailable_share_surface() -> None:

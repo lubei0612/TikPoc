@@ -59,6 +59,11 @@ REPOST_ACTIVE_XPATH = (
     '//*[contains(@text,"You reposted") or contains(@content-desc,"You reposted") or '
     'contains(@text,"Remove repost") or contains(@content-desc,"Remove repost")]'
 )
+LIKE_STATE_XPATH = f"{LIKE_ACTIVE_XPATH} | {LIKE_CONTROL_XPATH}"
+FAVORITE_STATE_XPATH = f"{FAVORITE_ACTIVE_XPATH} | {FAVORITE_CONTROL_XPATH}"
+REPOST_STATE_XPATH = (
+    f"{REPOST_ACTIVE_XPATH} | {REPOST_CONTROL_XPATH} | {SHARE_CONTROL_XPATH}"
+)
 
 
 def _favorite_pixel_state(png_bytes: bytes) -> bool | None:
@@ -240,29 +245,26 @@ class AppiumTikTokDevice:
         normalized = OutcomeKind(outcome)
         if normalized is OutcomeKind.TRACE:
             return ActionResult.CONFIRMED
-        if self._outcome_state(normalized) is True:
+        state, control, control_kind = self._outcome_observation(normalized)
+        if state is True:
             return ActionResult.CONFIRMED
 
         if normalized is OutcomeKind.REPOST:
-            repost = self._first_visible(REPOST_CONTROL_XPATH)
-            if repost is None:
-                share = self._first_visible(SHARE_CONTROL_XPATH)
-                if share is None:
+            if control_kind != "repost":
+                if control is None or control_kind != "share":
                     return ActionResult.UNCERTAIN
-                share.click()
-                repost = self._wait_for_element(REPOST_CONTROL_XPATH)
+                control.click()
+                repost = self._wait_for_outcome_control(normalized, "repost")
                 if repost is None:
                     if self._share_surface_visible():
                         return ActionResult.UNAVAILABLE
                     return ActionResult.UNCERTAIN
+            else:
+                repost = control
+            if repost is None:
+                return ActionResult.UNCERTAIN
             repost.click()
         else:
-            selector = (
-                LIKE_CONTROL_XPATH
-                if normalized is OutcomeKind.LIKE
-                else FAVORITE_CONTROL_XPATH
-            )
-            control = self._first_visible(selector)
             if control is None:
                 return ActionResult.UNCERTAIN
             control.click()
@@ -514,42 +516,97 @@ class AppiumTikTokDevice:
         raise ValueError("profile surface did not become ready")
 
     def _outcome_state(self, outcome: OutcomeKind) -> bool | None:
+        state, _, _ = self._outcome_observation(outcome)
+        return state
+
+    def _outcome_observation(
+        self, outcome: OutcomeKind
+    ) -> tuple[bool | None, object | None, str]:
         if outcome is OutcomeKind.TRACE:
-            return True
+            return True, None, ""
         if outcome is OutcomeKind.LIKE:
-            if self._first_visible(LIKE_ACTIVE_XPATH) is not None:
-                return True
-            if self._first_visible(LIKE_CONTROL_XPATH) is not None:
-                return False
-            return None
+            elements = self._visible_elements(LIKE_STATE_XPATH)
+            for element in elements:
+                semantics = self._element_semantics(element)
+                if "video liked" in semantics or "unlike video" in semantics:
+                    return True, None, ""
+            return (
+                (False, elements[0], "like") if len(elements) == 1 else (None, None, "")
+            )
         if outcome is OutcomeKind.FAVORITE:
-            if self._first_visible(FAVORITE_ACTIVE_XPATH) is not None:
-                return True
-            control = self._first_visible(FAVORITE_CONTROL_XPATH)
-            if control is None:
-                return None
+            elements = self._visible_elements(FAVORITE_STATE_XPATH)
+            for element in elements:
+                semantics = self._element_semantics(element)
+                if (
+                    "remove from favorites" in semantics
+                    or "added to favorites" in semantics
+                ):
+                    return True, None, ""
+            if len(elements) != 1:
+                return None, None, ""
+            control = elements[0]
             pixel_state = _favorite_pixel_state(control.screenshot_as_png)
             if pixel_state is True:
-                return True
+                return True, None, ""
             for attribute in ("selected", "checked"):
                 value = str(control.get_attribute(attribute) or "").strip().lower()
                 if value in {"true", "1"}:
-                    return True
+                    return True, None, ""
                 if value in {"false", "0"}:
-                    return False
-            description = str(control.get_attribute("content-desc") or "").lower()
-            if "remove from favorites" in description:
-                return True
-            if "add to favorites" in description:
-                return False
-            return pixel_state
-        if self._first_visible(REPOST_ACTIVE_XPATH) is not None:
-            return True
-        if self._first_visible(REPOST_CONTROL_XPATH) is not None:
-            return False
-        if self._first_visible(SHARE_CONTROL_XPATH) is not None:
-            return False
-        return None
+                    return False, control, "favorite"
+            return pixel_state, control, "favorite"
+        elements = self._visible_elements(REPOST_STATE_XPATH)
+        for element in elements:
+            semantics = self._element_semantics(element)
+            if "you reposted" in semantics or "remove repost" in semantics:
+                return True, None, ""
+        repost_controls = [
+            element
+            for element in elements
+            if (semantics := self._element_semantics(element))
+            and all(value == "repost" for value in semantics.split())
+        ]
+        if len(repost_controls) == 1:
+            return False, repost_controls[0], "repost"
+        if repost_controls:
+            return None, None, ""
+        share_controls = [
+            element
+            for element in elements
+            if "share video" in (semantics := self._element_semantics(element))
+            or semantics == "share"
+        ]
+        if len(share_controls) == 1:
+            return False, share_controls[0], "share"
+        return None, None, ""
+
+    def _visible_elements(self, selector: str) -> list[object]:
+        try:
+            elements = self.driver.find_elements(By.XPATH, selector)
+        except Exception:
+            return []
+        visible = []
+        for element in elements:
+            try:
+                if element.is_displayed():
+                    visible.append(element)
+            except Exception:
+                continue
+        return visible
+
+    @staticmethod
+    def _element_semantics(element: object) -> str:
+        values = []
+        for attribute in ("content-desc", "text"):
+            try:
+                values.append(str(element.get_attribute(attribute) or ""))
+            except Exception:
+                pass
+        try:
+            values.append(str(element.text or ""))
+        except Exception:
+            pass
+        return " ".join(values).strip().lower()
 
     def _first_visible(self, selector: str):
         try:
@@ -587,6 +644,16 @@ class AppiumTikTokDevice:
                 return True
             if self.clock() >= deadline:
                 return False
+            self.sleeper(self.poll_interval)
+
+    def _wait_for_outcome_control(self, outcome: OutcomeKind, kind: str):
+        deadline = self.clock() + self.action_timeout
+        while True:
+            _, control, control_kind = self._outcome_observation(outcome)
+            if control is not None and control_kind == kind:
+                return control
+            if self.clock() >= deadline:
+                return None
             self.sleeper(self.poll_interval)
 
     def return_to_baseline(self) -> None:
