@@ -206,7 +206,85 @@ git add chrome-event-bridge/dm-content.js chrome-event-bridge/dm-content.test.js
 git commit -m "fix: send browser replies with trusted input"
 ```
 
-### Task 3: Regression, Runtime Enablement, And Live Acceptance
+### Task 3: One-Click Multi-Account Monitoring
+
+**Files:**
+- Create: `chrome-event-bridge/popup-core.js`
+- Create: `chrome-event-bridge/popup-core.test.js`
+- Modify: `chrome-event-bridge/popup.html`
+- Modify: `chrome-event-bridge/popup.js`
+- Modify: `chrome-event-bridge/background.js`
+- Modify: `chrome-event-bridge/background.test.js`
+
+- [ ] **Step 1: Write failing popup-state and monitoring tests**
+
+Add pure popup tests proving `monitoringStarted` selects `开始监控` or `停止监控` and exposes a pending/error label. Add background tests proving start verifies the loopback service, persists `enabled=true` and `monitoringStarted=true`, reuses existing observer tabs, creates only missing `/` and `/messages` tabs, and enables both account endpoints after a binding appears. Add stop tests proving both endpoints receive `enabled=false` and tabs remain open.
+
+```js
+assert.deepEqual(core.monitoringButton({ monitoringStarted: false }), {
+  label: "开始监控",
+  action: "start",
+});
+assert.deepEqual(createdUrls, [
+  "https://www.tiktok.com/",
+  "https://www.tiktok.com/messages",
+]);
+```
+
+Add an alarm/startup/removal test proving repeated recovery calls create no duplicate observer pages.
+
+- [ ] **Step 2: Run focused tests and observe failure**
+
+Run:
+
+```bash
+node --test chrome-event-bridge/popup-core.test.js chrome-event-bridge/background.test.js
+```
+
+Expected: popup core and monitoring message behavior are absent.
+
+- [ ] **Step 3: Implement popup state and background monitoring lifecycle**
+
+Create `popup-core.js` with `monitoringButton(settings, pending)` and include it before `popup.js`. Add `#toggle-monitoring` and `#monitoring-detail` to the popup. The click sends:
+
+```js
+{
+  type: "TIKPOC_SET_MONITORING",
+  dashboardUrl: settings.dashboardUrl || "http://127.0.0.1:8766",
+  started: !settings.monitoringStarted,
+}
+```
+
+In `background.js`, validate the local dashboard, ping `/api/status`, update `tikpocSettings`, and implement `ensureMonitoringTabs()` with `chrome.tabs.query` and `chrome.tabs.create`. Reuse one `/messages*` or `/business-suite/messages*` tab and one non-Messages TikTok tab; create only missing routes.
+
+When `monitoringStarted` and `accountId` are present, POST unique commands to:
+
+```text
+/api/accounts/<account_id>/ai-enable
+/api/accounts/<account_id>/followback-enable
+```
+
+Use `enabled: true` for start and `enabled: false` for stop. Run the idempotent recovery on Chrome startup, the health alarm, settings binding changes, and monitored-tab removal. Do not close tabs on stop.
+
+- [ ] **Step 4: Run the complete Chrome suite**
+
+Run:
+
+```bash
+node --check chrome-event-bridge/*.js
+node --test chrome-event-bridge/*.test.js
+```
+
+Expected: one-click start/stop, tab recovery, trusted input, and existing account isolation tests pass.
+
+- [ ] **Step 5: Commit Task 3**
+
+```bash
+git add chrome-event-bridge/popup-core.js chrome-event-bridge/popup-core.test.js chrome-event-bridge/popup.html chrome-event-bridge/popup.js chrome-event-bridge/background.js chrome-event-bridge/background.test.js
+git commit -m "feat: start multi-account monitoring from the popup"
+```
+
+### Task 4: Regression, Runtime Enablement, And Live Acceptance
 
 **Files:**
 - Modify: `docs/web-engagement-runbook.md`
@@ -229,9 +307,9 @@ git diff --check
 
 Expected: Python, Chrome, frontend, production build, Android build, Ruff, and whitespace checks pass.
 
-- [ ] **Step 2: Reload both controlled extensions and restore read-only baselines**
+- [ ] **Step 2: Reload both controlled extensions and start from the popup**
 
-In both controlled Profiles, reload the unpacked extension to grant Debugger permission. Refresh each account's Activity and Messages pages, keep AI reply disabled, run `tikpoc browser connect`, and require fresh `ready=4/4`. Record the current maximum reply-plan ID, wait at least one watchdog interval, and verify history creates no new plan.
+In both controlled Profiles, reload the unpacked extension to grant Debugger permission. Close or leave the observer pages in mixed states, click `开始监控`, and verify the popup creates or reuses one Activity-capable page plus one Messages page per Profile. Run `tikpoc browser connect` and require fresh `ready=4/4`. Record the current maximum reply-plan ID, wait at least one watchdog interval, and verify history creates no new plan.
 
 - [ ] **Step 3: Perform exact trusted-input live acceptance**
 

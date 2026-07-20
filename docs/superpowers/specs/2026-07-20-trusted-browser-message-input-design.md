@@ -64,6 +64,14 @@ No synthetic `textContent`, `input`, `change`, or direct send-button click remai
 
 Loading or reloading the unpacked extension grants the additional Debugger permission. Chrome may display a debugging notification only during the short send interval. Daily operation remains: keep the Profile and TikTok pages open, tell AI or CLI to connect the Chrome, and monitor account-scoped health and switches from the local console.
 
+### One-click monitoring
+
+The popup adds a primary `开始监控` / `停止监控` control. Start first verifies the loopback service, stores a Profile-local `monitoringStarted=true` state, enables the bound account's AI reply and follow-back server switches, and creates or reuses exactly one TikTok Messages tab plus one non-Messages TikTok observer tab. If the account has not been bound yet, opening the observer tab lets the existing visible-username auto-connector bind it; the background worker enables server switches as soon as the account mapping appears in extension storage.
+
+While monitoring is started, browser startup, the existing health alarm, and monitored-tab removal all run the same idempotent tab check. Missing pages are reopened, existing pages are reused, and unrelated TikTok tabs are left untouched. Stop stores `monitoringStarted=false`, disables the bound account's server action switches, and leaves tabs and binding data in place.
+
+The extension does not launch arbitrary local executables. The existing TikPoc launchd service remains the login-started companion process; a failed loopback health check leaves monitoring stopped and shows the service error in the popup. Each Chrome Profile has independent popup state, tabs, binding, and server account mapping.
+
 ## Acceptance
 
-Automated tests must prove route validation, per-tab serialization, command order, detach-on-error, no synthetic fallback, exact visible reconciliation, and multi-account isolation. Live acceptance uses the two controlled Profiles to establish `4/4`, send one fresh inbound in each direction, verify one AI reply and one durable `sent/completed` result, reload both sides to prove no duplicate, and keep any TikTok rejection as `uncertain`. A fresh controlled follow remains required to close the visible automatic-follow-back and welcome gate.
+Automated tests must prove route validation, per-tab serialization, command order, detach-on-error, no synthetic fallback, exact visible reconciliation, one-click idempotent tab creation, persisted restart recovery, account switch enable/disable, and multi-account isolation. Live acceptance uses the popup in both controlled Profiles to create/reuse observer pages and establish `4/4`, sends one fresh inbound in each direction, verifies one AI reply and one durable `sent/completed` result, reloads both sides to prove no duplicate, and keeps any TikTok rejection as `uncertain`. A fresh controlled follow remains required to close the visible automatic-follow-back and welcome gate.
