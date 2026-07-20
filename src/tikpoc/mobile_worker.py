@@ -16,6 +16,7 @@ from .acquisition_models import (
     ProfileObservation,
     RoundAssignment,
 )
+from .device import ProfilePermanentlyUnavailable
 from .outcome_planner import get_or_create_plan
 
 
@@ -151,6 +152,19 @@ class MobileAssignmentWorker:
                 self._defer(current.assignment_id, type(error).__name__)
 
     def _run_claimed(self, assignment: RoundAssignment) -> None:
+        if (
+            self.repository.terminal_target_state(
+                assignment.round_id, assignment.identity_key
+            )
+            is not None
+        ):
+            self.repository.skip_marked_permanently_unavailable(
+                assignment.assignment_id,
+                self.owner_id,
+                now_ms=self.clock_ms(),
+                **self._assignment_fence_kwargs(),
+            )
+            return
         target = PoolTarget(
             pool_id=assignment.pool_id,
             identity_key=assignment.identity_key,
@@ -176,6 +190,17 @@ class MobileAssignmentWorker:
         identity_started_at_ms = self.clock_ms()
         try:
             self.device.confirm_profile_identity(target)
+        except ProfilePermanentlyUnavailable:
+            self.repository.record_permanently_unavailable(
+                assignment.assignment_id,
+                self.owner_id,
+                observed_username=assignment.username,
+                observed_by_device_id=self.device_id,
+                now_ms=self.clock_ms(),
+                diagnostics=self._capture_diagnostics(),
+                **self._assignment_fence_kwargs(),
+            )
+            return
         except ValueError as error:
             if type(error) is ValueError:
                 raise ProfileUnreachable("identity", str(error)) from error
