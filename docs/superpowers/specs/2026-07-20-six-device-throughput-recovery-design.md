@@ -104,3 +104,25 @@ control must still confirm that the video opened. Invalidate the tuple on every
 route, back, restart, and after consumption. A stale element or missing visible
 Share control remains an explicit deferred failure; do not fall back to bounds,
 coordinates, compressed XML, or an unverified click result.
+
+## Accepted Six-Device Result
+
+The final clean canary window began after the inherited deferred assignment
+re-entered `profile_opening` at `1784518683057` and ran for 357.943 seconds. It
+completed 270 assignments, measuring 452.6 assignments per device-hour on
+average. Per-device results ranged from 362.1 to 553.2 per hour. This is measured
+wall throughput, not a unit-test projection.
+
+The window recorded 274 identity timings with 0 identity mismatches and 0
+completions lacking a confirmed visit. All 35 interaction attempts were
+confirmed, no plan had multiple attempts, and no new uncertain result or quota
+overrun was recorded. The two deferred assignments carried explicit
+`RuntimeError` reasons and remained eligible for normal retry. Stage means were
+0.600 seconds route, 4.561 seconds identity, 0.006 seconds metrics, 8.591 seconds
+video, and 8.921 seconds action.
+
+After a clean audit pause released all assignment and worker leases, the same
+round resumed in `/Users/Shared/TikPoc/tikpoc.db`. At the resume check it had
+9,269 completed assignments, no deferred assignments, six healthy workers, six
+healthy proxy probes, and six active device leases. The launchd round monitor
+continues writing durable funnel and throughput observations.
