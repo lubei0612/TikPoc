@@ -144,3 +144,17 @@ new setting is accepted only if a ten-minute six-device canary retains at least
 400 assignments per device-hour, keeps all workers and proxies healthy, adds no
 identity mismatch or uncertain action, and does not increase the deferred error
 rate above the preceding stable window.
+
+### Fourth Canary Result: Rejected
+
+The canary was stopped after roughly 6.5 minutes because the stability gate had
+already failed. Throughput averaged 528.1 assignments per device-hour, but one
+repost plan produced three uncertain attempts and deferred in
+`action_reconciling`; another assignment deferred with `ReadTimeoutError`.
+Identity still reached a 48.8-second maximum, so the shorter timeout neither
+removed the long tail nor preserved action certainty.
+
+Commit `bfda6d3` restores the accepted 30-second default. Do not reapply the
+20-second global command timeout. The accepted semantic-action and semantic-post
+optimizations remain in place, and production resumes from the same durable
+round after regression verification.
