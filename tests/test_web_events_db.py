@@ -1559,6 +1559,88 @@ def test_uncertain_and_superseded_browser_actions_can_be_reclaimed_after_expiry(
     )
 
 
+def test_followback_circuit_cooldown_promotes_to_one_canary(tmp_path: Path) -> None:
+    database = Database(tmp_path / "tasks.db")
+    database.migrate()
+    database.open_browser_action_circuit(
+        "account-01",
+        "followback",
+        reason="platform_follow_reverted",
+        opened_at_ms=1_000,
+        cooldown_until_ms=2_000,
+    )
+
+    assert (
+        database.browser_action_circuit("account-01", "followback", now_ms=1_999)[
+            "state"
+        ]
+        == "cooldown"
+    )
+    assert database.claim_browser_followback_action(
+        "account-01", "follow:one", "owner-01", 2_000, 30
+    )
+    assert not database.claim_browser_followback_action(
+        "account-01", "follow:two", "owner-02", 2_001, 30
+    )
+    assert (
+        database.browser_action_circuit("account-02", "followback", now_ms=2_001)[
+            "state"
+        ]
+        == "closed"
+    )
+
+
+def test_followback_canary_result_closes_or_reopens_circuit(tmp_path: Path) -> None:
+    database = Database(tmp_path / "tasks.db")
+    database.migrate()
+    database.open_browser_action_circuit(
+        "account-01",
+        "followback",
+        reason="platform_follow_reverted",
+        opened_at_ms=1_000,
+        cooldown_until_ms=2_000,
+    )
+    assert database.claim_browser_followback_action(
+        "account-01", "follow:canary", "owner-01", 2_000, 30
+    )
+    assert database.finish_browser_followback_action(
+        "account-01",
+        "follow:canary",
+        "owner-01",
+        "completed",
+        reason="",
+        now_ms=2_100,
+    )
+    assert (
+        database.browser_action_circuit("account-01", "followback", now_ms=2_100)[
+            "state"
+        ]
+        == "closed"
+    )
+
+    database.open_browser_action_circuit(
+        "account-01",
+        "followback",
+        reason="platform_follow_reverted",
+        opened_at_ms=3_000,
+        cooldown_until_ms=4_000,
+    )
+    assert database.claim_browser_followback_action(
+        "account-01", "follow:second-canary", "owner-02", 4_000, 30
+    )
+    assert database.finish_browser_followback_action(
+        "account-01",
+        "follow:second-canary",
+        "owner-02",
+        "uncertain",
+        reason="followback_unresolved",
+        now_ms=4_100,
+    )
+    circuit = database.browser_action_circuit("account-01", "followback", now_ms=4_100)
+    assert circuit["state"] == "cooldown"
+    assert circuit["cooldown_until_ms"] == 4_100 + 86_400_000
+
+
 def test_browser_contact_suppression_is_durable_and_account_scoped(
     tmp_path: Path,
 ) -> None:

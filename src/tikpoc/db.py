@@ -159,6 +159,7 @@ _CONVERSATION_STAGE_RANK = {
     "closed": 6,
 }
 _CONVERSATION_STAGE_ALIASES = {"qualifying": "qualified"}
+FOLLOWBACK_COOLDOWN_MS = 86_400_000
 _FUNNEL_STAGES = (
     "dm_inbound",
     "engaged",
@@ -627,6 +628,21 @@ class Database:
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY(account_id, action_type, action_key)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS browser_action_circuits (
+                    account_id TEXT NOT NULL,
+                    action_type TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    reason TEXT NOT NULL DEFAULT '',
+                    opened_at_ms INTEGER NOT NULL DEFAULT 0,
+                    cooldown_until_ms INTEGER NOT NULL DEFAULT 0,
+                    canary_action_key TEXT NOT NULL DEFAULT '',
+                    updated_at_ms INTEGER NOT NULL,
+                    PRIMARY KEY(account_id, action_type)
                 )
                 """
             )
@@ -3055,6 +3071,268 @@ class Database:
                 ),
             )
             return cursor.rowcount == 1
+
+    def browser_action_circuit(
+        self, account_id: str, action_type: str, *, now_ms: int
+    ) -> dict[str, object]:
+        _require_identity(account_id, action_type)
+        if action_type != "followback":
+            raise ValueError(f"unsupported browser action circuit: {action_type}")
+        if int(now_ms) < 0:
+            raise ValueError("browser action circuit timestamp must be nonnegative")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT state, reason, opened_at_ms, cooldown_until_ms,
+                       canary_action_key, updated_at_ms
+                FROM browser_action_circuits
+                WHERE account_id=? AND action_type=?
+                """,
+                (account_id, action_type),
+            ).fetchone()
+            if row is None:
+                return {
+                    "state": "closed",
+                    "reason": "",
+                    "opened_at_ms": 0,
+                    "cooldown_until_ms": 0,
+                    "canary_action_key": "",
+                    "updated_at_ms": 0,
+                }
+            state = str(row["state"])
+            if state == "cooldown" and int(row["cooldown_until_ms"]) <= int(now_ms):
+                connection.execute(
+                    """
+                    UPDATE browser_action_circuits
+                    SET state='canary', canary_action_key='', updated_at_ms=?
+                    WHERE account_id=? AND action_type=? AND state='cooldown'
+                      AND cooldown_until_ms <= ?
+                    """,
+                    (int(now_ms), account_id, action_type, int(now_ms)),
+                )
+                row = connection.execute(
+                    """
+                    SELECT state, reason, opened_at_ms, cooldown_until_ms,
+                           canary_action_key, updated_at_ms
+                    FROM browser_action_circuits
+                    WHERE account_id=? AND action_type=?
+                    """,
+                    (account_id, action_type),
+                ).fetchone()
+                assert row is not None
+            return dict(row)
+
+    def open_browser_action_circuit(
+        self,
+        account_id: str,
+        action_type: str,
+        *,
+        reason: str,
+        opened_at_ms: int,
+        cooldown_until_ms: int,
+    ) -> dict[str, object]:
+        _require_identity(account_id, action_type, reason)
+        if action_type != "followback":
+            raise ValueError(f"unsupported browser action circuit: {action_type}")
+        if len(reason) > 100:
+            raise ValueError("browser action circuit reason is too long")
+        if min(int(opened_at_ms), int(cooldown_until_ms)) < 0:
+            raise ValueError("browser action circuit timestamps must be nonnegative")
+        if int(cooldown_until_ms) < int(opened_at_ms):
+            raise ValueError("browser action cooldown cannot end before it opens")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                INSERT INTO browser_action_circuits(
+                    account_id, action_type, state, reason, opened_at_ms,
+                    cooldown_until_ms, canary_action_key, updated_at_ms
+                ) VALUES (?, ?, 'cooldown', ?, ?, ?, '', ?)
+                ON CONFLICT(account_id, action_type) DO UPDATE SET
+                    state='cooldown', reason=excluded.reason,
+                    opened_at_ms=excluded.opened_at_ms,
+                    cooldown_until_ms=excluded.cooldown_until_ms,
+                    canary_action_key='', updated_at_ms=excluded.updated_at_ms
+                """,
+                (
+                    account_id,
+                    action_type,
+                    reason,
+                    int(opened_at_ms),
+                    int(cooldown_until_ms),
+                    int(opened_at_ms),
+                ),
+            )
+        return self.browser_action_circuit(
+            account_id, action_type, now_ms=int(opened_at_ms)
+        )
+
+    def claim_browser_followback_action(
+        self,
+        account_id: str,
+        action_key: str,
+        owner_id: str,
+        now_ms: int,
+        lease_seconds: int = 30,
+    ) -> bool:
+        _require_identity(account_id, action_key, owner_id)
+        if int(now_ms) < 0:
+            raise ValueError("browser followback claim timestamp must be nonnegative")
+        expires_at_ms = int(now_ms) + max(1, int(lease_seconds)) * 1_000
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            circuit = connection.execute(
+                """
+                SELECT state, cooldown_until_ms, canary_action_key
+                FROM browser_action_circuits
+                WHERE account_id=? AND action_type='followback'
+                """,
+                (account_id,),
+            ).fetchone()
+            state = "closed" if circuit is None else str(circuit["state"])
+            if (
+                circuit is not None
+                and state == "cooldown"
+                and int(circuit["cooldown_until_ms"]) <= int(now_ms)
+            ):
+                connection.execute(
+                    """
+                    UPDATE browser_action_circuits
+                    SET state='canary', canary_action_key='', updated_at_ms=?
+                    WHERE account_id=? AND action_type='followback'
+                    """,
+                    (int(now_ms), account_id),
+                )
+                state = "canary"
+                circuit = connection.execute(
+                    """
+                    SELECT state, cooldown_until_ms, canary_action_key
+                    FROM browser_action_circuits
+                    WHERE account_id=? AND action_type='followback'
+                    """,
+                    (account_id,),
+                ).fetchone()
+            if state == "cooldown":
+                return False
+            if state == "canary":
+                assert circuit is not None
+                if str(circuit["canary_action_key"]):
+                    return False
+                reserved = connection.execute(
+                    """
+                    UPDATE browser_action_circuits
+                    SET canary_action_key=?, updated_at_ms=?
+                    WHERE account_id=? AND action_type='followback'
+                      AND state='canary' AND canary_action_key=''
+                    """,
+                    (action_key, int(now_ms), account_id),
+                ).rowcount
+                if reserved != 1:
+                    return False
+            cursor = connection.execute(
+                """
+                INSERT INTO browser_action_leases(
+                    account_id, action_type, action_key, owner_id,
+                    lease_expires_at_ms, state
+                ) VALUES (?, 'followback', ?, ?, ?, 'claimed')
+                ON CONFLICT(account_id, action_type, action_key) DO UPDATE SET
+                    owner_id=excluded.owner_id,
+                    lease_expires_at_ms=excluded.lease_expires_at_ms,
+                    state='claimed', updated_at=CURRENT_TIMESTAMP
+                WHERE browser_action_leases.state != 'completed'
+                  AND browser_action_leases.lease_expires_at_ms <= ?
+                """,
+                (account_id, action_key, owner_id, expires_at_ms, int(now_ms)),
+            )
+            if cursor.rowcount != 1 and state == "canary":
+                connection.execute(
+                    """
+                    UPDATE browser_action_circuits
+                    SET canary_action_key='', updated_at_ms=?
+                    WHERE account_id=? AND action_type='followback'
+                      AND state='canary' AND canary_action_key=?
+                    """,
+                    (int(now_ms), account_id, action_key),
+                )
+            return cursor.rowcount == 1
+
+    def finish_browser_followback_action(
+        self,
+        account_id: str,
+        action_key: str,
+        owner_id: str,
+        state: str,
+        *,
+        reason: str,
+        now_ms: int,
+    ) -> bool:
+        _require_identity(account_id, action_key, owner_id)
+        if state not in {"completed", "uncertain", "superseded"}:
+            raise ValueError(f"invalid browser action state: {state}")
+        if len(reason) > 100:
+            raise ValueError("browser followback result reason is too long")
+        if int(now_ms) < 0:
+            raise ValueError("browser followback result timestamp must be nonnegative")
+        completed_guard = "" if state == "completed" else "AND state != 'completed'"
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                f"""
+                UPDATE browser_action_leases
+                SET state=?, updated_at=CURRENT_TIMESTAMP
+                WHERE account_id=? AND action_type='followback' AND action_key=?
+                  AND owner_id=? {completed_guard}
+                """,
+                (state, account_id, action_key, owner_id),
+            )
+            if cursor.rowcount != 1:
+                return False
+            circuit = connection.execute(
+                """
+                SELECT state, canary_action_key FROM browser_action_circuits
+                WHERE account_id=? AND action_type='followback'
+                """,
+                (account_id,),
+            ).fetchone()
+            is_canary = bool(
+                circuit is not None
+                and str(circuit["state"]) == "canary"
+                and str(circuit["canary_action_key"]) == action_key
+            )
+            if state == "completed" and is_canary:
+                connection.execute(
+                    """
+                    UPDATE browser_action_circuits
+                    SET state='closed', reason='', opened_at_ms=0,
+                        cooldown_until_ms=0, canary_action_key='', updated_at_ms=?
+                    WHERE account_id=? AND action_type='followback'
+                    """,
+                    (int(now_ms), account_id),
+                )
+            elif state == "uncertain":
+                effective_reason = reason.strip() or "followback_unresolved"
+                connection.execute(
+                    """
+                    INSERT INTO browser_action_circuits(
+                        account_id, action_type, state, reason, opened_at_ms,
+                        cooldown_until_ms, canary_action_key, updated_at_ms
+                    ) VALUES (?, 'followback', 'cooldown', ?, ?, ?, '', ?)
+                    ON CONFLICT(account_id, action_type) DO UPDATE SET
+                        state='cooldown', reason=excluded.reason,
+                        opened_at_ms=excluded.opened_at_ms,
+                        cooldown_until_ms=excluded.cooldown_until_ms,
+                        canary_action_key='', updated_at_ms=excluded.updated_at_ms
+                    """,
+                    (
+                        account_id,
+                        effective_reason,
+                        int(now_ms),
+                        int(now_ms) + FOLLOWBACK_COOLDOWN_MS,
+                        int(now_ms),
+                    ),
+                )
+            return True
 
     def completed_followback_username(
         self, account_id: str, follower_key: str
