@@ -50,7 +50,7 @@ class ProfilePermanentlyUnavailable(ValueError):
 
 TERMINAL_PROFILE_MARKERS = (
     "account banned",
-    "this account is no longer available",
+    "no longer available",
     "account doesn't exist",
     "couldn't find this account",
     "账号已被封禁",
@@ -63,14 +63,9 @@ TERMINAL_PROFILE_MARKERS = (
 
 def _terminal_profile_marker(source: str) -> str:
     lowered = source.casefold()
-    marker = next(
+    return next(
         (marker for marker in TERMINAL_PROFILE_MARKERS if marker in lowered), ""
     )
-    if marker:
-        return marker
-    if "the account " in lowered and " is no longer available" in lowered:
-        return "the account is no longer available"
-    return ""
 
 
 LIKE_CONTROL_XPATH = '//*[starts-with(@content-desc, "Like video.")]'
@@ -200,8 +195,9 @@ class AppiumTikTokDevice:
         for attempt in range(self.metric_read_attempts):
             if attempt and attempt % 3 == 0:
                 self.open_profile(normalized)
-            source = str(self.driver.page_source)
-            marker = _terminal_profile_marker(source)
+            marker = _terminal_profile_marker(str(self.driver.page_source))
+            if marker:
+                raise ProfilePermanentlyUnavailable(marker)
             elements = self._profile_username_elements()
             actual = ""
             if elements:
@@ -211,11 +207,9 @@ class AppiumTikTokDevice:
                     )
                 except Exception:
                     try:
-                        actual = parse_profile_page(source).username
+                        actual = parse_profile_page(self.driver.page_source).username
                     except Exception:
                         pass
-            if marker and actual == normalized:
-                raise ProfilePermanentlyUnavailable(marker)
             if actual == normalized:
                 return
             if actual:
@@ -352,10 +346,10 @@ class AppiumTikTokDevice:
             for attempt in range(self.metric_read_attempts):
                 try:
                     source = str(self.driver.page_source)
-                    actual = parse_profile_username(source)
                     marker = _terminal_profile_marker(source)
-                    if marker and actual and (actual == expected or actual != previous):
+                    if marker:
                         raise ProfilePermanentlyUnavailable(marker)
+                    actual = parse_profile_username(source)
                     ready = profile_surface_visible(source)
                 except ProfilePermanentlyUnavailable:
                     raise
@@ -399,8 +393,6 @@ class AppiumTikTokDevice:
                 self._confirmed_profile_username = expected
                 return
             except ProfileIdentityMismatch:
-                raise
-            except ProfilePermanentlyUnavailable:
                 raise
             except ValueError as error:
                 raise ValueError(
@@ -535,10 +527,10 @@ class AppiumTikTokDevice:
         for attempt in range(self.metric_read_attempts):
             try:
                 source = str(self.driver.page_source)
-                actual = parse_profile_username(source)
                 marker = _terminal_profile_marker(source)
-                if marker and actual:
+                if marker:
                     raise ProfilePermanentlyUnavailable(marker)
+                actual = parse_profile_username(source)
                 ready = profile_surface_visible(source)
             except ProfilePermanentlyUnavailable:
                 raise
@@ -557,14 +549,10 @@ class AppiumTikTokDevice:
     def _wait_profile_surface(self, confirmed_username: str = "") -> None:
         for attempt in range(self.metric_read_attempts):
             page_source = str(self.driver.page_source)
-            source_username = parse_profile_username(page_source)
             marker = _terminal_profile_marker(page_source)
-            if (
-                marker
-                and source_username
-                and (not confirmed_username or source_username == confirmed_username)
-            ):
+            if marker:
                 raise ProfilePermanentlyUnavailable(marker)
+            source_username = parse_profile_username(page_source)
             cache_source = not (
                 confirmed_username
                 and source_username
