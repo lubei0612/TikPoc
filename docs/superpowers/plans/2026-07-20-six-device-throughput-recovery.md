@@ -74,3 +74,15 @@ metrics as an inaccessible trace.
 - Run focused tests, full regression, Ruff, and diff checks.
 - Run another clean five-minute six-device canary from the same checkpoint and
   apply the existing throughput and integrity gates.
+
+## Task 8: Bound Appium Command Long Tails
+
+- Add a failing runner test requiring a 20-second default Appium HTTP command
+  timeout while preserving explicit override support.
+- Change only the default command timeout; retain UiAutomator settings, unique
+  ports, session lifetime, and worker recovery behavior.
+- Run runner, fleet, adapter, full regression, Ruff, and diff checks.
+- Run a clean ten-minute six-device canary from the same checkpoint.
+- Compare throughput, identity mean/P90/max, deferred errors, uncertain actions,
+  identity mismatches, quota integrity, worker health, and proxy health with the
+  accepted build. Revert if stability regresses.

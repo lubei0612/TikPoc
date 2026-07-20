@@ -126,3 +126,21 @@ round resumed in `/Users/Shared/TikPoc/tikpoc.db`. At the resume check it had
 9,269 completed assignments, no deferred assignments, six healthy workers, six
 healthy proxy probes, and six active device leases. The launchd round monitor
 continues writing durable funnel and throughput observations.
+
+## Fourth Canary: Bound Appium Command Tails
+
+The accepted build later sustained a five-minute rolling rate of 560 assignments
+per device-hour. In the post-resume sample, 395 of 402 identity timings finished
+below 10 seconds, but one assignment spent 108.5 seconds in identity while the
+worker remained otherwise healthy. The Appium HTTP client currently permits one
+command to block for 30 seconds, so repeated hierarchy-read timeouts can dominate
+an otherwise fast assignment.
+
+Reduce the default Appium HTTP command timeout to 20 seconds. This does not make
+a timed-out command successful: the existing worker records the explicit error,
+keeps the assignment incomplete, and retries from durable state. Identity,
+profile-surface, action, and Share-control verification remain unchanged. The
+new setting is accepted only if a ten-minute six-device canary retains at least
+400 assignments per device-hour, keeps all workers and proxies healthy, adds no
+identity mismatch or uncertain action, and does not increase the deferred error
+rate above the preceding stable window.
