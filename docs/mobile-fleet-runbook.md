@@ -138,3 +138,41 @@ gate until another fresh 100-target preflight is below both 6.5-second mean and
 8.64-second P90 thresholds. The database is
 `var/myt-slot-01-preflight-100-final-v4-20260719.db` and remains ignored local
 evidence.
+
+## Live Database Continuity
+
+Rolling action usage and pacing tokens are durable inside the selected SQLite
+database. Starting the same account against another database does not carry
+that account's prior one-hour action history into the new file.
+
+For any live run, keep one persistent database per account/device fleet. Create
+a fresh pool and round inside that database when only the workload must be
+fresh. A clean acceptance database may be used only after all of these gates
+pass:
+
+- the account has performed no like, favorite, or repost for at least 60 full
+  minutes, measured from the latest non-trace action-plan reservation or action
+  attempt timestamp in every database previously used by that account, plus
+  any later controlled action recorded outside those databases;
+- no worker using another database can claim work for the same account/device;
+- active and uncertain action reservations are empty or have been reconciled;
+- the new run records its database path and the checked cooldown timestamp.
+
+If those gates are not satisfied, continue in the persistent database without
+starting another live worker. The current fleet CLI has no hard trace-only
+mode, so do not use an ordinary diagnostic run as a substitute for the
+cooldown. Never use a new database to reset rolling quota or pacing evidence.
+
+## Mobile Recovery And Deferred Repair
+
+The mobile acquisition worker does not use TikTok Inbox as a profile baseline.
+When a stable-ID route remains on the preceding profile, the adapter terminates
+TikTok once and dispatches the target route directly. If that still does not
+produce a changed visible profile surface, it attempts the exact username URL.
+
+Normal fleet claims process untouched pending assignments before due deferred
+assignments. An action that remains uncertain after one reconciliation, or an
+already-confirmed visit whose unfinished target cannot be reopened, remains
+deferred in manual-retry hold. Preserve its plan and quota evidence. Use the
+operator retry command only during a deliberate repair window; do not create a
+new round or click the uncertain action again.

@@ -168,10 +168,12 @@ consecutive reconciliation. Repeating the same read only extended action tails
 and amplified the deferred backlog.
 
 After a fresh action returns `uncertain`, perform at most one reconciliation.
-An already-uncertain durable plan also receives exactly one reconciliation per
-claim. If that read is still ambiguous, reports `not_applied`, or reports an
-unavailable non-repost control, preserve the immutable plan as `uncertain`, keep
-its quota reservation, defer the assignment, and release the device. A visibly
+An already-uncertain durable plan receives one reconciliation only after an
+explicit operator retry. If that read is still ambiguous, reports `not_applied`,
+or reports an unavailable non-repost control, preserve the immutable plan as
+`uncertain`, keep its quota reservation, defer the assignment for manual retry,
+and release the device. It must not become automatically claimable again after
+five minutes. A visibly
 unavailable repost control retains its existing trace fallback. Reconciliation
 never returns the plan to executable state and never presses the interaction
 control again.
@@ -194,7 +196,8 @@ a count when neither the hierarchy nor semantic containers provide evidence.
 ## Bounded Unreachable Profiles
 
 Some target profiles never load a confirmable profile route even after the
-device adapter's bounded route, baseline, and restart recovery. Retrying these
+device adapter's bounded route and direct restart recovery. Mobile acquisition
+does not use Inbox as a baseline. Retrying these
 assignments forever consumes a device slot without producing useful exposure.
 
 After the first assignment claim, a plain profile-opening `ValueError` becomes
@@ -213,3 +216,17 @@ Operational exhaustion uses `completed + skipped == total`, so a small number
 of unreachable profiles cannot keep a fleet alive forever. Coverage remains
 strict: skipped assignments are not completed, do not create confirmed visits,
 and remain visible as missing device coverage in capacity and coverage audits.
+
+## Pending-First Retry Starvation Recovery
+
+Production later accumulated a small confirmed-visit/action-repair backlog whose
+rows were reclaimed every five minutes. Because due deferred rows sorted before
+untouched pending rows, all six devices entered repeated profile recovery and
+completed zero new assignments in the final five-minute audit window.
+
+Automatic claims now select pending rows before deferred rows. A confirmed-visit
+assignment that cannot reopen its unfinished target is held for manual retry,
+as is an action that remains uncertain after its one reconciliation. These rows
+retain their visit, immutable plan, selected video, quota reservation, error, and
+coverage gap. Operator retry resets the hold when a deliberate repair window is
+appropriate.
