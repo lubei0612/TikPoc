@@ -344,7 +344,9 @@ def test_assignment_stage_timing_replaces_the_previous_attempt(
         )
 
 
-def test_slow_action_is_deferred_without_false_completion(tmp_path: Path) -> None:
+def test_persistent_uncertain_action_is_deferred_without_reclick(
+    tmp_path: Path,
+) -> None:
     repository, assignment = _claimed_assignment(tmp_path)
     device = ScriptedVerifiedDevice(
         metrics=ProfileMetrics(20, 10, 5),
@@ -363,12 +365,82 @@ def test_slow_action_is_deferred_without_false_completion(tmp_path: Path) -> Non
     worker.run_assignment(assignment)
 
     stored = repository.assignment(assignment.assignment_id)
+    plan = repository.action_plan(
+        assignment.round_id, assignment.identity_key, "phone-01"
+    )
     assert stored.phase is AssignmentPhase.DEFERRED
     assert stored.completed_at_ms is None
     assert repository.round_completion(assignment.round_id).completed == 0
+    assert plan is not None and plan.state is ActionPlanState.UNCERTAIN
     assert device.action_calls == [OutcomeKind.REPOST]
     assert device.reconcile_calls == [OutcomeKind.REPOST, OutcomeKind.REPOST]
     assert device.diagnostic_calls == 1
+
+
+def test_reconciled_not_applied_action_is_not_clicked_again(tmp_path: Path) -> None:
+    repository, assignment = _claimed_assignment(tmp_path)
+    first_device = ScriptedVerifiedDevice(
+        metrics=ProfileMetrics(20, 10, 5),
+        action_results=[ActionResult.UNCERTAIN],
+    )
+    first_worker = MobileAssignmentWorker(
+        repository,
+        first_device,
+        device_id="phone-01",
+        owner_id="worker-1",
+        clock_ms=lambda: 1_000,
+        plan_provider=_forced_plan(OutcomeKind.REPOST),
+        max_action_attempts=1,
+    )
+    first_worker.run_assignment(assignment)
+    first_plan = repository.action_plan(
+        assignment.round_id, assignment.identity_key, "phone-01"
+    )
+    first_quota = repository.quota_window("phone-01", OutcomeKind.REPOST, 0)
+    assert first_plan is not None and first_plan.state is ActionPlanState.UNCERTAIN
+    assert first_quota is not None and first_quota.uncertain_count == 1
+
+    retry = repository.claim_next_assignment(
+        assignment.round_id,
+        "phone-01",
+        "worker-2",
+        now_ms=301_000,
+    )
+    assert retry is not None
+    second_device = ScriptedVerifiedDevice(
+        metrics=ProfileMetrics(20, 10, 5),
+        action_results=[ActionResult.NOT_APPLIED] * 3,
+    )
+    second_worker = MobileAssignmentWorker(
+        repository,
+        second_device,
+        device_id="phone-01",
+        owner_id="worker-2",
+        clock_ms=lambda: 301_000,
+        plan_provider=_forced_plan(OutcomeKind.REPOST),
+        max_action_attempts=3,
+    )
+
+    second_worker.run_assignment(retry)
+
+    stored = repository.assignment(assignment.assignment_id)
+    final_plan = repository.action_plan(
+        assignment.round_id, assignment.identity_key, "phone-01"
+    )
+    final_quota = repository.quota_window("phone-01", OutcomeKind.REPOST, 0)
+    assert stored.phase is AssignmentPhase.DEFERRED
+    assert final_plan is not None and final_plan.state is ActionPlanState.UNCERTAIN
+    assert second_device.action_calls == []
+    assert second_device.reconcile_calls == [
+        OutcomeKind.REPOST,
+        OutcomeKind.REPOST,
+        OutcomeKind.REPOST,
+    ]
+    assert second_device.diagnostic_calls == 1
+    assert final_quota is not None
+    assert final_quota.reserved_count == 1
+    assert final_quota.confirmed_count == 0
+    assert final_quota.uncertain_count == 1
 
 
 def test_video_verification_failure_is_durably_deferred(tmp_path: Path) -> None:

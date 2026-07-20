@@ -363,6 +363,11 @@ class MobileAssignmentWorker:
 
         while True:
             attempts += 1
+            if (
+                phase is AssignmentPhase.ACTION_RECONCILING
+                and result is ActionResult.NOT_APPLIED
+            ):
+                result = ActionResult.UNCERTAIN
             stored_plan = self.repository.record_action_result(
                 plan.plan_id,
                 result,
