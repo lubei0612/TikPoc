@@ -664,11 +664,15 @@ class AppiumTikTokDevice:
         self, outcome: OutcomeKind
     ) -> tuple[bool | None, object | None, str]:
         deadline = self.clock() + self.action_timeout
+        previous_kind = ""
         while True:
             observation = self._outcome_observation(outcome)
-            state, control, _ = observation
-            if state is not None or control is not None:
+            state, control, control_kind = observation
+            if state is True:
                 return observation
+            if control is not None and control_kind and control_kind == previous_kind:
+                return observation
+            previous_kind = control_kind if control is not None else ""
             if self.clock() >= deadline:
                 return observation
             self.sleeper(self.poll_interval)

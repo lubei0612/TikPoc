@@ -1324,6 +1324,23 @@ class DelayedInitialActionControlDriver(SemanticActionDriver):
         return super().find_elements(by, value)
 
 
+class SettlingInitialActionControlDriver(SemanticActionDriver):
+    def __init__(self) -> None:
+        super().__init__()
+        self.initial_reads = 0
+        self.like.callback = self._click_like_after_settled
+
+    def _click_like_after_settled(self) -> None:
+        self.clicked_labels.append("Like")
+        if self.initial_reads >= 2:
+            self.liked = True
+
+    def find_elements(self, by: str, value: str):
+        if "Video liked" in value and "Like video" in value and not self.liked:
+            self.initial_reads += 1
+        return super().find_elements(by, value)
+
+
 class HiddenRepostUnavailableDriver(RepostUnavailableDriver):
     def find_elements(self, by: str, value: str):
         if self.share_open and (
@@ -1360,6 +1377,20 @@ def test_execute_like_waits_for_delayed_selected_state() -> None:
 
 def test_execute_like_waits_for_delayed_initial_control() -> None:
     driver = DelayedInitialActionControlDriver(missing_reads=2)
+    device = AppiumTikTokDevice(
+        driver,
+        poll_interval=0,
+        action_timeout=2,
+        clock=SteppingClock(),
+        sleeper=lambda _: None,
+    )
+
+    assert device.execute_outcome(OutcomeKind.LIKE) is ActionResult.CONFIRMED
+    assert driver.clicked_labels == ["Like"]
+
+
+def test_execute_like_waits_for_initial_control_to_settle_before_click() -> None:
+    driver = SettlingInitialActionControlDriver()
     device = AppiumTikTokDevice(
         driver,
         poll_interval=0,
