@@ -27,6 +27,11 @@ from .profile_parser import (
 TIKTOK_PACKAGE = "com.zhiliaoapp.musically"
 POST_CONTAINER_ID = f"{TIKTOK_PACKAGE}:id/eqx"
 POST_CONTAINER_IDS = (POST_CONTAINER_ID, f"{TIKTOK_PACKAGE}:id/efq")
+POST_CONTAINER_XPATH = (
+    "//*["
+    + " or ".join(f'@resource-id="{resource_id}"' for resource_id in POST_CONTAINER_IDS)
+    + "]"
+)
 PROFILE_USERNAME_ID = f"{TIKTOK_PACKAGE}:id/s7e"
 PROFILE_USERNAME_IDS = (PROFILE_USERNAME_ID, f"{TIKTOK_PACKAGE}:id/rgn")
 PROFILE_STAT_LABEL_IDS = (
@@ -213,7 +218,9 @@ class AppiumTikTokDevice:
         raise last_error or ValueError("profile metrics are incomplete")
 
     def list_visible_posts(self) -> tuple[str, ...]:
-        elements = tuple(self._post_elements())
+        elements = self._visible_post_elements
+        if elements is None:
+            elements = tuple(self._post_elements())
         self._visible_post_elements = elements
         return tuple(str(index) for index in range(len(elements)))
 
@@ -229,11 +236,15 @@ class AppiumTikTokDevice:
         elements[index].click()
 
     def _post_elements(self):
-        for resource_id in POST_CONTAINER_IDS:
-            elements = self.driver.find_elements(By.ID, resource_id)
-            if elements:
-                return elements
-        return []
+        elements = self.driver.find_elements(By.XPATH, POST_CONTAINER_XPATH)
+        visible_elements = []
+        for element in elements:
+            try:
+                if element.is_displayed():
+                    visible_elements.append(element)
+            except Exception:
+                continue
+        return visible_elements
 
     def perform_action(self, action: str) -> bool:
         try:
@@ -397,6 +408,15 @@ class AppiumTikTokDevice:
                     self.sleeper(self.poll_interval)
                 continue
             metrics = page.metrics
+            if metrics.posts == 0 and metrics.following > metrics.followers:
+                semantic_posts = tuple(self._post_elements())
+                if semantic_posts:
+                    self._visible_post_elements = semantic_posts
+                    metrics = ProfileMetrics(
+                        following=metrics.following,
+                        followers=metrics.followers,
+                        posts=len(semantic_posts),
+                    )
             if page.visible_post_count == 3:
                 self.driver.swipe(540, 1900, 540, 1050, 600)
                 self.sleeper(self.poll_interval)

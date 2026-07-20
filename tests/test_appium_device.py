@@ -87,6 +87,14 @@ class FakeDriver:
                 return []
             assert value == "com.zhiliaoapp.musically:id/eqx"
             return self.posts
+        if by == "xpath" and all(
+            resource_id in value
+            for resource_id in (
+                "com.zhiliaoapp.musically:id/eqx",
+                "com.zhiliaoapp.musically:id/efq",
+            )
+        ):
+            return self.posts
         if "Video liked" in value and "Like video" in value:
             return (
                 [FakeElement("Video liked")]
@@ -305,14 +313,75 @@ class BoundedVideoDriver(CachedProfileObservationDriver):
         super().execute_script(name, arguments)
 
     def find_elements(self, by: str, value: str) -> list[FakeElement]:
-        if by == "id" and value in {
-            "com.zhiliaoapp.musically:id/eqx",
-            "com.zhiliaoapp.musically:id/efq",
-        }:
+        if (
+            by == "id"
+            and value
+            in {
+                "com.zhiliaoapp.musically:id/eqx",
+                "com.zhiliaoapp.musically:id/efq",
+            }
+        ) or (
+            by == "xpath"
+            and all(
+                resource_id in value
+                for resource_id in (
+                    "com.zhiliaoapp.musically:id/eqx",
+                    "com.zhiliaoapp.musically:id/efq",
+                )
+            )
+        ):
             self.post_queries += 1
         if "Share video" in value:
             return [FakeElement()]
         return super().find_elements(by, value)
+
+
+class SemanticOnlyVideoDriver(CachedProfileObservationDriver):
+    def __init__(self, posts: list[FakeElement] | None = None) -> None:
+        source = "\n".join(
+            line
+            for line in PROFILE_XML.splitlines()
+            if "id/cover" not in line and "id/tv_play_count" not in line
+        )
+        super().__init__(source)
+        if posts is not None:
+            self.posts = posts
+        self.post_queries = 0
+
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if (
+            by == "id"
+            and value
+            in {
+                "com.zhiliaoapp.musically:id/eqx",
+                "com.zhiliaoapp.musically:id/efq",
+            }
+        ) or (
+            by == "xpath"
+            and all(
+                resource_id in value
+                for resource_id in (
+                    "com.zhiliaoapp.musically:id/eqx",
+                    "com.zhiliaoapp.musically:id/efq",
+                )
+            )
+        ):
+            self.post_queries += 1
+            return self.posts
+        return super().find_elements(by, value)
+
+
+class CurrentSemanticOnlyVideoDriver(SemanticOnlyVideoDriver):
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if by == "id" and value == "com.zhiliaoapp.musically:id/eqx":
+            self.post_queries += 1
+            return []
+        return super().find_elements(by, value)
+
+
+class DisplayCheckFailureElement(FakeElement):
+    def is_displayed(self) -> bool:
+        raise RuntimeError("element became stale during visibility check")
 
 
 class MissingVideoControlDriver(BoundedVideoDriver):
@@ -329,6 +398,8 @@ class StaleClickElement(FakeElement):
 
 class CurrentPostContainerDriver(FakeDriver):
     def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if by == "xpath" and "com.zhiliaoapp.musically:id/efq" in value:
+            return self.posts
         if by == "id" and value == "com.zhiliaoapp.musically:id/eqx":
             return []
         if by == "id" and value == "com.zhiliaoapp.musically:id/efq":
@@ -833,6 +904,103 @@ def test_cached_profile_opens_and_verifies_video_with_semantic_elements() -> Non
     assert driver.posts[2].clicked is True
     assert driver.post_queries == 1
     assert driver.page_source_reads == 1
+
+
+def test_zero_parsed_posts_use_visible_semantic_video_containers() -> None:
+    driver = SemanticOnlyVideoDriver()
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="uid:123",
+        target_id="123",
+        sec_uid="sec-1",
+        username="sample",
+        profile_url="",
+        source_video_id="",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    device.open_target(target)
+    device.confirm_profile_identity(target)
+    observation = device.read_profile_observation()
+
+    assert observation.metrics == ProfileMetrics(12, 10, 4)
+    assert device.list_video_keys() == ("0", "1", "2", "3")
+    assert driver.post_queries == 1
+
+
+def test_zero_parsed_posts_ignore_hidden_semantic_containers() -> None:
+    driver = SemanticOnlyVideoDriver(
+        [FakeElement(attributes={"displayed": False}) for _ in range(4)]
+    )
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+
+    observation = device.read_profile_observation()
+
+    assert observation.metrics == ProfileMetrics(12, 10, 0)
+    assert driver.post_queries == 1
+
+
+def test_zero_parsed_posts_count_only_visible_semantic_containers() -> None:
+    driver = SemanticOnlyVideoDriver(
+        [
+            FakeElement(),
+            FakeElement(attributes={"displayed": False}),
+            FakeElement(),
+        ]
+    )
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+
+    observation = device.read_profile_observation()
+
+    assert observation.metrics == ProfileMetrics(12, 10, 2)
+    assert device.list_video_keys() == ("0", "1")
+    assert driver.post_queries == 1
+
+
+def test_zero_parsed_posts_keep_zero_when_semantic_grid_is_empty() -> None:
+    driver = SemanticOnlyVideoDriver([])
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+
+    observation = device.read_profile_observation()
+
+    assert observation.metrics == ProfileMetrics(12, 10, 0)
+    assert driver.post_queries == 1
+
+
+def test_zero_parsed_posts_accept_current_semantic_container_in_one_query() -> None:
+    driver = CurrentSemanticOnlyVideoDriver()
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+
+    observation = device.read_profile_observation()
+
+    assert observation.metrics == ProfileMetrics(12, 10, 4)
+    assert driver.post_queries == 1
+
+
+def test_zero_parsed_posts_skip_semantic_query_when_following_not_greater() -> None:
+    driver = SemanticOnlyVideoDriver()
+    driver._page_source = driver._page_source.replace(
+        '<node text="12" resource-id="com.zhiliaoapp.musically:id/s5y" />',
+        '<node text="8" resource-id="com.zhiliaoapp.musically:id/s5y" />',
+    )
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+
+    observation = device.read_profile_observation()
+
+    assert observation.metrics == ProfileMetrics(8, 10, 0)
+    assert driver.post_queries == 0
+
+
+def test_zero_parsed_posts_ignore_failed_visibility_checks() -> None:
+    driver = SemanticOnlyVideoDriver([FakeElement(), DisplayCheckFailureElement()])
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+
+    observation = device.read_profile_observation()
+
+    assert observation.metrics == ProfileMetrics(12, 10, 1)
+    assert driver.post_queries == 1
 
 
 def test_cached_post_stale_click_is_an_explicit_failure() -> None:
