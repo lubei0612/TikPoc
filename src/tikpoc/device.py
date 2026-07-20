@@ -2,7 +2,6 @@ import time
 from collections.abc import Callable
 from io import BytesIO
 from typing import Protocol
-from xml.etree import ElementTree
 
 from PIL import Image, UnidentifiedImageError
 from selenium.webdriver.common.by import By
@@ -63,30 +62,13 @@ TERMINAL_PROFILE_MARKERS = (
 
 
 def _terminal_profile_marker(source: str) -> str:
-    if parse_visible_post_keys(source):
-        return ""
-    try:
-        root = ElementTree.fromstring(source)
-    except ElementTree.ParseError:
-        return ""
-    texts = {
-        str(value).strip().casefold()
-        for node in root.iter()
-        for value in (node.attrib.get("text"), node.attrib.get("content-desc"))
-        if value and str(value).strip()
-    }
-    unavailable_sentence = "this account is no longer available" in texts or any(
-        text.startswith("the account ") and text.endswith(" is no longer available")
-        for text in texts
-    )
-    if "account banned" in texts and unavailable_sentence:
-        return "account banned"
+    lowered = source.casefold()
     marker = next(
-        (marker for marker in TERMINAL_PROFILE_MARKERS[2:] if marker in texts), ""
+        (marker for marker in TERMINAL_PROFILE_MARKERS if marker in lowered), ""
     )
     if marker:
         return marker
-    if unavailable_sentence:
+    if "the account " in lowered and " is no longer available" in lowered:
         return "the account is no longer available"
     return ""
 
@@ -232,8 +214,7 @@ class AppiumTikTokDevice:
                         actual = parse_profile_page(source).username
                     except Exception:
                         pass
-            route_changed = source != getattr(self, "_route_baseline_source", "")
-            if marker and (actual == normalized or route_changed):
+            if marker and actual == normalized:
                 raise ProfilePermanentlyUnavailable(marker)
             if actual == normalized:
                 return
@@ -353,9 +334,8 @@ class AppiumTikTokDevice:
 
     def open_target(self, target: PoolTarget) -> None:
         if target.target_id:
-            visible_username = self._prepare_profile_route_baseline()
             self._profile_before_stable_route = (
-                visible_username or self._confirmed_profile_username
+                self._confirmed_profile_username or self._visible_profile_username()
             )
             self._stable_profile_uri = f"snssdk1233://user/profile/{target.target_id}"
             self._open_route(self._stable_profile_uri)
@@ -374,17 +354,7 @@ class AppiumTikTokDevice:
                     source = str(self.driver.page_source)
                     actual = parse_profile_username(source)
                     marker = _terminal_profile_marker(source)
-                    route_changed = source != getattr(
-                        self, "_route_baseline_source", ""
-                    )
-                    marker_only_transition = not actual and bool(
-                        getattr(self, "_route_visible_username", "")
-                    )
-                    if marker and (
-                        route_changed
-                        or marker_only_transition
-                        or (actual and (actual == expected or actual != previous))
-                    ):
+                    if marker and actual and (actual == expected or actual != previous):
                         raise ProfilePermanentlyUnavailable(marker)
                     ready = profile_surface_visible(source)
                 except ProfilePermanentlyUnavailable:
@@ -422,7 +392,6 @@ class AppiumTikTokDevice:
             username_uri = target.profile_url.strip() or (
                 f"https://www.tiktok.com/@{expected}"
             )
-            self._prepare_profile_route_baseline()
             self._open_route(username_uri)
             try:
                 self.wait_profile_ready(expected)
@@ -550,22 +519,6 @@ class AppiumTikTokDevice:
                 return elements
         return []
 
-    def _prepare_profile_route_baseline(self) -> str:
-        visible_username = self._visible_profile_username()
-        self._route_visible_username = visible_username
-        if visible_username:
-            self._route_baseline_source = ""
-            return visible_username
-        try:
-            source = str(self.driver.page_source)
-        except Exception:
-            source = ""
-        self._route_baseline_source = source
-        if _terminal_profile_marker(source):
-            self._open_route("tiktok://inbox")
-            self._wait_terminal_marker_cleared()
-        return ""
-
     def _wait_profile_cleared(self) -> bool:
         for attempt in range(self.metric_read_attempts):
             try:
@@ -578,32 +531,13 @@ class AppiumTikTokDevice:
                 self.sleeper(self.poll_interval)
         return False
 
-    def _wait_terminal_marker_cleared(self) -> bool:
-        for attempt in range(self.metric_read_attempts):
-            try:
-                source = str(self.driver.page_source)
-                marker = _terminal_profile_marker(source)
-            except Exception:
-                source = ""
-                marker = ""
-            if not marker:
-                self._route_baseline_source = source
-                return True
-            if attempt + 1 < self.metric_read_attempts:
-                self.sleeper(self.poll_interval)
-        return False
-
     def _wait_any_profile_surface(self) -> bool:
         for attempt in range(self.metric_read_attempts):
             try:
                 source = str(self.driver.page_source)
                 actual = parse_profile_username(source)
                 marker = _terminal_profile_marker(source)
-                route_changed = source != getattr(self, "_route_baseline_source", "")
-                marker_only_transition = not actual and bool(
-                    getattr(self, "_route_visible_username", "")
-                )
-                if marker and (actual or route_changed or marker_only_transition):
+                if marker and actual:
                     raise ProfilePermanentlyUnavailable(marker)
                 ready = profile_surface_visible(source)
             except ProfilePermanentlyUnavailable:
@@ -625,19 +559,10 @@ class AppiumTikTokDevice:
             page_source = str(self.driver.page_source)
             source_username = parse_profile_username(page_source)
             marker = _terminal_profile_marker(page_source)
-            route_changed = page_source != getattr(self, "_route_baseline_source", "")
-            marker_only_transition = not source_username and bool(
-                getattr(self, "_route_visible_username", "")
-            )
-            if marker and (
-                route_changed
-                or marker_only_transition
-                or (
-                    source_username
-                    and (
-                        not confirmed_username or source_username == confirmed_username
-                    )
-                )
+            if (
+                marker
+                and source_username
+                and (not confirmed_username or source_username == confirmed_username)
             ):
                 raise ProfilePermanentlyUnavailable(marker)
             cache_source = not (

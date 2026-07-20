@@ -596,12 +596,8 @@ class TerminalProfileDriver(FakeDriver):
 class StaleTerminalThenValidDriver(FakeDriver):
     def __init__(self) -> None:
         super().__init__()
-        self.page_source = (
-            '<hierarchy><node text="@previous" '
-            'resource-id="com.zhiliaoapp.musically:id/s7e" />'
-            '<node text="Account banned" />'
-            '<node text="This account is no longer available" />'
-            "</hierarchy>"
+        self.page_source = PROFILE_XML.replace("@sample", "@previous").replace(
+            "</hierarchy>", '<node text="Account banned" /></hierarchy>'
         )
 
     def execute_script(self, name: str, arguments: dict[str, str]) -> None:
@@ -612,29 +608,12 @@ class TerminalUsernameFallbackDriver(StableIdBlankUsernameFallbackDriver):
     def execute_script(self, name: str, arguments: dict[str, str]) -> None:
         super().execute_script(name, arguments)
         if arguments["url"].startswith("https://www.tiktok.com/@"):
-            self.page_source = (
-                '<hierarchy><node text="@old_name" '
-                'resource-id="com.zhiliaoapp.musically:id/s7e" />'
+            self.page_source = PROFILE_XML.replace("@sample", "@old_name").replace(
+                "</hierarchy>",
                 '<node text="Account banned" />'
                 '<node text="This account is no longer available" />'
-                "</hierarchy>"
+                "</hierarchy>",
             )
-
-
-class MarkerOnlyTerminalAfterRouteDriver(FakeDriver):
-    def __init__(self) -> None:
-        super().__init__()
-        self.page_source = (
-            '<hierarchy><node text="@previous" '
-            'resource-id="com.zhiliaoapp.musically:id/s7e" /></hierarchy>'
-        )
-
-    def execute_script(self, name: str, arguments: dict[str, str]) -> None:
-        super().execute_script(name, arguments)
-        self.page_source = (
-            '<hierarchy><node text="Account banned" />'
-            '<node text="This account is no longer available" /></hierarchy>'
-        )
 
 
 def _stable_target() -> PoolTarget:
@@ -655,12 +634,11 @@ def test_explicit_banned_profile_is_terminal() -> None:
     driver = TerminalProfileDriver(
         "Account banned - this account is no longer available"
     )
-    driver.page_source = (
-        '<hierarchy><node text="@sample" '
-        'resource-id="com.zhiliaoapp.musically:id/s7e" />'
+    driver.page_source = PROFILE_XML.replace(
+        "</hierarchy>",
         '<node text="Account banned" />'
         '<node text="This account is no longer available" />'
-        "</hierarchy>"
+        "</hierarchy>",
     )
     device = AppiumTikTokDevice(
         driver,
@@ -696,36 +674,6 @@ def test_stale_terminal_page_does_not_poison_next_target() -> None:
         poll_interval=0,
         sleeper=lambda _: setattr(driver, "page_source", PROFILE_XML),
     )
-    target = _stable_target()
-    device._confirmed_profile_username = "older_success"
-
-    device.open_target(target)
-    device.confirm_profile_identity(target)
-
-    assert device._confirmed_profile_username == "sample"
-
-
-def test_marker_only_terminal_page_is_accepted_after_route_changes() -> None:
-    device = AppiumTikTokDevice(
-        MarkerOnlyTerminalAfterRouteDriver(), metric_read_attempts=1, poll_interval=0
-    )
-    target = _stable_target()
-
-    device.open_target(target)
-
-    with pytest.raises(ProfilePermanentlyUnavailable, match="account banned"):
-        device.confirm_profile_identity(target)
-
-
-def test_profile_content_with_terminal_words_is_not_terminal_evidence() -> None:
-    driver = FakeDriver()
-    driver.page_source = PROFILE_XML.replace(
-        "</hierarchy>",
-        '<node text="Account banned" />'
-        '<node text="This account is no longer available" />'
-        "</hierarchy>",
-    )
-    device = AppiumTikTokDevice(driver, metric_read_attempts=1, poll_interval=0)
     target = _stable_target()
 
     device.open_target(target)
