@@ -15,6 +15,7 @@ from tikpoc.device import (
     _favorite_pixel_state,
 )
 from tikpoc.models import ProfileMetrics
+from tikpoc.profile_parser import parse_profile_username
 
 
 class FakeElement:
@@ -210,6 +211,7 @@ class CachedProfileObservationDriver(FakeDriver):
         self._page_source = page_source
         self.page_source_reads = 0
         self.current_username = "previous"
+        self.username_queries = 0
 
     @property
     def page_source(self) -> str:
@@ -230,12 +232,45 @@ class CachedProfileObservationDriver(FakeDriver):
             "com.zhiliaoapp.musically:id/s7e",
             "com.zhiliaoapp.musically:id/rgn",
         }:
+            self.username_queries += 1
             return [FakeElement(f"@{self.current_username}")]
         if by == "id" and value in {
             "com.zhiliaoapp.musically:id/s5x",
             "com.zhiliaoapp.musically:id/rfc",
         }:
             return [FakeElement("Following")]
+        return super().find_elements(by, value)
+
+
+class BoundedVideoDriver(CachedProfileObservationDriver):
+    def __init__(self) -> None:
+        bounded = PROFILE_XML.replace(
+            'resource-id="com.zhiliaoapp.musically:id/cover"',
+            'resource-id="com.zhiliaoapp.musically:id/cover" '
+            'bounds="[100,200][300,600]"',
+        )
+        super().__init__(bounded)
+        self.gestures: list[dict[str, int]] = []
+        self.post_queries = 0
+
+    def execute_script(self, name: str, arguments: dict[str, str]) -> None:
+        if name == "mobile: clickGesture":
+            self.gestures.append(arguments)
+            self._page_source = (
+                '<hierarchy><node content-desc="Share video. 42 shares" '
+                'bounds="[900,1000][1000,1100]" /></hierarchy>'
+            )
+            return
+        super().execute_script(name, arguments)
+
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if by == "id" and value in {
+            "com.zhiliaoapp.musically:id/eqx",
+            "com.zhiliaoapp.musically:id/efq",
+        }:
+            self.post_queries += 1
+        if "Share video" in value:
+            return [FakeElement()]
         return super().find_elements(by, value)
 
 
@@ -253,10 +288,13 @@ class RenamedStableRouteDriver(FakeDriver):
         super().__init__()
         self.routed = False
         self.changes_route = changes_route
+        self.page_source = PROFILE_XML.replace("@sample", "@previous")
 
     def execute_script(self, name: str, arguments: dict[str, str]) -> None:
         super().execute_script(name, arguments)
         self.routed = True
+        username = "@renamed" if self.changes_route else "@previous"
+        self.page_source = PROFILE_XML.replace("@sample", username)
 
     def find_elements(self, by: str, value: str) -> list[FakeElement]:
         if value == "com.zhiliaoapp.musically:id/s7e":
@@ -269,11 +307,16 @@ class SameStableProfileDriver(FakeDriver):
     def __init__(self) -> None:
         super().__init__()
         self.at_baseline = False
+        self.page_source = PROFILE_XML.replace("@sample", "@renamed")
 
     def execute_script(self, name: str, arguments: dict[str, str]) -> None:
         super().execute_script(name, arguments)
         self.at_baseline = arguments["url"] == "tiktok://inbox"
-        self.page_source = "<hierarchy />" if self.at_baseline else PROFILE_XML
+        self.page_source = (
+            "<hierarchy />"
+            if self.at_baseline
+            else PROFILE_XML.replace("@sample", "@renamed")
+        )
 
     def find_elements(self, by: str, value: str) -> list[FakeElement]:
         if value == "com.zhiliaoapp.musically:id/s7e":
@@ -289,6 +332,7 @@ class RestartRequiredStableRouteDriver(FakeDriver):
         self.restarted = False
         self.terminate_calls = 0
         self.activate_calls = 0
+        self.page_source = PROFILE_XML.replace("@sample", "@previous")
 
     def execute_script(self, name: str, arguments: dict[str, str]) -> None:
         super().execute_script(name, arguments)
@@ -298,7 +342,7 @@ class RestartRequiredStableRouteDriver(FakeDriver):
         else:
             self.stable_route_count += 1
             if self.restarted:
-                self.page_source = PROFILE_XML
+                self.page_source = PROFILE_XML.replace("@sample", "@renamed")
 
     def find_elements(self, by: str, value: str) -> list[FakeElement]:
         if value == "com.zhiliaoapp.musically:id/s7e":
@@ -327,13 +371,18 @@ class BaselineStuckUntilRestartDriver(FakeDriver):
         self.at_baseline = False
         self.terminate_calls = 0
         self.activate_calls = 0
+        self.page_source = PROFILE_XML.replace("@sample", "@previous")
 
     def execute_script(self, name: str, arguments: dict[str, str]) -> None:
         super().execute_script(name, arguments)
         if not self.restarted:
             return
         self.at_baseline = arguments["url"] == "tiktok://inbox"
-        self.page_source = "<hierarchy />" if self.at_baseline else PROFILE_XML
+        self.page_source = (
+            "<hierarchy />"
+            if self.at_baseline
+            else PROFILE_XML.replace("@sample", "@renamed")
+        )
 
     def find_elements(self, by: str, value: str) -> list[FakeElement]:
         if value == "com.zhiliaoapp.musically:id/s7e":
@@ -363,7 +412,7 @@ class StableIdBlankUsernameFallbackDriver(FakeDriver):
         url = arguments["url"]
         if url.startswith("https://www.tiktok.com/@"):
             self.username_fallback_loaded = True
-            self.page_source = PROFILE_XML
+            self.page_source = PROFILE_XML.replace("@sample", "@old_name")
         else:
             self.route_started = True
             self.page_source = "<hierarchy />"
@@ -381,7 +430,29 @@ class StableIdBlankUsernameFallbackDriver(FakeDriver):
 class IncompleteStableRouteDriver(RenamedStableRouteDriver):
     def __init__(self) -> None:
         super().__init__()
-        self.page_source = "<hierarchy />"
+        self.page_source = (
+            '<hierarchy><node text="@previous" '
+            'resource-id="com.zhiliaoapp.musically:id/s7e" /></hierarchy>'
+        )
+
+    def execute_script(self, name: str, arguments: dict[str, str]) -> None:
+        FakeDriver.execute_script(self, name, arguments)
+        url = arguments["url"]
+        username = (
+            ""
+            if url == "tiktok://inbox"
+            else ("@old_name" if url.startswith("https://") else "@renamed")
+        )
+        self.page_source = (
+            f'<hierarchy><node text="{username}" '
+            'resource-id="com.zhiliaoapp.musically:id/s7e" /></hierarchy>'
+        )
+
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if value == "com.zhiliaoapp.musically:id/s7e":
+            username = parse_profile_username(self.page_source)
+            return [FakeElement(f"@{username}")] if username else []
+        return FakeDriver.find_elements(self, by, value)
 
 
 class MissingProfileMarkerDriver(FakeDriver):
@@ -682,6 +753,33 @@ def test_profile_readiness_snapshot_is_reused_for_observation() -> None:
     assert observation.metrics == ProfileMetrics(12, 10, 4)
     assert observation.access_state is ProfileAccessState.PUBLIC
     assert driver.page_source_reads == 1
+    assert driver.username_queries == 1
+
+
+def test_cached_profile_bounds_open_and_confirm_video_without_element_search() -> None:
+    driver = BoundedVideoDriver()
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="uid:123",
+        target_id="123",
+        sec_uid="sec-1",
+        username="sample",
+        profile_url="",
+        source_video_id="",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    device.open_target(target)
+    device.confirm_profile_identity(target)
+    device.read_profile_observation()
+    assert device.list_video_keys() == ("0", "1", "2", "3")
+    device.open_and_confirm_video("2")
+
+    assert driver.gestures == [{"x": 200, "y": 400}]
+    assert driver.post_queries == 0
+    assert driver.page_source_reads == 2
 
 
 def test_opening_video_invalidates_reusable_profile_snapshot() -> None:

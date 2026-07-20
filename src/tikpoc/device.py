@@ -18,8 +18,11 @@ from .acquisition_models import (
 from .models import ProfileMetrics
 from .profile_parser import (
     parse_profile_page,
+    parse_profile_post_bounds,
     parse_profile_username,
     parse_visible_post_keys,
+    profile_surface_visible,
+    video_controls_visible,
 )
 
 
@@ -124,6 +127,7 @@ class AppiumTikTokDevice:
         self.sleeper = sleeper
         self.route_opener = route_opener
         self._profile_source: str | None = None
+        self._video_source: str | None = None
         self._confirmed_profile_username = ""
 
     def _invalidate_profile_source(self) -> None:
@@ -295,16 +299,29 @@ class AppiumTikTokDevice:
         if stable_uri:
             expected = target.username.strip().removeprefix("@").lower()
             previous = getattr(self, "_profile_before_stable_route", "")
+            identity_seen = False
             for attempt in range(self.metric_read_attempts):
-                actual = self._visible_profile_username()
-                if actual and (actual == expected or actual != previous):
-                    self._wait_profile_surface(actual)
+                try:
+                    source = str(self.driver.page_source)
+                    actual = parse_profile_username(source)
+                    ready = profile_surface_visible(source)
+                except Exception:
+                    source = ""
+                    actual = ""
+                    ready = False
+                identity_seen = identity_seen or bool(
+                    actual and (actual == expected or actual != previous)
+                )
+                if actual and ready and (actual == expected or actual != previous):
+                    self._profile_source = source
                     self._confirmed_profile_username = actual
                     return
                 if attempt and attempt % 3 == 0:
                     self._open_route(stable_uri)
                 if attempt + 1 < self.metric_read_attempts:
                     self.sleeper(self.poll_interval)
+            if identity_seen:
+                raise ValueError("profile surface did not become ready")
             self._open_route("tiktok://inbox")
             baseline_cleared = self._wait_profile_cleared()
             if baseline_cleared:
@@ -402,12 +419,50 @@ class AppiumTikTokDevice:
         raise last_error or ValueError("profile metrics are incomplete")
 
     def list_video_keys(self) -> tuple[str, ...]:
+        if self._profile_source is not None:
+            try:
+                page = parse_profile_page(self._profile_source)
+                return tuple(str(index) for index in range(page.visible_post_count))
+            except ValueError:
+                pass
         return self.list_visible_posts()
 
     def open_and_confirm_video(self, video_key: str) -> None:
-        self.open_post(video_key)
-        if self._wait_for_element(SHARE_CONTROL_XPATH) is None:
+        bounds = (
+            parse_profile_post_bounds(self._profile_source)
+            if self._profile_source is not None
+            else ()
+        )
+        index = int(video_key)
+        if bounds and 0 <= index < len(bounds):
+            left, top, right, bottom = bounds[index]
+            self._invalidate_profile_source()
+            self.driver.execute_script(
+                "mobile: clickGesture",
+                {"x": (left + right) // 2, "y": (top + bottom) // 2},
+            )
+        else:
+            self.open_post(video_key)
+        if self._wait_for_video_source() is None:
             raise RuntimeError("video controls did not become visible")
+
+    def _wait_for_video_source(self) -> str | None:
+        deadline = self.clock() + self.action_timeout
+        while True:
+            try:
+                source = str(self.driver.page_source)
+            except Exception:
+                source = ""
+            if source:
+                try:
+                    if video_controls_visible(source):
+                        self._video_source = source
+                        return source
+                except ValueError:
+                    pass
+            if self.clock() >= deadline:
+                return None
+            self.sleeper(self.poll_interval)
 
     def capture_diagnostics(self) -> DeviceDiagnostics:
         return DeviceDiagnostics(ui_summary=str(self.driver.page_source)[:2_000])
@@ -439,7 +494,11 @@ class AppiumTikTokDevice:
 
     def _wait_profile_cleared(self) -> bool:
         for attempt in range(self.metric_read_attempts):
-            if not self._visible_profile_username():
+            try:
+                username = parse_profile_username(str(self.driver.page_source))
+            except Exception:
+                username = ""
+            if not username:
                 return True
             if attempt + 1 < self.metric_read_attempts:
                 self.sleeper(self.poll_interval)
@@ -447,9 +506,16 @@ class AppiumTikTokDevice:
 
     def _wait_any_profile_surface(self) -> bool:
         for attempt in range(self.metric_read_attempts):
-            actual = self._visible_profile_username()
-            if actual:
-                self._wait_profile_surface(actual)
+            try:
+                source = str(self.driver.page_source)
+                actual = parse_profile_username(source)
+                ready = profile_surface_visible(source)
+            except Exception:
+                source = ""
+                actual = ""
+                ready = False
+            if actual and ready:
+                self._profile_source = source
                 self._confirmed_profile_username = actual
                 return True
             if attempt + 1 < self.metric_read_attempts:
@@ -478,13 +544,12 @@ class AppiumTikTokDevice:
                 return
             except ValueError:
                 pass
-            for resource_id in PROFILE_STAT_LABEL_IDS:
-                try:
-                    if self.driver.find_elements(By.ID, resource_id):
-                        self._profile_source = page_source if cache_source else None
-                        return
-                except Exception:
-                    break
+            try:
+                if profile_surface_visible(page_source):
+                    self._profile_source = page_source if cache_source else None
+                    return
+            except ValueError:
+                pass
             if attempt + 1 < self.metric_read_attempts:
                 self.sleeper(self.poll_interval)
         raise ValueError("profile surface did not become ready")
