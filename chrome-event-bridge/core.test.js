@@ -208,3 +208,32 @@ test("reopens Activity only after the bounded interval", () => {
   assert.equal(core.shouldOpenActivity(true, true, 1_000, 20_000), false);
   assert.equal(core.shouldOpenActivity(false, false, 0, 20_000), false);
 });
+
+test("only the current follower baseline version is actionable", () => {
+  assert.equal(core.followerBaselineReady(1_000), false);
+  assert.equal(core.followerBaselineReady({ version: 1 }), false);
+  assert.equal(core.followerBaselineReady({ version: 2 }), true);
+});
+
+test("follower baseline waits for rows or a stable empty panel", () => {
+  assert.equal(core.shouldEstablishFollowerBaseline({
+    candidateCount: 4,
+    activityOpenedAt: 1_000,
+    now: 1_500,
+  }), true);
+  assert.equal(core.shouldEstablishFollowerBaseline({
+    candidateCount: 0,
+    activityOpenedAt: 1_000,
+    now: 20_000,
+  }), false);
+  assert.equal(core.shouldEstablishFollowerBaseline({
+    candidateCount: 0,
+    activityOpenedAt: 1_000,
+    now: 31_000,
+  }), true);
+  assert.equal(core.shouldEstablishFollowerBaseline({
+    candidateCount: 0,
+    activityOpenedAt: 0,
+    now: 60_000,
+  }), false);
+});

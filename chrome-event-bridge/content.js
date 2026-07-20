@@ -292,9 +292,16 @@
   }
 
   function maybeOpenActivity(settings) {
+    const panelVisible = activityPanelVisible();
+    if (panelVisible) {
+      if (!activityOpenedAt) {
+        activityOpenedAt = Date.now();
+      }
+      return;
+    }
     if (!core.shouldOpenActivity(
       settings.autoOpenActivity,
-      activityPanelVisible(),
+      panelVisible,
       activityOpenedAt,
     )) {
       return;
@@ -363,7 +370,7 @@
         updatedAt: now,
       };
     }
-    baselines[settings.accountId] = now;
+    baselines[settings.accountId] = { version: 2, establishedAt: now };
     await storageSet({
       [PROCESSED_KEY]: trimProcessed(processed),
       [BASELINE_KEY]: baselines,
@@ -415,10 +422,12 @@
         .filter(visible)
         .slice(-600);
       const candidates = links.map(candidateFromLink).filter(Boolean);
-      if (!baselines[settings.accountId]) {
-        const activitySettled =
-          activityOpenedAt > 0 && Date.now() - activityOpenedAt >= 2000;
-        if (candidates.length > 0 || activityPanelVisible() || activitySettled) {
+      if (!core.followerBaselineReady(baselines[settings.accountId])) {
+        if (core.shouldEstablishFollowerBaseline({
+          candidateCount: candidates.length,
+          activityOpenedAt,
+          now: Date.now(),
+        })) {
           await establishBaseline(boundSettings, candidates, processed, baselines);
         }
         return;

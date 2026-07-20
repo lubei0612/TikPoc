@@ -186,6 +186,23 @@
     );
   }
 
+  function followerBaselineReady(value) {
+    return Boolean(value && typeof value === "object" && value.version === 2);
+  }
+
+  function shouldEstablishFollowerBaseline({
+    candidateCount,
+    activityOpenedAt,
+    now = Date.now(),
+    emptyWaitMs = 30_000,
+  }) {
+    if (Number(candidateCount || 0) > 0) {
+      return true;
+    }
+    const openedAt = Number(activityOpenedAt || 0);
+    return openedAt > 0 && Number(now) - openedAt >= Number(emptyWaitMs);
+  }
+
   function shouldAttemptRecord(
     record,
     now = Date.now(),
@@ -239,6 +256,7 @@
     classifyCandidate,
     createCoalescingRunner,
     extractFollowerEventId,
+    followerBaselineReady,
     followButtonState,
     isFollowerNotification,
     installContinuousTriggers,
@@ -246,6 +264,7 @@
     normalizeText,
     parseTikTokProfileUrl,
     shouldAttemptRecord,
+    shouldEstablishFollowerBaseline,
     shouldOpenActivity,
   };
 });
