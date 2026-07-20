@@ -324,6 +324,7 @@ class MobileAssignmentWorker:
     def _execute_interaction(self, assignment_id: int, plan: ActionPlan) -> None:
         started_at_ms = self.clock_ms()
         attempts = 0
+        reconciliation_attempts = 0
         self._renew_lease(assignment_id)
         if plan.state in {ActionPlanState.EXECUTING, ActionPlanState.UNCERTAIN}:
             phase = AssignmentPhase.ACTION_RECONCILING
@@ -336,6 +337,7 @@ class MobileAssignmentWorker:
                 **self._assignment_fence_kwargs(),
             )
             result = self.device.reconcile_outcome(plan.effective_outcome)
+            reconciliation_attempts = 1
         else:
             self.repository.transition_assignment(
                 assignment_id,
@@ -363,9 +365,12 @@ class MobileAssignmentWorker:
 
         while True:
             attempts += 1
-            if (
-                phase is AssignmentPhase.ACTION_RECONCILING
-                and result is ActionResult.NOT_APPLIED
+            if phase is AssignmentPhase.ACTION_RECONCILING and (
+                result is ActionResult.NOT_APPLIED
+                or (
+                    result is ActionResult.UNAVAILABLE
+                    and plan.effective_outcome is not OutcomeKind.REPOST
+                )
             ):
                 result = ActionResult.UNCERTAIN
             stored_plan = self.repository.record_action_result(
@@ -405,12 +410,13 @@ class MobileAssignmentWorker:
                     **self._assignment_fence_kwargs(),
                 )
                 return
-            timed_out = self.clock_ms() - started_at_ms >= self.action_timeout_ms
-            if attempts >= self.max_action_attempts or timed_out:
-                self._record_stage(assignment_id, AssignmentStage.ACTION, started_at_ms)
-                self._defer(assignment_id, f"action_{result.value}")
-                return
             if result is ActionResult.UNCERTAIN:
+                if reconciliation_attempts >= 1:
+                    self._record_stage(
+                        assignment_id, AssignmentStage.ACTION, started_at_ms
+                    )
+                    self._defer(assignment_id, f"action_{result.value}")
+                    return
                 if phase is AssignmentPhase.ACTION_EXECUTING:
                     self.repository.transition_assignment(
                         assignment_id,
@@ -423,8 +429,15 @@ class MobileAssignmentWorker:
                     phase = AssignmentPhase.ACTION_RECONCILING
                 self.device.recover(phase)
                 self._renew_lease(assignment_id)
+                reconciliation_attempts += 1
                 result = self.device.reconcile_outcome(plan.effective_outcome)
                 continue
+
+            timed_out = self.clock_ms() - started_at_ms >= self.action_timeout_ms
+            if attempts >= self.max_action_attempts or timed_out:
+                self._record_stage(assignment_id, AssignmentStage.ACTION, started_at_ms)
+                self._defer(assignment_id, f"action_{result.value}")
+                return
 
             self.device.recover(phase)
             if phase is AssignmentPhase.ACTION_RECONCILING:

@@ -120,3 +120,16 @@ metrics as an inaccessible trace.
 - Resume only pending/deferred work in the existing production round. Do not
   rewrite prior completed assignments or silently convert the six currently
   deferred assignments.
+
+## Task 11: Bound Uncertain Reconciliation To One Read
+
+- Add failing worker tests proving a fresh uncertain action performs one local
+  reconciliation and an existing uncertain plan performs one reconciliation
+  per claim.
+- Preserve uncertain plans, quota reservations, deferred coverage semantics,
+  and immutable video selection.
+- Treat `not_applied` and non-repost `unavailable` observed during
+  reconciliation as still uncertain; never return the plan to action execution
+  or click the control again. Preserve the repost-unavailable trace fallback.
+- Run focused worker/capacity/planner tests, independent specification and
+  quality review, then resume the durable production round.

@@ -159,6 +159,23 @@ Commit `bfda6d3` restores the accepted 30-second default. Do not reapply the
 optimizations remain in place, and production resumes from the same durable
 round after regression verification.
 
+## Single Uncertain Reconciliation
+
+Production evidence showed that repeated local reconciliation did not improve
+certainty after the first check. In the first 25 plans observed after duplicate
+click prevention was deployed, none became confirmed through a second or third
+consecutive reconciliation. Repeating the same read only extended action tails
+and amplified the deferred backlog.
+
+After a fresh action returns `uncertain`, perform at most one reconciliation.
+An already-uncertain durable plan also receives exactly one reconciliation per
+claim. If that read is still ambiguous, reports `not_applied`, or reports an
+unavailable non-repost control, preserve the immutable plan as `uncertain`, keep
+its quota reservation, defer the assignment, and release the device. A visibly
+unavailable repost control retains its existing trace fallback. Reconciliation
+never returns the plan to executable state and never presses the interaction
+control again.
+
 ## Eligibility Correction: Semantic Post Fallback
 
 The current approved rule accepts a public profile when `following > followers`
