@@ -151,6 +151,11 @@ class AppiumTikTokDevice:
             "mobile: deepLink", {"url": uri, "package": TIKTOK_PACKAGE}
         )
 
+    def _restart_route(self, uri: str) -> None:
+        self._invalidate_profile_source()
+        self.driver.terminate_app(TIKTOK_PACKAGE)
+        self._open_route(uri)
+
     def ensure_ready(self) -> None:
         self.driver.activate_app(TIKTOK_PACKAGE)
 
@@ -338,18 +343,8 @@ class AppiumTikTokDevice:
                     self.sleeper(self.poll_interval)
             if identity_seen:
                 raise ValueError("profile surface did not become ready")
-            self._open_route("tiktok://inbox")
-            baseline_cleared = self._wait_profile_cleared()
-            if baseline_cleared:
-                self._open_route(stable_uri)
-                if self._wait_any_profile_surface():
-                    return
-            self.restart_app()
-            self._open_route("tiktok://inbox")
-            if not self._wait_profile_cleared():
-                raise ValueError("stable profile route did not change after restart")
-            self._open_route(stable_uri)
-            if self._wait_any_profile_surface():
+            self._restart_route(stable_uri)
+            if self._wait_any_profile_surface(reject_username=previous):
                 return
             username_uri = target.profile_url.strip() or (
                 f"https://www.tiktok.com/@{expected}"
@@ -479,19 +474,7 @@ class AppiumTikTokDevice:
                 return elements
         return []
 
-    def _wait_profile_cleared(self) -> bool:
-        for attempt in range(self.metric_read_attempts):
-            try:
-                username = parse_profile_username(str(self.driver.page_source))
-            except Exception:
-                username = ""
-            if not username:
-                return True
-            if attempt + 1 < self.metric_read_attempts:
-                self.sleeper(self.poll_interval)
-        return False
-
-    def _wait_any_profile_surface(self) -> bool:
+    def _wait_any_profile_surface(self, *, reject_username: str = "") -> bool:
         for attempt in range(self.metric_read_attempts):
             try:
                 source = str(self.driver.page_source)
@@ -501,7 +484,7 @@ class AppiumTikTokDevice:
                 source = ""
                 actual = ""
                 ready = False
-            if actual and ready:
+            if actual and ready and actual != reject_username:
                 self._profile_source = source
                 self._confirmed_profile_username = actual
                 return True

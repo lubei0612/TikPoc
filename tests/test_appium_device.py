@@ -427,32 +427,10 @@ class RenamedStableRouteDriver(FakeDriver):
         return super().find_elements(by, value)
 
 
-class SameStableProfileDriver(FakeDriver):
-    def __init__(self) -> None:
+class RestartDirectStableRouteDriver(FakeDriver):
+    def __init__(self, *, changes_after_restart: bool = True) -> None:
         super().__init__()
-        self.at_baseline = False
-        self.page_source = PROFILE_XML.replace("@sample", "@renamed")
-
-    def execute_script(self, name: str, arguments: dict[str, str]) -> None:
-        super().execute_script(name, arguments)
-        self.at_baseline = arguments["url"] == "tiktok://inbox"
-        self.page_source = (
-            "<hierarchy />"
-            if self.at_baseline
-            else PROFILE_XML.replace("@sample", "@renamed")
-        )
-
-    def find_elements(self, by: str, value: str) -> list[FakeElement]:
-        if value == "com.zhiliaoapp.musically:id/s7e":
-            return [] if self.at_baseline else [FakeElement("@renamed")]
-        return super().find_elements(by, value)
-
-
-class RestartRequiredStableRouteDriver(FakeDriver):
-    def __init__(self) -> None:
-        super().__init__()
-        self.stable_route_count = 0
-        self.baseline_seen = False
+        self.changes_after_restart = changes_after_restart
         self.restarted = False
         self.terminate_calls = 0
         self.activate_calls = 0
@@ -460,69 +438,26 @@ class RestartRequiredStableRouteDriver(FakeDriver):
 
     def execute_script(self, name: str, arguments: dict[str, str]) -> None:
         super().execute_script(name, arguments)
-        if arguments["url"] == "tiktok://inbox":
-            self.baseline_seen = True
-            self.page_source = "<hierarchy />"
-        else:
-            self.stable_route_count += 1
-            if self.restarted:
-                self.page_source = PROFILE_XML.replace("@sample", "@renamed")
+        url = arguments["url"]
+        if url.startswith("https://www.tiktok.com/@"):
+            self.page_source = PROFILE_XML.replace("@sample", "@old_name")
+        elif self.restarted and self.changes_after_restart:
+            self.page_source = PROFILE_XML.replace("@sample", "@renamed")
 
     def find_elements(self, by: str, value: str) -> list[FakeElement]:
         if value == "com.zhiliaoapp.musically:id/s7e":
-            if self.restarted and self.stable_route_count >= 3:
-                return [FakeElement("@renamed")]
-            if not self.baseline_seen:
-                return [FakeElement("@previous")]
-            return []
+            username = parse_profile_username(self.page_source)
+            return [FakeElement(f"@{username}")] if username else []
         return super().find_elements(by, value)
 
     def terminate_app(self, package: str) -> None:
         super().terminate_app(package)
         self.terminate_calls += 1
-
-    def activate_app(self, package: str) -> None:
-        super().activate_app(package)
-        self.activate_calls += 1
-        if self.terminate_calls:
-            self.restarted = True
-
-
-class BaselineStuckUntilRestartDriver(FakeDriver):
-    def __init__(self) -> None:
-        super().__init__()
-        self.restarted = False
-        self.at_baseline = False
-        self.terminate_calls = 0
-        self.activate_calls = 0
-        self.page_source = PROFILE_XML.replace("@sample", "@previous")
-
-    def execute_script(self, name: str, arguments: dict[str, str]) -> None:
-        super().execute_script(name, arguments)
-        if not self.restarted:
-            return
-        self.at_baseline = arguments["url"] == "tiktok://inbox"
-        self.page_source = (
-            "<hierarchy />"
-            if self.at_baseline
-            else PROFILE_XML.replace("@sample", "@renamed")
-        )
-
-    def find_elements(self, by: str, value: str) -> list[FakeElement]:
-        if value == "com.zhiliaoapp.musically:id/s7e":
-            if self.restarted:
-                return [] if self.at_baseline else [FakeElement("@renamed")]
-            return [FakeElement("@previous")]
-        return super().find_elements(by, value)
-
-    def terminate_app(self, package: str) -> None:
-        super().terminate_app(package)
-        self.terminate_calls += 1
-
-    def activate_app(self, package: str) -> None:
-        super().activate_app(package)
-        self.activate_calls += 1
         self.restarted = True
+
+    def activate_app(self, package: str) -> None:
+        super().activate_app(package)
+        self.activate_calls += 1
 
 
 class StableIdBlankUsernameFallbackDriver(FakeDriver):
@@ -685,12 +620,14 @@ def test_appium_device_rejects_stale_profile_after_stable_route() -> None:
 
     device.open_target(target)
 
-    with pytest.raises(ValueError, match="stable profile route did not change"):
+    with pytest.raises(
+        ProfileIdentityMismatch, match="expected old_name, got previous"
+    ):
         device.confirm_profile_identity(target)
 
 
-def test_appium_device_reloads_same_stable_profile_through_baseline() -> None:
-    driver = SameStableProfileDriver()
+def test_stable_route_recovery_restarts_directly_into_target_without_inbox() -> None:
+    driver = RestartDirectStableRouteDriver()
     device = AppiumTikTokDevice(driver, metric_read_attempts=1, poll_interval=0)
     target = PoolTarget(
         pool_id="pool-1",
@@ -707,16 +644,17 @@ def test_appium_device_reloads_same_stable_profile_through_baseline() -> None:
     device.open_target(target)
     device.confirm_profile_identity(target)
 
+    assert driver.terminate_calls == 1
+    assert driver.activate_calls == 0
     assert [script[1]["url"] for script in driver.scripts] == [
         "snssdk1233://user/profile/123",
-        "tiktok://inbox",
         "snssdk1233://user/profile/123",
     ]
     assert device._confirmed_profile_username == "renamed"
 
 
-def test_appium_device_restarts_once_after_baseline_route_stays_blank() -> None:
-    driver = RestartRequiredStableRouteDriver()
+def test_stable_route_recovery_rejects_stale_profile_after_direct_restart() -> None:
+    driver = RestartDirectStableRouteDriver(changes_after_restart=False)
     device = AppiumTikTokDevice(driver, metric_read_attempts=1, poll_interval=0)
     target = PoolTarget(
         pool_id="pool-1",
@@ -734,41 +672,11 @@ def test_appium_device_restarts_once_after_baseline_route_stays_blank() -> None:
     device.confirm_profile_identity(target)
 
     assert driver.terminate_calls == 1
-    assert driver.activate_calls == 1
+    assert driver.activate_calls == 0
     assert [script[1]["url"] for script in driver.scripts] == [
         "snssdk1233://user/profile/123",
-        "tiktok://inbox",
         "snssdk1233://user/profile/123",
-        "tiktok://inbox",
-        "snssdk1233://user/profile/123",
-    ]
-
-
-def test_appium_device_restarts_when_inbox_cannot_clear_the_profile() -> None:
-    driver = BaselineStuckUntilRestartDriver()
-    device = AppiumTikTokDevice(driver, metric_read_attempts=1, poll_interval=0)
-    target = PoolTarget(
-        pool_id="pool-1",
-        identity_key="uid:123",
-        target_id="123",
-        sec_uid="sec-1",
-        username="old_name",
-        profile_url="",
-        source_video_id="",
-        source_line_numbers=(2,),
-        ordinal=0,
-    )
-
-    device.open_target(target)
-    device.confirm_profile_identity(target)
-
-    assert driver.terminate_calls == 1
-    assert driver.activate_calls == 1
-    assert [script[1]["url"] for script in driver.scripts] == [
-        "snssdk1233://user/profile/123",
-        "tiktok://inbox",
-        "tiktok://inbox",
-        "snssdk1233://user/profile/123",
+        "https://www.tiktok.com/@old_name",
     ]
 
 
