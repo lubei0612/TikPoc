@@ -20,6 +20,7 @@
   const BASELINES_KEY = "tikpocDmBaselines";
   const PROCESSED_KEY = "tikpocDmProcessed";
   const ACTIVE_BASELINE_PREFIX = "active:";
+  const ACTIVE_BASELINE_READY_KEY = "active:__ready__";
   const HEALTH_TICK = "TIKPOC_HEALTH_TICK";
   const MAX_PROCESSED = 1000;
   const BINDING_EVIDENCE_MAX_AGE_MS = 120 * 1000;
@@ -513,6 +514,7 @@
           baseline[`${ACTIVE_BASELINE_PREFIX}${activeKey}`] =
             await core.fingerprintMessage(active);
         }
+        baseline[ACTIVE_BASELINE_READY_KEY] = "1";
         baselines[settings.accountId] = baseline;
         await storage.set(BASELINES_KEY, baselines);
         return "baseline";
@@ -531,11 +533,13 @@
         const activeBaselineKey = `${ACTIVE_BASELINE_PREFIX}${activeKey}`;
         fingerprint = await core.fingerprintMessage(active);
         if (!baseline[activeBaselineKey]) {
-          baseline[activeBaselineKey] = fingerprint;
-          await storage.set(BASELINES_KEY, baselines);
-          return "active_baseline";
-        }
-        if (baseline[activeBaselineKey] === fingerprint) {
+          if (baseline[ACTIVE_BASELINE_READY_KEY] !== "1") {
+            baseline[activeBaselineKey] = fingerprint;
+            baseline[ACTIVE_BASELINE_READY_KEY] = "1";
+            await storage.set(BASELINES_KEY, baselines);
+            return "active_baseline";
+          }
+        } else if (baseline[activeBaselineKey] === fingerprint) {
           return scanWelcome(settings);
         }
         candidate = {
@@ -569,6 +573,7 @@
       function rememberInbound() {
         baseline[candidate.snapshot.key] = candidate.snapshot.signature;
         baseline[activeBaselineKey] = fingerprint;
+        baseline[ACTIVE_BASELINE_READY_KEY] = "1";
       }
       const processed = await storage.get(PROCESSED_KEY) || {};
       if (processed[fingerprint]) {

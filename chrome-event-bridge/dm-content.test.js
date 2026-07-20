@@ -313,6 +313,18 @@ test("an open conversation detects a new inbound when its row is unchanged", asy
   );
 });
 
+test("the first active inbound after an empty startup view is new", async () => {
+  const current = inbound({
+    messageId: "message-new",
+    text: "I would like to buy a bag",
+  });
+  const run = harness({ reads: [null, current, current] });
+
+  assert.equal(await run.workflow.scan(SETTINGS), "baseline");
+  assert.equal(await run.workflow.scan(SETTINGS), "sent");
+  assert.equal(run.clicks, 1);
+});
+
 test("a stable TikTok conversation id reaches planning after navigation", async () => {
   const stableInbound = inbound({ conversationId: "conv:conversation-1" });
   const run = harness({ reads: [stableInbound, stableInbound] });
