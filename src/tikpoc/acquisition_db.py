@@ -83,6 +83,10 @@ _CAPACITY_QUOTA_LIMITS = {
 }
 
 
+class DeviceWorkerLeaseLost(RuntimeError):
+    pass
+
+
 def _clock_ms() -> int:
     return int(time.time() * 1000)
 
@@ -599,6 +603,118 @@ class AcquisitionRepository:
             ).fetchone()
         return row is not None
 
+    @staticmethod
+    def _assert_device_worker_fence(
+        connection: sqlite3.Connection,
+        *,
+        device_id: str,
+        account_id: str | None,
+        owner_id: str | None,
+        fence_token: int | None,
+        now_ms: int,
+    ) -> None:
+        values = (account_id, owner_id, fence_token)
+        if all(value is None for value in values):
+            return
+        if any(value is None for value in values):
+            raise ValueError("device worker fence identity is incomplete")
+        row = connection.execute(
+            """
+            SELECT 1 FROM device_worker_leases
+            WHERE device_id = ? AND account_id = ? AND owner_id = ?
+              AND fence_token = ? AND expires_at_ms > ?
+            """,
+            (
+                device_id,
+                str(account_id).strip(),
+                str(owner_id).strip(),
+                int(fence_token),
+                now_ms,
+            ),
+        ).fetchone()
+        if row is None:
+            raise DeviceWorkerLeaseLost(
+                f"device worker fence is inactive for {device_id}"
+            )
+
+    @staticmethod
+    def _assert_assignment_lease_active(
+        *,
+        device_id: str,
+        lease_expires_at_ms: int,
+        now_ms: int,
+        fenced: bool,
+    ) -> None:
+        if fenced and lease_expires_at_ms <= now_ms:
+            raise DeviceWorkerLeaseLost(f"assignment lease is inactive for {device_id}")
+
+    @classmethod
+    def _assert_action_worker_fence(
+        cls,
+        connection: sqlite3.Connection,
+        plan: ActionPlan,
+        *,
+        worker_owner_id: str | None,
+        worker_account_id: str | None,
+        worker_fence_token: int | None,
+        now_ms: int,
+    ) -> None:
+        cls._assert_assignment_worker_fence(
+            connection,
+            round_id=plan.round_id,
+            identity_key=plan.identity_key,
+            device_id=plan.device_id,
+            worker_owner_id=worker_owner_id,
+            worker_account_id=worker_account_id,
+            worker_fence_token=worker_fence_token,
+            now_ms=now_ms,
+        )
+
+    @classmethod
+    def _assert_assignment_worker_fence(
+        cls,
+        connection: sqlite3.Connection,
+        *,
+        round_id: str,
+        identity_key: str,
+        device_id: str,
+        worker_owner_id: str | None,
+        worker_account_id: str | None,
+        worker_fence_token: int | None,
+        now_ms: int,
+    ) -> None:
+        cls._assert_device_worker_fence(
+            connection,
+            device_id=device_id,
+            account_id=worker_account_id,
+            owner_id=worker_owner_id,
+            fence_token=worker_fence_token,
+            now_ms=now_ms,
+        )
+        if worker_fence_token is None:
+            return
+        assignment = connection.execute(
+            """
+            SELECT lease_expires_at_ms FROM round_assignments
+            WHERE round_id = ? AND identity_key = ? AND device_id = ?
+              AND lease_owner = ?
+            """,
+            (
+                round_id,
+                identity_key,
+                device_id,
+                worker_owner_id,
+            ),
+        ).fetchone()
+        if assignment is None:
+            raise DeviceWorkerLeaseLost(f"assignment lease is inactive for {device_id}")
+        cls._assert_assignment_lease_active(
+            device_id=device_id,
+            lease_expires_at_ms=int(assignment["lease_expires_at_ms"]),
+            now_ms=now_ms,
+            fenced=True,
+        )
+
     def record_fleet_device_health(
         self,
         device_id: str,
@@ -1102,18 +1218,40 @@ class AcquisitionRepository:
             return self._assignment_by_id(connection, assignment_id)
 
     def record_visit_confirmed(
-        self, assignment_id: int, owner_id: str, *, now_ms: int
+        self,
+        assignment_id: int,
+        owner_id: str,
+        *,
+        now_ms: int,
+        worker_account_id: str | None = None,
+        worker_fence_token: int | None = None,
     ) -> None:
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 """
-                SELECT phase FROM round_assignments
+                SELECT device_id, phase, lease_expires_at_ms
+                FROM round_assignments
                 WHERE assignment_id = ? AND lease_owner = ?
                 """,
                 (assignment_id, owner_id),
             ).fetchone()
             if row is None:
                 raise ValueError("assignment visit owner does not hold the lease")
+            self._assert_device_worker_fence(
+                connection,
+                device_id=str(row["device_id"]),
+                account_id=worker_account_id,
+                owner_id=owner_id if worker_fence_token is not None else None,
+                fence_token=worker_fence_token,
+                now_ms=now_ms,
+            )
+            self._assert_assignment_lease_active(
+                device_id=str(row["device_id"]),
+                lease_expires_at_ms=int(row["lease_expires_at_ms"]),
+                now_ms=now_ms,
+                fenced=worker_fence_token is not None,
+            )
             previous_phase = AssignmentPhase(str(row["phase"]))
             if AssignmentPhase.IDENTITY_CONFIRMED not in _ALLOWED_PHASE_TRANSITIONS.get(
                 previous_phase, set()
@@ -1373,6 +1511,8 @@ class AcquisitionRepository:
         retry_delay_ms: int,
         error_code: str,
         diagnostics: DeviceDiagnostics,
+        worker_account_id: str | None = None,
+        worker_fence_token: int | None = None,
     ) -> RoundAssignment:
         if retry_delay_ms < 0:
             raise ValueError("retry delay must be nonnegative")
@@ -1380,13 +1520,28 @@ class AcquisitionRepository:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 """
-                SELECT phase FROM round_assignments
+                SELECT device_id, phase, lease_expires_at_ms
+                FROM round_assignments
                 WHERE assignment_id = ? AND lease_owner = ?
                 """,
                 (assignment_id, owner_id),
             ).fetchone()
             if row is None:
                 raise ValueError("assignment owner does not hold the lease")
+            self._assert_device_worker_fence(
+                connection,
+                device_id=str(row["device_id"]),
+                account_id=worker_account_id,
+                owner_id=owner_id if worker_fence_token is not None else None,
+                fence_token=worker_fence_token,
+                now_ms=now_ms,
+            )
+            self._assert_assignment_lease_active(
+                device_id=str(row["device_id"]),
+                lease_expires_at_ms=int(row["lease_expires_at_ms"]),
+                now_ms=now_ms,
+                fenced=worker_fence_token is not None,
+            )
             previous = AssignmentPhase(str(row["phase"]))
             if previous in {AssignmentPhase.COMPLETED, AssignmentPhase.SKIPPED}:
                 raise ValueError("terminal assignment cannot be deferred")
@@ -1424,6 +1579,8 @@ class AcquisitionRepository:
         original_error_code: str,
         failure_stage: str,
         diagnostics: DeviceDiagnostics,
+        worker_account_id: str | None = None,
+        worker_fence_token: int | None = None,
     ) -> RoundAssignment:
         normalized_error = str(error_code).strip()
         normalized_original_error = str(original_error_code).strip()
@@ -1436,7 +1593,8 @@ class AcquisitionRepository:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 """
-                SELECT round_id, phase, attempt_count, visit_confirmed_at_ms
+                SELECT round_id, device_id, phase, attempt_count,
+                       visit_confirmed_at_ms, lease_expires_at_ms
                 FROM round_assignments
                 WHERE assignment_id = ? AND lease_owner = ?
                 """,
@@ -1444,6 +1602,20 @@ class AcquisitionRepository:
             ).fetchone()
             if row is None:
                 raise ValueError("assignment owner does not hold the lease")
+            self._assert_device_worker_fence(
+                connection,
+                device_id=str(row["device_id"]),
+                account_id=worker_account_id,
+                owner_id=owner_id if worker_fence_token is not None else None,
+                fence_token=worker_fence_token,
+                now_ms=now_ms,
+            )
+            self._assert_assignment_lease_active(
+                device_id=str(row["device_id"]),
+                lease_expires_at_ms=int(row["lease_expires_at_ms"]),
+                now_ms=now_ms,
+                fenced=worker_fence_token is not None,
+            )
             if (
                 AssignmentPhase(str(row["phase"]))
                 is not AssignmentPhase.PROFILE_OPENING
@@ -1493,6 +1665,8 @@ class AcquisitionRepository:
         expected_phase: AssignmentPhase | str,
         *,
         now_ms: int,
+        worker_account_id: str | None = None,
+        worker_fence_token: int | None = None,
     ) -> RoundAssignment:
         expected = AssignmentPhase(expected_phase)
         if AssignmentPhase.COMPLETED not in _ALLOWED_PHASE_TRANSITIONS.get(
@@ -1502,11 +1676,27 @@ class AcquisitionRepository:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT round_id FROM round_assignments WHERE assignment_id = ?",
+                "SELECT round_id, device_id, lease_expires_at_ms "
+                "FROM round_assignments "
+                "WHERE assignment_id = ?",
                 (assignment_id,),
             ).fetchone()
             if row is None:
                 raise KeyError(assignment_id)
+            self._assert_device_worker_fence(
+                connection,
+                device_id=str(row["device_id"]),
+                account_id=worker_account_id,
+                owner_id=owner_id if worker_fence_token is not None else None,
+                fence_token=worker_fence_token,
+                now_ms=now_ms,
+            )
+            self._assert_assignment_lease_active(
+                device_id=str(row["device_id"]),
+                lease_expires_at_ms=int(row["lease_expires_at_ms"]),
+                now_ms=now_ms,
+                fenced=worker_fence_token is not None,
+            )
             cursor = connection.execute(
                 """
                 UPDATE round_assignments
@@ -2396,6 +2586,9 @@ class AcquisitionRepository:
         requested_outcome: OutcomeKind | str,
         now_ms: int,
         hourly_limits: Mapping[OutcomeKind, int],
+        worker_owner_id: str | None = None,
+        worker_account_id: str | None = None,
+        worker_fence_token: int | None = None,
     ) -> ActionPlan:
         requested = OutcomeKind(requested_outcome)
         if now_ms < 0:
@@ -2405,6 +2598,16 @@ class AcquisitionRepository:
             existing = self._action_plan(connection, round_id, identity_key, device_id)
             if existing is not None:
                 return existing
+            self._assert_assignment_worker_fence(
+                connection,
+                round_id=round_id,
+                identity_key=identity_key,
+                device_id=device_id,
+                worker_owner_id=worker_owner_id,
+                worker_account_id=worker_account_id,
+                worker_fence_token=worker_fence_token,
+                now_ms=now_ms,
+            )
             snapshot = self._profile_snapshot(connection, round_id, identity_key)
             if snapshot is None:
                 raise ValueError("profile snapshot is not ready")
@@ -2490,6 +2693,9 @@ class AcquisitionRepository:
         seed: str,
         now_ms: int,
         hourly_limits: Mapping[OutcomeKind, int],
+        worker_owner_id: str | None = None,
+        worker_account_id: str | None = None,
+        worker_fence_token: int | None = None,
     ) -> ActionPlan:
         if now_ms < 0:
             raise ValueError("action plan timestamp must be nonnegative")
@@ -2498,6 +2704,16 @@ class AcquisitionRepository:
             existing = self._action_plan(connection, round_id, identity_key, device_id)
             if existing is not None:
                 return existing
+            self._assert_assignment_worker_fence(
+                connection,
+                round_id=round_id,
+                identity_key=identity_key,
+                device_id=device_id,
+                worker_owner_id=worker_owner_id,
+                worker_account_id=worker_account_id,
+                worker_fence_token=worker_fence_token,
+                now_ms=now_ms,
+            )
             snapshot = self._profile_snapshot(connection, round_id, identity_key)
             if snapshot is None:
                 raise ValueError("profile snapshot is not ready")
@@ -2816,10 +3032,28 @@ class AcquisitionRepository:
                 )
             return self._action_plan_by_id(connection, plan_id)
 
-    def mark_action_executing(self, plan_id: int) -> ActionPlan:
+    def mark_action_executing(
+        self,
+        plan_id: int,
+        *,
+        now_ms: int | None = None,
+        worker_owner_id: str | None = None,
+        worker_account_id: str | None = None,
+        worker_fence_token: int | None = None,
+    ) -> ActionPlan:
+        if worker_fence_token is not None and now_ms is None:
+            raise ValueError("fenced action result timestamp is required")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             plan = self._action_plan_by_id(connection, plan_id)
+            self._assert_action_worker_fence(
+                connection,
+                plan,
+                worker_owner_id=worker_owner_id,
+                worker_account_id=worker_account_id,
+                worker_fence_token=worker_fence_token,
+                now_ms=0 if now_ms is None else now_ms,
+            )
             if plan.state is ActionPlanState.CONFIRMED:
                 return plan
             if plan.state is ActionPlanState.UNCERTAIN:
@@ -2831,10 +3065,28 @@ class AcquisitionRepository:
                 )
             return self._action_plan_by_id(connection, plan_id)
 
-    def confirm_trace_plan(self, plan_id: int) -> ActionPlan:
+    def confirm_trace_plan(
+        self,
+        plan_id: int,
+        *,
+        now_ms: int | None = None,
+        worker_owner_id: str | None = None,
+        worker_account_id: str | None = None,
+        worker_fence_token: int | None = None,
+    ) -> ActionPlan:
+        if worker_fence_token is not None and now_ms is None:
+            raise ValueError("fenced action result timestamp is required")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             plan = self._action_plan_by_id(connection, plan_id)
+            self._assert_action_worker_fence(
+                connection,
+                plan,
+                worker_owner_id=worker_owner_id,
+                worker_account_id=worker_account_id,
+                worker_fence_token=worker_fence_token,
+                now_ms=0 if now_ms is None else now_ms,
+            )
             if plan.effective_outcome is not OutcomeKind.TRACE:
                 raise ValueError("interaction plan cannot be confirmed as trace")
             connection.execute(
@@ -2843,10 +3095,28 @@ class AcquisitionRepository:
             )
             return self._action_plan_by_id(connection, plan_id)
 
-    def confirm_action_unavailable_as_trace(self, plan_id: int) -> ActionPlan:
+    def confirm_action_unavailable_as_trace(
+        self,
+        plan_id: int,
+        *,
+        now_ms: int | None = None,
+        worker_owner_id: str | None = None,
+        worker_account_id: str | None = None,
+        worker_fence_token: int | None = None,
+    ) -> ActionPlan:
+        if worker_fence_token is not None and now_ms is None:
+            raise ValueError("fenced action result timestamp is required")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             plan = self._action_plan_by_id(connection, plan_id)
+            self._assert_action_worker_fence(
+                connection,
+                plan,
+                worker_owner_id=worker_owner_id,
+                worker_account_id=worker_account_id,
+                worker_fence_token=worker_fence_token,
+                now_ms=0 if now_ms is None else now_ms,
+            )
             if plan.requested_outcome is not OutcomeKind.REPOST:
                 raise ValueError(
                     "unavailable trace fallback is only supported for repost"
@@ -2918,12 +3188,23 @@ class AcquisitionRepository:
         *,
         now_ms: int,
         diagnostics: DeviceDiagnostics | None = None,
+        worker_owner_id: str | None = None,
+        worker_account_id: str | None = None,
+        worker_fence_token: int | None = None,
     ) -> ActionPlan:
         normalized_result = ActionResult(result)
         diagnostic_value = diagnostics or DeviceDiagnostics()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             plan = self._action_plan_by_id(connection, plan_id)
+            self._assert_action_worker_fence(
+                connection,
+                plan,
+                worker_owner_id=worker_owner_id,
+                worker_account_id=worker_account_id,
+                worker_fence_token=worker_fence_token,
+                now_ms=now_ms,
+            )
             attempt_row = connection.execute(
                 """
                 SELECT COALESCE(MAX(attempt_index), 0) + 1 AS next_index

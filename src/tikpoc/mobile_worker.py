@@ -3,7 +3,7 @@ import time
 from collections.abc import Callable
 from typing import Protocol
 
-from .acquisition_db import AcquisitionRepository
+from .acquisition_db import AcquisitionRepository, DeviceWorkerLeaseLost
 from .acquisition_models import (
     ActionPlan,
     ActionPlanState,
@@ -45,10 +45,7 @@ class VerifiedTikTokDevice(Protocol):
     def recover(self, phase: AssignmentPhase) -> None: ...
 
 
-PlanProvider = Callable[
-    [AcquisitionRepository, str, str, str, int],
-    ActionPlan,
-]
+PlanProvider = Callable[..., ActionPlan]
 MAX_PROFILE_OPEN_ATTEMPTS = 3
 
 
@@ -64,6 +61,7 @@ def _default_plan_provider(
     identity_key: str,
     device_id: str,
     now_ms: int,
+    **worker_fence: object,
 ) -> ActionPlan:
     return get_or_create_plan(
         repository,
@@ -71,6 +69,7 @@ def _default_plan_provider(
         identity_key,
         device_id,
         now_ms=now_ms,
+        **worker_fence,
     )
 
 
@@ -82,6 +81,8 @@ class MobileAssignmentWorker:
         *,
         device_id: str,
         owner_id: str,
+        worker_account_id: str | None = None,
+        worker_fence_token: int | None = None,
         clock_ms: Callable[[], int] = _clock_ms,
         plan_provider: PlanProvider = _default_plan_provider,
         snapshot_lease_ttl_ms: int = 30_000,
@@ -97,10 +98,14 @@ class MobileAssignmentWorker:
             or retry_delay_ms < 0
         ):
             raise ValueError("mobile recovery limits are invalid")
+        if (worker_account_id is None) != (worker_fence_token is None):
+            raise ValueError("mobile worker fence identity is incomplete")
         self.repository = repository
         self.device = device
         self.device_id = device_id
         self.owner_id = owner_id
+        self.worker_account_id = worker_account_id
+        self.worker_fence_token = worker_fence_token
         self.clock_ms = clock_ms
         self.plan_provider = plan_provider
         self.snapshot_lease_ttl_ms = snapshot_lease_ttl_ms
@@ -120,6 +125,8 @@ class MobileAssignmentWorker:
         self._renew_lease(current.assignment_id)
         try:
             self._run_claimed(current)
+        except DeviceWorkerLeaseLost:
+            raise
         except Exception as error:
             stored = self.repository.assignment(current.assignment_id)
             if (
@@ -167,7 +174,10 @@ class MobileAssignmentWorker:
         )
         now_ms = self.clock_ms()
         self.repository.record_visit_confirmed(
-            assignment.assignment_id, self.owner_id, now_ms=now_ms
+            assignment.assignment_id,
+            self.owner_id,
+            now_ms=now_ms,
+            **self._assignment_fence_kwargs(),
         )
         self._renew_lease(assignment.assignment_id)
 
@@ -208,28 +218,38 @@ class MobileAssignmentWorker:
             assignment.assignment_id, AssignmentStage.METRICS, metrics_started_at_ms
         )
 
-        plan = self.plan_provider(
+        plan_args = (
             self.repository,
             assignment.round_id,
             assignment.identity_key,
             self.device_id,
             self.clock_ms(),
         )
+        if self.worker_fence_token is None:
+            plan = self.plan_provider(*plan_args)
+        else:
+            plan = self.plan_provider(*plan_args, **self._action_fence_kwargs())
         if plan.state is ActionPlanState.CONFIRMED:
             self.repository.complete_assignment(
                 assignment.assignment_id,
                 self.owner_id,
                 AssignmentPhase.IDENTITY_CONFIRMED,
                 now_ms=self.clock_ms(),
+                **self._assignment_fence_kwargs(),
             )
             return
         if not snapshot.eligible:
-            self.repository.confirm_trace_plan(plan.plan_id)
+            self.repository.confirm_trace_plan(
+                plan.plan_id,
+                now_ms=self.clock_ms(),
+                **self._action_fence_kwargs(),
+            )
             self.repository.complete_assignment(
                 assignment.assignment_id,
                 self.owner_id,
                 AssignmentPhase.IDENTITY_CONFIRMED,
                 now_ms=self.clock_ms(),
+                **self._assignment_fence_kwargs(),
             )
             return
 
@@ -262,12 +282,17 @@ class MobileAssignmentWorker:
         )
         if plan.effective_outcome is OutcomeKind.TRACE:
             action_started_at_ms = self.clock_ms()
-            self.repository.confirm_trace_plan(plan.plan_id)
+            self.repository.confirm_trace_plan(
+                plan.plan_id,
+                now_ms=self.clock_ms(),
+                **self._action_fence_kwargs(),
+            )
             self.repository.complete_assignment(
                 assignment.assignment_id,
                 self.owner_id,
                 AssignmentPhase.VIDEO_CONFIRMED,
                 now_ms=self.clock_ms(),
+                **self._assignment_fence_kwargs(),
             )
             self._record_stage(
                 assignment.assignment_id,
@@ -311,7 +336,11 @@ class MobileAssignmentWorker:
                 now_ms=self.clock_ms(),
             )
             phase = AssignmentPhase.ACTION_EXECUTING
-            self.repository.mark_action_executing(plan.plan_id)
+            self.repository.mark_action_executing(
+                plan.plan_id,
+                now_ms=self.clock_ms(),
+                **self._action_fence_kwargs(),
+            )
             result = self.device.execute_outcome(plan.effective_outcome)
 
         while True:
@@ -320,6 +349,7 @@ class MobileAssignmentWorker:
                 plan.plan_id,
                 result,
                 now_ms=self.clock_ms(),
+                **self._action_fence_kwargs(),
             )
             if result is ActionResult.CONFIRMED:
                 self.repository.complete_assignment(
@@ -327,18 +357,24 @@ class MobileAssignmentWorker:
                     self.owner_id,
                     phase,
                     now_ms=self.clock_ms(),
+                    **self._assignment_fence_kwargs(),
                 )
                 return
             if result is ActionResult.UNAVAILABLE:
                 if plan.effective_outcome is not OutcomeKind.REPOST:
                     self._defer(assignment_id, "unexpected_action_unavailable")
                     return
-                self.repository.confirm_action_unavailable_as_trace(plan.plan_id)
+                self.repository.confirm_action_unavailable_as_trace(
+                    plan.plan_id,
+                    now_ms=self.clock_ms(),
+                    **self._action_fence_kwargs(),
+                )
                 self.repository.complete_assignment(
                     assignment_id,
                     self.owner_id,
                     phase,
                     now_ms=self.clock_ms(),
+                    **self._assignment_fence_kwargs(),
                 )
                 return
             timed_out = self.clock_ms() - started_at_ms >= self.action_timeout_ms
@@ -372,7 +408,11 @@ class MobileAssignmentWorker:
                 phase = AssignmentPhase.ACTION_EXECUTING
             if stored_plan.state is not ActionPlanState.PLANNED:
                 raise RuntimeError("not-applied result did not reset action plan")
-            self.repository.mark_action_executing(plan.plan_id)
+            self.repository.mark_action_executing(
+                plan.plan_id,
+                now_ms=self.clock_ms(),
+                **self._action_fence_kwargs(),
+            )
             self._renew_lease(assignment_id)
             result = self.device.execute_outcome(plan.effective_outcome)
 
@@ -385,6 +425,7 @@ class MobileAssignmentWorker:
             retry_delay_ms=self.retry_delay_ms,
             error_code=error_code,
             diagnostics=diagnostics,
+            **self._assignment_fence_kwargs(),
         )
 
     def _skip_unreachable(self, assignment_id: int, error: ProfileUnreachable) -> None:
@@ -397,7 +438,22 @@ class MobileAssignmentWorker:
             original_error_code=type(original_error).__name__,
             failure_stage=error.stage,
             diagnostics=self._capture_diagnostics(),
+            **self._assignment_fence_kwargs(),
         )
+
+    def _assignment_fence_kwargs(self) -> dict[str, object]:
+        return {
+            "worker_account_id": self.worker_account_id,
+            "worker_fence_token": self.worker_fence_token,
+        }
+
+    def _action_fence_kwargs(self) -> dict[str, object]:
+        return {
+            "worker_owner_id": self.owner_id
+            if self.worker_fence_token is not None
+            else None,
+            **self._assignment_fence_kwargs(),
+        }
 
     def _capture_diagnostics(self) -> DeviceDiagnostics:
         try:

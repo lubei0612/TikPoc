@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from .acquisition_db import AcquisitionRepository
+from .acquisition_db import AcquisitionRepository, DeviceWorkerLeaseLost
 
 
 def _configured_port(value: object, default: int, label: str) -> int:
@@ -165,10 +165,6 @@ class FleetConfig:
         )
 
 
-class DeviceWorkerLeaseLost(RuntimeError):
-    pass
-
-
 @dataclass(frozen=True)
 class DeviceWorkerFence:
     database_path: Path
@@ -193,7 +189,13 @@ class DeviceWorkerFence:
 
     def execute(self, operation, *args, now_ms: int | None = None, **kwargs):
         self.assert_active(now_ms=now_ms)
-        return operation(*args, **kwargs)
+        try:
+            result = operation(*args, **kwargs)
+        except Exception:
+            self.assert_active(now_ms=now_ms)
+            raise
+        self.assert_active(now_ms=now_ms)
+        return result
 
 
 class FleetWorkerState(StrEnum):

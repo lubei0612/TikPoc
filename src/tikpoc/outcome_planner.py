@@ -44,6 +44,9 @@ def get_or_create_plan(
     *,
     now_ms: int,
     forced_draw: OutcomeKind | str | None = None,
+    worker_owner_id: str | None = None,
+    worker_account_id: str | None = None,
+    worker_fence_token: int | None = None,
 ) -> ActionPlan:
     existing = repository.action_plan(round_id, identity_key, device_id)
     if existing is not None:
@@ -60,6 +63,9 @@ def get_or_create_plan(
             seed=seed,
             now_ms=now_ms,
             hourly_limits=HOURLY_LIMITS,
+            worker_owner_id=worker_owner_id,
+            worker_account_id=worker_account_id,
+            worker_fence_token=worker_fence_token,
         )
     return repository.create_action_plan(
         round_id=round_id,
@@ -69,4 +75,7 @@ def get_or_create_plan(
         requested_outcome=requested_outcome,
         now_ms=now_ms,
         hourly_limits=HOURLY_LIMITS,
+        worker_owner_id=worker_owner_id,
+        worker_account_id=worker_account_id,
+        worker_fence_token=worker_fence_token,
     )

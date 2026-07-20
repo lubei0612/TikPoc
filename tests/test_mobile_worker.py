@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from tikpoc.acquisition_db import AcquisitionRepository
+from tikpoc.acquisition_db import AcquisitionRepository, DeviceWorkerLeaseLost
 from tikpoc.acquisition_models import (
     ActionPlanState,
     ActionResult,
@@ -160,6 +160,7 @@ def _forced_plan(outcome: OutcomeKind):
         identity_key: str,
         device_id: str,
         now_ms: int,
+        **worker_fence: object,
     ):
         return get_or_create_plan(
             repository,
@@ -168,6 +169,7 @@ def _forced_plan(outcome: OutcomeKind):
             device_id,
             now_ms=now_ms,
             forced_draw=outcome,
+            **worker_fence,
         )
 
     return provider
@@ -198,6 +200,94 @@ def test_worker_does_not_complete_until_visible_action_is_confirmed(
     assert device.action_calls == [OutcomeKind.LIKE]
     assert device.reconcile_calls == [OutcomeKind.LIKE]
     assert repository.round_completion(assignment.round_id).completed == 1
+
+
+def test_worker_passes_device_fence_to_plan_creation(tmp_path: Path) -> None:
+    repository, assignment = _claimed_assignment(tmp_path)
+    token = repository.claim_device_worker_lease(
+        "phone-01", "account-01", "worker-1", now_ms=1_000, ttl_ms=1_000
+    )
+    assert isinstance(token, int)
+    observed_fence: dict[str, object] = {}
+
+    def fenced_plan_provider(
+        repository: AcquisitionRepository,
+        round_id: str,
+        identity_key: str,
+        device_id: str,
+        now_ms: int,
+        **worker_fence: object,
+    ):
+        observed_fence.update(worker_fence)
+        return get_or_create_plan(
+            repository,
+            round_id,
+            identity_key,
+            device_id,
+            now_ms=now_ms,
+            forced_draw=OutcomeKind.TRACE,
+            **worker_fence,
+        )
+
+    worker = MobileAssignmentWorker(
+        repository,
+        ScriptedVerifiedDevice(metrics=ProfileMetrics(20, 10, 1)),
+        device_id="phone-01",
+        owner_id="worker-1",
+        worker_account_id="account-01",
+        worker_fence_token=token,
+        clock_ms=lambda: 1_000,
+        plan_provider=fenced_plan_provider,
+    )
+
+    worker.run_assignment(assignment)
+
+    assert observed_fence == {
+        "worker_owner_id": "worker-1",
+        "worker_account_id": "account-01",
+        "worker_fence_token": token,
+    }
+
+
+def test_unfenced_worker_keeps_legacy_five_argument_plan_provider(
+    tmp_path: Path,
+) -> None:
+    repository, assignment = _claimed_assignment(tmp_path)
+    calls = 0
+
+    def legacy_provider(
+        repository: AcquisitionRepository,
+        round_id: str,
+        identity_key: str,
+        device_id: str,
+        now_ms: int,
+    ):
+        nonlocal calls
+        calls += 1
+        return get_or_create_plan(
+            repository,
+            round_id,
+            identity_key,
+            device_id,
+            now_ms=now_ms,
+            forced_draw=OutcomeKind.TRACE,
+        )
+
+    worker = MobileAssignmentWorker(
+        repository,
+        ScriptedVerifiedDevice(metrics=ProfileMetrics(20, 10, 1)),
+        device_id="phone-01",
+        owner_id="worker-1",
+        clock_ms=lambda: 1_000,
+        plan_provider=legacy_provider,
+    )
+
+    worker.run_assignment(assignment)
+
+    assert calls == 1
+    assert repository.assignment(assignment.assignment_id).phase is (
+        AssignmentPhase.COMPLETED
+    )
 
 
 def test_worker_persists_route_identity_metrics_video_and_action_timings(
@@ -306,6 +396,41 @@ def test_video_verification_failure_is_durably_deferred(tmp_path: Path) -> None:
     assert stored.last_error_code == "RuntimeError"
     assert stored.completed_at_ms is None
     assert repository.round_completion(assignment.round_id).completed == 0
+
+
+def test_lost_device_fence_escapes_without_stale_defer_write(tmp_path: Path) -> None:
+    repository, assignment = _claimed_assignment(tmp_path)
+    first_token = repository.claim_device_worker_lease(
+        "phone-01", "account-01", "worker-1", now_ms=1_000, ttl_ms=100
+    )
+    assert isinstance(first_token, int)
+    repository.claim_device_worker_lease(
+        "phone-01", "account-01", "worker-2", now_ms=1_100, ttl_ms=100
+    )
+    device = ScriptedVerifiedDevice(metrics=ProfileMetrics(20, 10, 1))
+
+    def lost_during_route(target) -> None:
+        raise DeviceWorkerLeaseLost("device worker fence is inactive for phone-01")
+
+    device.open_target = lost_during_route
+    worker = MobileAssignmentWorker(
+        repository,
+        device,
+        device_id="phone-01",
+        owner_id="worker-1",
+        worker_account_id="account-01",
+        worker_fence_token=first_token,
+        clock_ms=lambda: 1_101,
+    )
+
+    with pytest.raises(DeviceWorkerLeaseLost):
+        worker.run_assignment(assignment)
+
+    stored = repository.assignment(assignment.assignment_id)
+    assert stored.phase is AssignmentPhase.PROFILE_OPENING
+    assert stored.lease_owner == "worker-1"
+    assert stored.last_error_code is None
+    assert device.diagnostic_calls == 0
 
 
 def test_visible_unavailable_action_completes_as_trace_fallback(

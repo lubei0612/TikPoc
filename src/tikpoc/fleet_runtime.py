@@ -94,6 +94,8 @@ def run_device_worker(
             verified_device,
             device_id=device.device_id,
             owner_id=fence.owner_id,
+            worker_account_id=fence.account_id,
+            worker_fence_token=fence.fence_token,
             clock_ms=clock_ms,
         )
         while not stop_event.is_set():

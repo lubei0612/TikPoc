@@ -333,6 +333,61 @@ def test_stale_device_worker_fence_blocks_a_side_effect(tmp_path: Path) -> None:
     assert side_effects == ["first"]
 
 
+def test_device_worker_fence_rechecks_after_blocking_side_effect(
+    tmp_path: Path,
+) -> None:
+    repository = AcquisitionRepository(tmp_path / "tikpoc.db")
+    repository.migrate()
+    first_token = repository.claim_device_worker_lease(
+        "phone-01", "account-01", "worker-1", now_ms=1_000, ttl_ms=100
+    )
+    assert isinstance(first_token, int)
+    fence = DeviceWorkerFence(
+        database_path=repository.path,
+        device_id="phone-01",
+        account_id="account-01",
+        owner_id="worker-1",
+        fence_token=first_token,
+    )
+
+    def replace_lease_while_operation_is_running() -> str:
+        replacement = repository.claim_device_worker_lease(
+            "phone-01", "account-01", "worker-2", now_ms=1_100, ttl_ms=100
+        )
+        assert isinstance(replacement, int)
+        return "visible-side-effect-finished"
+
+    with pytest.raises(DeviceWorkerLeaseLost):
+        fence.execute(replace_lease_while_operation_is_running, now_ms=1_050)
+
+
+def test_device_worker_fence_rechecks_after_blocking_operation_error(
+    tmp_path: Path,
+) -> None:
+    repository = AcquisitionRepository(tmp_path / "tikpoc.db")
+    repository.migrate()
+    first_token = repository.claim_device_worker_lease(
+        "phone-01", "account-01", "worker-1", now_ms=1_000, ttl_ms=100
+    )
+    assert isinstance(first_token, int)
+    fence = DeviceWorkerFence(
+        database_path=repository.path,
+        device_id="phone-01",
+        account_id="account-01",
+        owner_id="worker-1",
+        fence_token=first_token,
+    )
+
+    def replace_lease_then_fail() -> None:
+        repository.claim_device_worker_lease(
+            "phone-01", "account-01", "worker-2", now_ms=1_100, ttl_ms=100
+        )
+        raise ValueError("Appium operation timed out")
+
+    with pytest.raises(DeviceWorkerLeaseLost):
+        fence.execute(replace_lease_then_fail, now_ms=1_050)
+
+
 def test_claim_does_not_delete_an_unrelated_expired_lease(tmp_path: Path) -> None:
     repository = AcquisitionRepository(tmp_path / "tikpoc.db")
     repository.migrate()
