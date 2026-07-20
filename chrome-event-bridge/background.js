@@ -185,20 +185,26 @@ function isTikTokObserverTab(tab) {
   return url.origin === "https://www.tiktok.com" && !isMessagesTab(tab);
 }
 
-async function ensureMonitoringTabs() {
+async function ensureMonitoringTabs({ refreshExisting = false } = {}) {
   if (!chrome.tabs || typeof chrome.tabs.query !== "function" ||
       typeof chrome.tabs.create !== "function") {
     throw new Error("Chrome tab management is unavailable");
   }
   const tabs = await chrome.tabs.query({ url: "https://www.tiktok.com/*" });
   const created = [];
-  if (!tabs.some(isTikTokObserverTab)) {
+  const observerTab = tabs.find(isTikTokObserverTab);
+  const messagesTab = tabs.find(isMessagesTab);
+  if (!observerTab) {
     await chrome.tabs.create({ url: "https://www.tiktok.com/" });
     created.push("https://www.tiktok.com/");
+  } else if (refreshExisting && typeof chrome.tabs.reload === "function") {
+    await chrome.tabs.reload(observerTab.id);
   }
-  if (!tabs.some(isMessagesTab)) {
+  if (!messagesTab) {
     await chrome.tabs.create({ url: "https://www.tiktok.com/messages" });
     created.push("https://www.tiktok.com/messages");
+  } else if (refreshExisting && typeof chrome.tabs.reload === "function") {
+    await chrome.tabs.reload(messagesTab.id);
   }
   return created;
 }
@@ -243,7 +249,7 @@ async function setMonitoring(message) {
   };
   await storeSettings(settings);
   if (started) {
-    await ensureMonitoringTabs();
+    await ensureMonitoringTabs({ refreshExisting: true });
   }
   await setAccountAutomation(settings, started);
   return { started, account_id: settings.accountId || "" };

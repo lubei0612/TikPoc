@@ -414,6 +414,7 @@ test("a completed followback wakes open TikTok tabs for welcome scanning", async
 function monitoringHarness() {
   let messageListener;
   const createdUrls = [];
+  const reloadedTabIds = [];
   const requests = [];
   const settings = {
     dashboardUrl: "http://127.0.0.1:8766",
@@ -453,6 +454,7 @@ function monitoringHarness() {
           createdUrls.push(url);
           return tab;
         },
+        async reload(tabId) { reloadedTabIds.push(tabId); },
         async sendMessage() {},
         onRemoved: { addListener() {} },
       },
@@ -478,7 +480,7 @@ function monitoringHarness() {
       }, {}, resolve), true);
     });
   }
-  return { createdUrls, requests, setMonitoring, settings, tabs };
+  return { createdUrls, reloadedTabIds, requests, setMonitoring, settings, tabs };
 }
 
 test("one-click monitoring opens missing pages and enables the bound account", async () => {
@@ -522,4 +524,17 @@ test("stopping monitoring disables actions without closing observer tabs", async
       .map(({ options }) => JSON.parse(options.body).enabled),
     [false, false],
   );
+});
+
+test("starting monitoring refreshes reused observer pages once", async () => {
+  const run = monitoringHarness();
+  run.tabs.push(
+    { id: 10, url: "https://www.tiktok.com/@shop" },
+    { id: 11, url: "https://www.tiktok.com/messages" },
+  );
+
+  await run.setMonitoring(true);
+
+  assert.deepEqual(run.createdUrls, []);
+  assert.deepEqual(run.reloadedTabIds, [10, 11]);
 });
