@@ -26,7 +26,6 @@ from .acquisition_models import (
     QuotaWindow,
     RoundAssignment,
     RoundCompletion,
-    TerminalTargetState,
 )
 from .capacity import AssignmentTiming, RoundCapacityAudit
 from .importer import Target, target_identity_key
@@ -274,21 +273,6 @@ class AcquisitionRepository:
                     private_account INTEGER NOT NULL DEFAULT 0,
                     access_state TEXT NOT NULL DEFAULT 'public',
                     eligible INTEGER NOT NULL,
-                    reason TEXT NOT NULL,
-                    observed_at_ms INTEGER NOT NULL,
-                    PRIMARY KEY(round_id, identity_key),
-                    FOREIGN KEY(round_id) REFERENCES exposure_rounds(round_id)
-                )
-                """
-            )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS terminal_target_states (
-                    round_id TEXT NOT NULL,
-                    identity_key TEXT NOT NULL,
-                    observed_by_device_id TEXT NOT NULL,
-                    observed_username TEXT NOT NULL,
-                    access_state TEXT NOT NULL,
                     reason TEXT NOT NULL,
                     observed_at_ms INTEGER NOT NULL,
                     PRIMARY KEY(round_id, identity_key),
@@ -1788,192 +1772,6 @@ class AcquisitionRepository:
             round_id = str(row["round_id"])
             self._mark_round_completed_if_terminal(connection, round_id)
             return self._assignment_by_id(connection, assignment_id)
-
-    def record_permanently_unavailable(
-        self,
-        assignment_id: int,
-        owner_id: str,
-        *,
-        observed_username: str,
-        observed_by_device_id: str,
-        now_ms: int,
-        diagnostics: DeviceDiagnostics,
-        worker_account_id: str | None = None,
-        worker_fence_token: int | None = None,
-    ) -> tuple[TerminalTargetState, RoundAssignment]:
-        normalized_username = self._normalize_username(observed_username)
-        if not normalized_username:
-            raise ValueError("terminal target username must be nonempty")
-        with self._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute(
-                """
-                SELECT round_id, identity_key, device_id, phase, attempt_count,
-                       visit_confirmed_at_ms, lease_expires_at_ms
-                FROM round_assignments
-                WHERE assignment_id = ? AND lease_owner = ?
-                """,
-                (assignment_id, owner_id),
-            ).fetchone()
-            if row is None:
-                if worker_fence_token is not None:
-                    raise DeviceWorkerLeaseLost("assignment lease is inactive")
-                raise ValueError("assignment owner does not hold the lease")
-            device_id = str(row["device_id"])
-            if str(observed_by_device_id) != device_id:
-                raise ValueError("terminal observation device mismatch")
-            self._assert_row_worker_fence(
-                connection,
-                device_id=device_id,
-                lease_expires_at_ms=int(row["lease_expires_at_ms"]),
-                owner_id=owner_id if worker_fence_token is not None else None,
-                account_id=worker_account_id,
-                fence_token=worker_fence_token,
-                now_ms=now_ms,
-            )
-            if row["visit_confirmed_at_ms"] is not None:
-                raise ValueError("confirmed visit cannot become terminal unavailable")
-            if (
-                AssignmentPhase(str(row["phase"]))
-                is not AssignmentPhase.PROFILE_OPENING
-            ):
-                raise ValueError("only a profile-opening assignment can be skipped")
-            round_id = str(row["round_id"])
-            identity_key = str(row["identity_key"])
-            existing = self._terminal_target_state(connection, round_id, identity_key)
-            if existing is None:
-                connection.execute(
-                    """
-                    INSERT INTO terminal_target_states(
-                        round_id, identity_key, observed_by_device_id,
-                        observed_username, access_state, reason, observed_at_ms
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        round_id,
-                        identity_key,
-                        device_id,
-                        normalized_username,
-                        ProfileAccessState.PERMANENTLY_UNAVAILABLE.value,
-                        "permanently_unavailable",
-                        now_ms,
-                    ),
-                )
-                existing = self._terminal_target_state(
-                    connection, round_id, identity_key
-                )
-            if existing is None:
-                raise RuntimeError("terminal target state was not persisted")
-            skipped = self._skip_marked_terminal_row(
-                connection,
-                assignment_id=assignment_id,
-                owner_id=owner_id,
-                row=row,
-                now_ms=now_ms,
-                diagnostics=diagnostics,
-            )
-            return existing, skipped
-
-    def terminal_target_state(
-        self, round_id: str, identity_key: str
-    ) -> TerminalTargetState | None:
-        with self._connect() as connection:
-            return self._terminal_target_state(connection, round_id, identity_key)
-
-    def skip_marked_permanently_unavailable(
-        self,
-        assignment_id: int,
-        owner_id: str,
-        *,
-        now_ms: int,
-        worker_account_id: str | None = None,
-        worker_fence_token: int | None = None,
-    ) -> RoundAssignment:
-        with self._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute(
-                """
-                SELECT round_id, identity_key, device_id, phase, attempt_count,
-                       visit_confirmed_at_ms, lease_expires_at_ms
-                FROM round_assignments
-                WHERE assignment_id = ? AND lease_owner = ?
-                """,
-                (assignment_id, owner_id),
-            ).fetchone()
-            if row is None:
-                if worker_fence_token is not None:
-                    raise DeviceWorkerLeaseLost("assignment lease is inactive")
-                raise ValueError("assignment owner does not hold the lease")
-            self._assert_row_worker_fence(
-                connection,
-                device_id=str(row["device_id"]),
-                lease_expires_at_ms=int(row["lease_expires_at_ms"]),
-                owner_id=owner_id if worker_fence_token is not None else None,
-                account_id=worker_account_id,
-                fence_token=worker_fence_token,
-                now_ms=now_ms,
-            )
-            state = self._terminal_target_state(
-                connection, str(row["round_id"]), str(row["identity_key"])
-            )
-            if state is None:
-                raise ValueError("target is not marked permanently unavailable")
-            return self._skip_marked_terminal_row(
-                connection,
-                assignment_id=assignment_id,
-                owner_id=owner_id,
-                row=row,
-                now_ms=now_ms,
-                diagnostics=DeviceDiagnostics(),
-            )
-
-    def _skip_marked_terminal_row(
-        self,
-        connection: sqlite3.Connection,
-        *,
-        assignment_id: int,
-        owner_id: str,
-        row: sqlite3.Row,
-        now_ms: int,
-        diagnostics: DeviceDiagnostics,
-    ) -> RoundAssignment:
-        if row["visit_confirmed_at_ms"] is not None:
-            raise ValueError("confirmed visit cannot become terminal unavailable")
-        if AssignmentPhase(str(row["phase"])) is not AssignmentPhase.PROFILE_OPENING:
-            raise ValueError("only a profile-opening assignment can be skipped")
-        cursor = connection.execute(
-            """
-            UPDATE round_assignments
-            SET phase = 'skipped', completed_at_ms = ?, last_error_code = ?,
-                lease_owner = NULL, lease_expires_at_ms = 0
-            WHERE assignment_id = ? AND lease_owner = ?
-              AND phase = 'profile_opening'
-              AND visit_confirmed_at_ms IS NULL
-            """,
-            (
-                now_ms,
-                "profile_permanently_unavailable",
-                assignment_id,
-                owner_id,
-            ),
-        )
-        if cursor.rowcount != 1:
-            raise ValueError("assignment phase or lease owner changed")
-        self._insert_phase_history(
-            connection,
-            assignment_id,
-            AssignmentPhase.PROFILE_OPENING,
-            AssignmentPhase.SKIPPED,
-            now_ms,
-            {
-                "attempt_count": int(row["attempt_count"]),
-                "error_code": "profile_permanently_unavailable",
-                "screenshot_path": diagnostics.screenshot_path,
-                "ui_summary": diagnostics.ui_summary,
-            },
-        )
-        self._mark_round_completed_if_terminal(connection, str(row["round_id"]))
-        return self._assignment_by_id(connection, assignment_id)
 
     def complete_assignment(
         self,
@@ -3806,29 +3604,6 @@ class AcquisitionRepository:
             private_account=bool(row["private_account"]),
             access_state=ProfileAccessState(str(row["access_state"])),
             eligible=bool(row["eligible"]),
-            reason=str(row["reason"]),
-            observed_at_ms=int(row["observed_at_ms"]),
-        )
-
-    @staticmethod
-    def _terminal_target_state(
-        connection: sqlite3.Connection, round_id: str, identity_key: str
-    ) -> TerminalTargetState | None:
-        row = connection.execute(
-            """
-            SELECT * FROM terminal_target_states
-            WHERE round_id = ? AND identity_key = ?
-            """,
-            (round_id, identity_key),
-        ).fetchone()
-        if row is None:
-            return None
-        return TerminalTargetState(
-            round_id=str(row["round_id"]),
-            identity_key=str(row["identity_key"]),
-            observed_by_device_id=str(row["observed_by_device_id"]),
-            observed_username=str(row["observed_username"]),
-            access_state=ProfileAccessState(str(row["access_state"])),
             reason=str(row["reason"]),
             observed_at_ms=int(row["observed_at_ms"]),
         )

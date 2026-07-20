@@ -133,17 +133,6 @@ class ProfileSnapshot:
 
 
 @dataclass(frozen=True)
-class TerminalTargetState:
-    round_id: str
-    identity_key: str
-    observed_by_device_id: str
-    observed_username: str
-    access_state: ProfileAccessState
-    reason: str
-    observed_at_ms: int
-
-
-@dataclass(frozen=True)
 class ActionPlan:
     plan_id: int
     round_id: str
