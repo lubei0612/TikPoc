@@ -100,3 +100,23 @@ metrics as an inaccessible trace.
   confirmed visits or action evidence.
 - Run a six-device canary and verify newly observed qualifying profiles receive
   planned interactions rather than `insufficient_posts` trace-only plans.
+
+## Task 10: Bound Unreachable Profile Retries
+
+- Add failing model/repository tests for a terminal `skipped` phase, durable
+  `profile_unreachable` evidence, released leases, and round operational
+  completion when `completed + skipped == total`.
+- Add failing worker tests proving profile-opening `ValueError` defers attempts
+  one and two, skips attempt three, and never records a confirmed visit.
+- Add negative tests proving `ProfileIdentityMismatch`, errors after identity
+  confirmation, video failures, and uncertain action work remain deferred.
+- Implement one repository-owned skip transition and a worker policy that
+  checks the current durable phase, visit evidence, exact exception type, and
+  attempt count before using it.
+- Keep coverage and capacity strict: skipped assignments stay incomplete for
+  `N/N`, while fleet operational exhaustion accepts completed plus skipped.
+- Run mobile worker, acquisition repository/service, fleet runtime, capacity,
+  full Python, Ruff, format, and diff verification.
+- Resume only pending/deferred work in the existing production round. Do not
+  rewrite prior completed assignments or silently convert the six currently
+  deferred assignments.

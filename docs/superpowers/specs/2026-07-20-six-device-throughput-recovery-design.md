@@ -173,3 +173,26 @@ one is visible, use that count for qualification and retain the same element
 tuple for deterministic video selection and click. A genuinely empty result
 remains `insufficient_posts`. Do not infer videos from coordinates or fabricate
 a count when neither the hierarchy nor semantic containers provide evidence.
+
+## Bounded Unreachable Profiles
+
+Some target profiles never load a confirmable profile route even after the
+device adapter's bounded route, baseline, and restart recovery. Retrying these
+assignments forever consumes a device slot without producing useful exposure.
+
+After the third assignment claim, a plain profile-opening `ValueError` becomes
+a terminal `skipped` assignment only when the durable assignment is still in
+`profile_opening` and has no confirmed visit. The transition records
+`profile_unreachable`, the original error category, diagnostics, attempt count,
+and terminal timestamp, then releases the assignment lease. Earlier attempts
+remain `deferred` with the existing retry delay.
+
+`ProfileIdentityMismatch`, failures after identity confirmation, video/action
+failures, and uncertain actions remain deferred. They must not be converted to
+skipped because they represent integrity or reconciliation work rather than an
+unreachable target.
+
+Operational exhaustion uses `completed + skipped == total`, so a small number
+of unreachable profiles cannot keep a fleet alive forever. Coverage remains
+strict: skipped assignments are not completed, do not create confirmed visits,
+and remain visible as missing device coverage in capacity and coverage audits.
