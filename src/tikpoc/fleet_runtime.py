@@ -105,6 +105,8 @@ def run_device_worker(
                 device.device_id,
                 fence.owner_id,
                 now_ms=clock_ms(),
+                worker_account_id=fence.account_id,
+                worker_fence_token=fence.fence_token,
             )
             if assignment is None:
                 stop_event.wait(idle_sleep_seconds)

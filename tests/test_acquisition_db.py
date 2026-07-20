@@ -144,6 +144,73 @@ def test_claim_honors_durable_device_and_assignment_control_states(
     assert claimed.assignment_id == assignment_id
 
 
+def test_stale_device_fence_cannot_claim_assignment(tmp_path: Path) -> None:
+    repository = AcquisitionRepository(tmp_path / "tikpoc.db", clock_ms=lambda: 1_101)
+    repository.migrate()
+    imported = repository.import_pool("comments.csv", "1" * 64, (_target("sec:s1"),))
+    round_id = create_exposure_round(
+        repository,
+        pool_id=imported.pool_id,
+        device_seeds={"phone-01": "seed-01"},
+        starts_at_ms=1_000,
+        min_inter_device_gap_ms=0,
+        min_repeat_gap_ms=0,
+    )
+    token = repository.claim_device_worker_lease(
+        "phone-01", "account-01", "worker-01", now_ms=1_000, ttl_ms=100
+    )
+    assert isinstance(token, int)
+
+    with pytest.raises(DeviceWorkerLeaseLost):
+        repository.claim_next_assignment(
+            round_id,
+            "phone-01",
+            "worker-01",
+            now_ms=1_050,
+            worker_account_id="account-01",
+            worker_fence_token=token,
+        )
+
+    completion = repository.round_completion(round_id)
+    assert completion.total == 1
+    assert completion.visits_confirmed == 0
+    assert completion.completed == 0
+    assert completion.deferred == 0
+
+
+def test_fenced_claim_uses_transaction_time_for_new_assignment_lease(
+    tmp_path: Path,
+) -> None:
+    repository = AcquisitionRepository(tmp_path / "tikpoc.db", clock_ms=lambda: 1_101)
+    repository.migrate()
+    imported = repository.import_pool("comments.csv", "a" * 64, (_target("sec:s1"),))
+    round_id = create_exposure_round(
+        repository,
+        pool_id=imported.pool_id,
+        device_seeds={"phone-01": "seed-01"},
+        starts_at_ms=1_000,
+        min_inter_device_gap_ms=0,
+        min_repeat_gap_ms=0,
+    )
+    token = repository.claim_device_worker_lease(
+        "phone-01", "account-01", "worker-01", now_ms=1_000, ttl_ms=1_000
+    )
+    assert isinstance(token, int)
+
+    assignment = repository.claim_next_assignment(
+        round_id,
+        "phone-01",
+        "worker-01",
+        now_ms=1_050,
+        lease_ttl_ms=100,
+        worker_account_id="account-01",
+        worker_fence_token=token,
+    )
+
+    assert assignment is not None
+    assert assignment.lease_expires_at_ms == 1_201
+
+
 def test_unreachable_assignment_is_terminal_without_confirmed_coverage(
     tmp_path: Path,
 ) -> None:
@@ -582,6 +649,97 @@ def test_stale_device_fence_blocks_nonterminal_assignment_writes(
         AssignmentPhase.PROFILE_OPENING
     )
     assert repository.assignment_stage_timings(assignment.assignment_id) == ()
+
+
+@pytest.mark.parametrize(
+    "write_kind", ["visit", "renew", "transition", "defer", "skip"]
+)
+def test_replaced_assignment_owner_raises_device_worker_lease_lost(
+    tmp_path: Path,
+    write_kind: str,
+) -> None:
+    repository = AcquisitionRepository(tmp_path / "tikpoc.db", clock_ms=lambda: 1_101)
+    repository.migrate()
+    imported = repository.import_pool("comments.csv", "b" * 64, (_target("sec:s1"),))
+    round_id = create_exposure_round(
+        repository,
+        pool_id=imported.pool_id,
+        device_seeds={"phone-01": "seed-01"},
+        starts_at_ms=1_000,
+        min_inter_device_gap_ms=0,
+        min_repeat_gap_ms=0,
+    )
+    assignment = repository.claim_next_assignment(
+        round_id, "phone-01", "worker-01", now_ms=1_000
+    )
+    assert assignment is not None
+    token = repository.claim_device_worker_lease(
+        "phone-01", "account-01", "worker-01", now_ms=1_000, ttl_ms=100
+    )
+    assert isinstance(token, int)
+    with sqlite3.connect(repository.path) as connection:
+        connection.execute(
+            "UPDATE round_assignments SET lease_owner='worker-02', "
+            "lease_expires_at_ms=2000, attempt_count=3 WHERE assignment_id=?",
+            (assignment.assignment_id,),
+        )
+    repository.claim_device_worker_lease(
+        "phone-01", "account-01", "worker-02", now_ms=1_100, ttl_ms=1_000
+    )
+
+    with pytest.raises(DeviceWorkerLeaseLost):
+        if write_kind == "visit":
+            repository.record_visit_confirmed(
+                assignment.assignment_id,
+                "worker-01",
+                now_ms=1_101,
+                worker_account_id="account-01",
+                worker_fence_token=token,
+            )
+        elif write_kind == "renew":
+            repository.renew_assignment_lease(
+                assignment.assignment_id,
+                "worker-01",
+                now_ms=1_101,
+                ttl_ms=100,
+                worker_account_id="account-01",
+                worker_fence_token=token,
+            )
+        elif write_kind == "transition":
+            repository.transition_assignment(
+                assignment.assignment_id,
+                "worker-01",
+                AssignmentPhase.PROFILE_OPENING,
+                AssignmentPhase.IDENTITY_CONFIRMED,
+                now_ms=1_101,
+                worker_account_id="account-01",
+                worker_fence_token=token,
+            )
+        elif write_kind == "defer":
+            repository.defer_assignment(
+                assignment.assignment_id,
+                "worker-01",
+                now_ms=1_101,
+                retry_delay_ms=100,
+                error_code="stale",
+                diagnostics=DeviceDiagnostics(),
+                worker_account_id="account-01",
+                worker_fence_token=token,
+            )
+        else:
+            repository.skip_unreachable_assignment(
+                assignment.assignment_id,
+                "worker-01",
+                now_ms=1_101,
+                error_code="profile_unreachable",
+                original_error_code="ValueError",
+                failure_stage="route",
+                diagnostics=DeviceDiagnostics(),
+                worker_account_id="account-01",
+                worker_fence_token=token,
+            )
+
+    assert repository.assignment(assignment.assignment_id).lease_owner == "worker-02"
 
 
 def test_stale_device_fence_cannot_release_unavailable_action_quota(

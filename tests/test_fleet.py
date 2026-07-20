@@ -388,6 +388,30 @@ def test_device_worker_fence_rechecks_after_blocking_operation_error(
         fence.execute(replace_lease_then_fail, now_ms=1_050)
 
 
+def test_device_worker_fence_detects_natural_expiry_during_operation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = AcquisitionRepository(tmp_path / "tikpoc.db")
+    repository.migrate()
+    token = repository.claim_device_worker_lease(
+        "phone-01", "account-01", "worker-1", now_ms=1_000, ttl_ms=100
+    )
+    assert isinstance(token, int)
+    fence = DeviceWorkerFence(
+        database_path=repository.path,
+        device_id="phone-01",
+        account_id="account-01",
+        owner_id="worker-1",
+        fence_token=token,
+    )
+    observed_times = iter((1.05, 1.101))
+    monkeypatch.setattr("tikpoc.fleet.time.time", lambda: next(observed_times))
+
+    with pytest.raises(DeviceWorkerLeaseLost):
+        fence.execute(lambda: "operation-finished")
+
+
 def test_claim_does_not_delete_an_unrelated_expired_lease(tmp_path: Path) -> None:
     repository = AcquisitionRepository(tmp_path / "tikpoc.db")
     repository.migrate()

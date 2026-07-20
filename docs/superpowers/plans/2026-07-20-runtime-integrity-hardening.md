@@ -8,6 +8,8 @@
 
 **Tech Stack:** Python 3.14, FastAPI, SQLite, Manifest V3 JavaScript, pytest, Node test runner, Ruff.
 
+**Status:** Task 1 and Task 4 are implemented and verified. Tasks 2-3 are deferred per the user while the browser isolation approach is reconsidered.
+
 ---
 
 ### Task 1: Require An Explicit Extension Origin
@@ -19,11 +21,11 @@
 - Modify: `config/web-accounts.example.yaml` or the applicable environment example
 - Modify: `docs/web-engagement-runbook.md`
 
-- [ ] Add failing API tests proving TikTok page origins receive `403` for bindings and every action-bearing browser endpoint.
-- [ ] Add a failing test proving one configured `chrome-extension://EXTENSION_ID` origin receives the expected CORS headers and can use the existing background-worker routes.
-- [ ] Remove TikTok origins from the default allowlist and accept only exact configured extension origins.
-- [ ] Document local extension-origin discovery/configuration without reading Chrome credentials or session data.
-- [ ] Run focused API tests, full Python, Chrome Node, Ruff, format, and diff checks; commit `fix: restrict browser APIs to the extension`.
+- [x] Add failing API tests proving TikTok page origins receive `403` for bindings and every action-bearing browser endpoint.
+- [x] Add a failing test proving one configured `chrome-extension://EXTENSION_ID` origin receives the expected CORS headers and can use the existing background-worker routes.
+- [x] Remove TikTok origins from the default allowlist and accept only exact configured extension origins.
+- [x] Document local extension-origin discovery/configuration without reading Chrome credentials or session data.
+- [x] Run focused API tests, full Python, Chrome Node, Ruff, format, and diff checks; commit `fix: restrict browser APIs to the extension`.
 
 ### Task 2: Commit Followback Completion Atomically
 
@@ -71,11 +73,11 @@
 - Modify: `tests/test_mobile_worker.py`
 - Modify: `tests/test_acquisition_db.py`
 
-- [ ] Add failing concurrency tests that replace a device lease while a blocking operation is running and require the stale operation to raise after return.
-- [ ] Add failing repository tests proving a stale fence cannot record action results, mutate quota state, or complete/defer/skip an assignment.
-- [ ] Revalidate the fence after every device operation and carry fence identity into terminal repository transactions.
-- [ ] Let `DeviceWorkerLeaseLost` escape the assignment worker without writing stale defer evidence; stop the stale process cleanly.
-- [ ] Run focused concurrency/mobile/fleet tests and full checks; commit `fix: fence mobile terminal writes`.
+- [x] Add failing concurrency tests that replace a device lease while a blocking operation is running and require the stale operation to raise after return.
+- [x] Add failing repository tests proving a stale fence cannot record action results, mutate quota state, or complete/defer/skip an assignment.
+- [x] Revalidate the fence after every device operation and carry fence identity into terminal repository transactions.
+- [x] Let `DeviceWorkerLeaseLost` escape the assignment worker without writing stale defer evidence; stop the stale process cleanly.
+- [x] Run focused concurrency/mobile/fleet tests and full checks; commit `fix: fence mobile terminal writes`.
 
 ### Task 5: Final Regression And Recovery Gate
 

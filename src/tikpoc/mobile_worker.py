@@ -45,7 +45,18 @@ class VerifiedTikTokDevice(Protocol):
     def recover(self, phase: AssignmentPhase) -> None: ...
 
 
-PlanProvider = Callable[..., ActionPlan]
+class PlanProvider(Protocol):
+    def __call__(
+        self,
+        repository: AcquisitionRepository,
+        round_id: str,
+        identity_key: str,
+        device_id: str,
+        now_ms: int,
+        **worker_fence: object,
+    ) -> ActionPlan: ...
+
+
 MAX_PROFILE_OPEN_ATTEMPTS = 3
 
 
@@ -192,6 +203,7 @@ class MobileAssignmentWorker:
                 self.device_id,
                 now_ms=now_ms,
                 ttl_ms=self.snapshot_lease_ttl_ms,
+                **self._action_fence_kwargs(),
             )
             if not owns_snapshot:
                 self.repository.transition_assignment(
@@ -200,6 +212,7 @@ class MobileAssignmentWorker:
                     AssignmentPhase.IDENTITY_CONFIRMED,
                     AssignmentPhase.WAITING_SNAPSHOT,
                     now_ms=now_ms,
+                    **self._assignment_fence_kwargs(),
                 )
                 self._defer(assignment.assignment_id, "snapshot_pending")
                 return
@@ -213,6 +226,7 @@ class MobileAssignmentWorker:
                 private_account=observation.private_account,
                 access_state=observation.access_state,
                 observed_at_ms=self.clock_ms(),
+                **self._action_fence_kwargs(),
             )
         self._record_stage(
             assignment.assignment_id, AssignmentStage.METRICS, metrics_started_at_ms
@@ -259,7 +273,10 @@ class MobileAssignmentWorker:
             if not video_keys:
                 raise RuntimeError("eligible profile has no visible video")
             plan = self.repository.set_plan_video(
-                plan.plan_id, self._select_video(plan.seed, video_keys)
+                plan.plan_id,
+                self._select_video(plan.seed, video_keys),
+                now_ms=self.clock_ms(),
+                **self._action_fence_kwargs(),
             )
         self.repository.transition_assignment(
             assignment.assignment_id,
@@ -267,6 +284,7 @@ class MobileAssignmentWorker:
             AssignmentPhase.IDENTITY_CONFIRMED,
             AssignmentPhase.VIDEO_OPENING,
             now_ms=self.clock_ms(),
+            **self._assignment_fence_kwargs(),
         )
         self._renew_lease(assignment.assignment_id)
         self.device.open_and_confirm_video(plan.video_key or "")
@@ -279,6 +297,7 @@ class MobileAssignmentWorker:
             AssignmentPhase.VIDEO_OPENING,
             AssignmentPhase.VIDEO_CONFIRMED,
             now_ms=self.clock_ms(),
+            **self._assignment_fence_kwargs(),
         )
         if plan.effective_outcome is OutcomeKind.TRACE:
             action_started_at_ms = self.clock_ms()
@@ -287,6 +306,11 @@ class MobileAssignmentWorker:
                 now_ms=self.clock_ms(),
                 **self._action_fence_kwargs(),
             )
+            self._record_stage(
+                assignment.assignment_id,
+                AssignmentStage.ACTION,
+                action_started_at_ms,
+            )
             self.repository.complete_assignment(
                 assignment.assignment_id,
                 self.owner_id,
@@ -294,17 +318,8 @@ class MobileAssignmentWorker:
                 now_ms=self.clock_ms(),
                 **self._assignment_fence_kwargs(),
             )
-            self._record_stage(
-                assignment.assignment_id,
-                AssignmentStage.ACTION,
-                action_started_at_ms,
-            )
             return
-        action_started_at_ms = self.clock_ms()
         self._execute_interaction(assignment.assignment_id, plan)
-        self._record_stage(
-            assignment.assignment_id, AssignmentStage.ACTION, action_started_at_ms
-        )
 
     def _execute_interaction(self, assignment_id: int, plan: ActionPlan) -> None:
         started_at_ms = self.clock_ms()
@@ -318,6 +333,7 @@ class MobileAssignmentWorker:
                 AssignmentPhase.VIDEO_CONFIRMED,
                 phase,
                 now_ms=self.clock_ms(),
+                **self._assignment_fence_kwargs(),
             )
             result = self.device.reconcile_outcome(plan.effective_outcome)
         else:
@@ -327,6 +343,7 @@ class MobileAssignmentWorker:
                 AssignmentPhase.VIDEO_CONFIRMED,
                 AssignmentPhase.QUOTA_RESERVED,
                 now_ms=self.clock_ms(),
+                **self._assignment_fence_kwargs(),
             )
             self.repository.transition_assignment(
                 assignment_id,
@@ -334,6 +351,7 @@ class MobileAssignmentWorker:
                 AssignmentPhase.QUOTA_RESERVED,
                 AssignmentPhase.ACTION_EXECUTING,
                 now_ms=self.clock_ms(),
+                **self._assignment_fence_kwargs(),
             )
             phase = AssignmentPhase.ACTION_EXECUTING
             self.repository.mark_action_executing(
@@ -352,6 +370,7 @@ class MobileAssignmentWorker:
                 **self._action_fence_kwargs(),
             )
             if result is ActionResult.CONFIRMED:
+                self._record_stage(assignment_id, AssignmentStage.ACTION, started_at_ms)
                 self.repository.complete_assignment(
                     assignment_id,
                     self.owner_id,
@@ -362,6 +381,9 @@ class MobileAssignmentWorker:
                 return
             if result is ActionResult.UNAVAILABLE:
                 if plan.effective_outcome is not OutcomeKind.REPOST:
+                    self._record_stage(
+                        assignment_id, AssignmentStage.ACTION, started_at_ms
+                    )
                     self._defer(assignment_id, "unexpected_action_unavailable")
                     return
                 self.repository.confirm_action_unavailable_as_trace(
@@ -369,6 +391,7 @@ class MobileAssignmentWorker:
                     now_ms=self.clock_ms(),
                     **self._action_fence_kwargs(),
                 )
+                self._record_stage(assignment_id, AssignmentStage.ACTION, started_at_ms)
                 self.repository.complete_assignment(
                     assignment_id,
                     self.owner_id,
@@ -379,6 +402,7 @@ class MobileAssignmentWorker:
                 return
             timed_out = self.clock_ms() - started_at_ms >= self.action_timeout_ms
             if attempts >= self.max_action_attempts or timed_out:
+                self._record_stage(assignment_id, AssignmentStage.ACTION, started_at_ms)
                 self._defer(assignment_id, f"action_{result.value}")
                 return
             if result is ActionResult.UNCERTAIN:
@@ -389,6 +413,7 @@ class MobileAssignmentWorker:
                         phase,
                         AssignmentPhase.ACTION_RECONCILING,
                         now_ms=self.clock_ms(),
+                        **self._assignment_fence_kwargs(),
                     )
                     phase = AssignmentPhase.ACTION_RECONCILING
                 self.device.recover(phase)
@@ -404,6 +429,7 @@ class MobileAssignmentWorker:
                     phase,
                     AssignmentPhase.ACTION_EXECUTING,
                     now_ms=self.clock_ms(),
+                    **self._assignment_fence_kwargs(),
                 )
                 phase = AssignmentPhase.ACTION_EXECUTING
             if stored_plan.state is not ActionPlanState.PLANNED:
@@ -468,6 +494,7 @@ class MobileAssignmentWorker:
             self.owner_id,
             now_ms=now_ms,
             ttl_ms=self.assignment_lease_ttl_ms,
+            **self._assignment_fence_kwargs(),
         )
 
     def _record_stage(
@@ -482,6 +509,7 @@ class MobileAssignmentWorker:
             stage,
             duration_ms=recorded_at_ms - started_at_ms,
             recorded_at_ms=recorded_at_ms,
+            **self._action_fence_kwargs(),
         )
 
     @staticmethod
