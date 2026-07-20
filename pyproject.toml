@@ -8,6 +8,7 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
   "Appium-Python-Client>=5,<6",
+  "cryptography>=45,<47",
   "fastapi>=0.116,<1",
   "openpyxl>=3.1,<4",
   "Pillow>=11,<13",
