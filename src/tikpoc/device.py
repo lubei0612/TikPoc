@@ -159,14 +159,23 @@ class AppiumTikTokDevice:
             if attempt and attempt % 3 == 0:
                 self.open_profile(normalized)
             elements = self._profile_username_elements()
+            actual = ""
             if elements:
-                actual = str(elements[0].text or "").strip().removeprefix("@").lower()
-                if actual == normalized:
-                    return
-                if actual:
-                    last_error = ProfileIdentityMismatch(
-                        f"profile mismatch: expected {normalized}, got {actual}"
+                try:
+                    actual = (
+                        str(elements[0].text or "").strip().removeprefix("@").lower()
                     )
+                except Exception:
+                    try:
+                        actual = parse_profile_page(self.driver.page_source).username
+                    except Exception:
+                        pass
+            if actual == normalized:
+                return
+            if actual:
+                last_error = ProfileIdentityMismatch(
+                    f"profile mismatch: expected {normalized}, got {actual}"
+                )
             else:
                 last_error = ValueError("profile username marker is not visible")
             if attempt + 1 < self.metric_read_attempts:
@@ -409,15 +418,21 @@ class AppiumTikTokDevice:
     def _visible_profile_username(self) -> str:
         elements = self._profile_username_elements()
         if elements:
-            return str(elements[0].text or "").strip().removeprefix("@").lower()
+            try:
+                return str(elements[0].text or "").strip().removeprefix("@").lower()
+            except Exception:
+                pass
         try:
             return parse_profile_page(self.driver.page_source).username
-        except ValueError:
+        except Exception:
             return ""
 
     def _profile_username_elements(self):
         for resource_id in PROFILE_USERNAME_IDS:
-            elements = self.driver.find_elements(By.ID, resource_id)
+            try:
+                elements = self.driver.find_elements(By.ID, resource_id)
+            except Exception:
+                continue
             if elements:
                 return elements
         return []
@@ -432,8 +447,10 @@ class AppiumTikTokDevice:
 
     def _wait_any_profile_surface(self) -> bool:
         for attempt in range(self.metric_read_attempts):
-            if self._visible_profile_username():
-                self._wait_profile_surface()
+            actual = self._visible_profile_username()
+            if actual:
+                self._wait_profile_surface(actual)
+                self._confirmed_profile_username = actual
                 return True
             if attempt + 1 < self.metric_read_attempts:
                 self.sleeper(self.poll_interval)

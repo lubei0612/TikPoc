@@ -187,6 +187,23 @@ class CurrentProfileMarkerDriver(FakeDriver):
         return super().find_elements(by, value)
 
 
+class StaleProfileMarker(FakeElement):
+    @property
+    def text(self) -> str:
+        raise RuntimeError("stale marker")
+
+    @text.setter
+    def text(self, _value: str) -> None:
+        return None
+
+
+class StaleProfileMarkerDriver(FakeDriver):
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if value == "com.zhiliaoapp.musically:id/s7e":
+            return [StaleProfileMarker()]
+        return super().find_elements(by, value)
+
+
 class CachedProfileObservationDriver(FakeDriver):
     def __init__(self, page_source: str = PROFILE_XML) -> None:
         super().__init__()
@@ -500,6 +517,7 @@ def test_appium_device_reloads_same_stable_profile_through_baseline() -> None:
         "tiktok://inbox",
         "snssdk1233://user/profile/123",
     ]
+    assert device._confirmed_profile_username == "renamed"
 
 
 def test_appium_device_restarts_once_after_baseline_route_stays_blank() -> None:
@@ -744,6 +762,14 @@ def test_appium_device_classifies_profile_identity_mismatch() -> None:
 def test_appium_device_accepts_current_profile_username_marker() -> None:
     device = AppiumTikTokDevice(
         CurrentProfileMarkerDriver(), metric_read_attempts=1, poll_interval=0
+    )
+
+    device.wait_profile_ready("sample")
+
+
+def test_profile_readiness_recovers_from_a_stale_marker_element() -> None:
+    device = AppiumTikTokDevice(
+        StaleProfileMarkerDriver(), metric_read_attempts=1, poll_interval=0
     )
 
     device.wait_profile_ready("sample")
