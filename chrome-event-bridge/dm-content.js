@@ -445,6 +445,38 @@
     return core.findSemanticButton(buttons, ["send", "发送", "發送"]);
   }
 
+  function prepareComposer(documentValue = document) {
+    const composer = findComposer(documentValue);
+    if (!composer) {
+      return false;
+    }
+    composer.focus();
+    return true;
+  }
+
+  function sendTrusted(text) {
+    const normalized = core.normalizeText(text);
+    if (!normalized) {
+      return Promise.resolve(false);
+    }
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage(
+        { type: "TIKPOC_TRUSTED_SEND", text: normalized },
+        (response) => {
+          if (chrome.runtime.lastError || !response || !response.ok) {
+            reject(new Error(
+              response && response.error ||
+              chrome.runtime.lastError && chrome.runtime.lastError.message ||
+              "Trusted send failed",
+            ));
+            return;
+          }
+          resolve(Boolean(response.result && response.result.submitted));
+        },
+      );
+    });
+  }
+
   async function waitForOutbound(expectedText, options = {}) {
     const read = options.read || (() => readActiveConversation());
     const timeoutMs = Number(options.timeoutMs || 5000);
@@ -654,19 +686,20 @@
       if (!claim.claimed) {
         return "busy";
       }
-      const composer = adapter.findComposer();
-      const composed = composer && adapter.setComposerText(composer, plan.reply_text);
-      const sendButton = composed && adapter.findSendButton();
       processed[fingerprint] = {
         accountId: settings.accountId,
         state: "sending",
         updatedAt: now(),
       };
       await storage.set(PROCESSED_KEY, trimProcessed(processed));
-      if (sendButton) {
-        sendButton.click();
+      let submitted = false;
+      try {
+        submitted = adapter.prepareComposer() &&
+          await adapter.sendTrusted(plan.reply_text);
+      } catch (_error) {
+        submitted = false;
       }
-      const confirmed = Boolean(sendButton) && await adapter.waitForOutbound(plan.reply_text);
+      const confirmed = submitted && await adapter.waitForOutbound(plan.reply_text);
       const resultState = confirmed ? "sent" : "uncertain";
       await transport("TIKPOC_DM_RESULT", {
         account_id: settings.accountId,
@@ -752,19 +785,20 @@
         });
         return state === "superseded" ? "welcome_superseded" : "welcome_uncertain";
       }
-      const composer = adapter.findComposer();
-      const composed = composer && adapter.setComposerText(composer, replyText);
-      const sendButton = composed && adapter.findSendButton();
       processed[actionKey] = {
         accountId: settings.accountId,
         state: "sending",
         updatedAt: now(),
       };
       await storage.set(PROCESSED_KEY, trimProcessed(processed));
-      if (sendButton) {
-        sendButton.click();
+      let submitted = false;
+      try {
+        submitted = adapter.prepareComposer() &&
+          await adapter.sendTrusted(replyText);
+      } catch (_error) {
+        submitted = false;
       }
-      const confirmed = Boolean(sendButton) && await adapter.waitForOutbound(replyText);
+      const confirmed = submitted && await adapter.waitForOutbound(replyText);
       const planState = confirmed ? "sent" : "uncertain";
       await transport("TIKPOC_WELCOME_RESULT", {
         ...identity,
@@ -818,9 +852,8 @@
       openConversation,
       openWelcomeConversation: (username) => openWelcomeConversation(username),
       readActiveConversation: (accountId) => readActiveConversation(document, accountId),
-      findComposer,
-      setComposerText,
-      findSendButton,
+      prepareComposer,
+      sendTrusted,
       waitForOutbound: (text) => waitForOutbound(text),
     };
     let settings = null;
@@ -956,10 +989,12 @@
     activeConversationState,
     usernameFromElement,
     pageRole,
+    prepareComposer,
     resolveBinding,
     readActiveConversation,
     rowSnapshot,
     setComposerText,
+    sendTrusted,
     startBrowserBridge,
     visible,
     waitForOutbound,

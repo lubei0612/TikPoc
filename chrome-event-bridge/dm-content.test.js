@@ -46,11 +46,16 @@ function harness({
   planId = 17,
   welcomePlan = null,
   welcomeTarget = { matched: true, existingMessages: false },
+  prepared = true,
+  trustedSubmitted = true,
+  trustedFailure = false,
 } = {}) {
   const calls = [];
   let currentRows = [{ key: inbound().conversationId, signature: "old", unread: false }];
   let readIndex = 0;
   let clicks = 0;
+  let syntheticComposeCalls = 0;
+  const trustedTexts = [];
   let welcomeOpens = 0;
   let welcomeAvailable = Boolean(welcomePlan);
   const adapter = {
@@ -64,8 +69,17 @@ function harness({
     readActiveConversation() {
       return reads[Math.min(readIndex++, reads.length - 1)];
     },
+    prepareComposer() { return prepared; },
+    async sendTrusted(text) {
+      trustedTexts.push(text);
+      if (trustedFailure) {
+        throw new Error("trusted send failed");
+      }
+      return trustedSubmitted;
+    },
     findComposer() { return { value: "" }; },
     setComposerText(_composer, text) {
+      syntheticComposeCalls += 1;
       return text === "Reply draft" || text === welcomePlan?.reply_text;
     },
     findSendButton() { return { click() { clicks += 1; } }; },
@@ -108,12 +122,47 @@ function harness({
     adapter,
     calls,
     get clicks() { return clicks; },
+    get syntheticComposeCalls() { return syntheticComposeCalls; },
+    trustedTexts,
     get welcomeOpens() { return welcomeOpens; },
     setRows(rows) { currentRows = rows; },
     storage,
     workflow,
   };
 }
+
+test("planned replies use trusted input without synthetic composition", async () => {
+  const run = harness();
+  await run.workflow.scan(SETTINGS);
+  run.setRows([{ key: inbound().conversationId, signature: "new", unread: true }]);
+
+  assert.equal(await run.workflow.scan(SETTINGS), "sent");
+  assert.deepEqual(run.trustedTexts, ["Reply draft"]);
+  assert.equal(run.syntheticComposeCalls, 0);
+  assert.equal(run.clicks, 0);
+});
+
+test("a missing composer records uncertain without trusted input", async () => {
+  const run = harness({ prepared: false });
+  await run.workflow.scan(SETTINGS);
+  run.setRows([{ key: inbound().conversationId, signature: "new", unread: true }]);
+
+  assert.equal(await run.workflow.scan(SETTINGS), "uncertain");
+  assert.deepEqual(run.trustedTexts, []);
+  assert.equal(
+    run.calls.find((call) => call.type === "TIKPOC_ACTION_RESULT").body.state,
+    "uncertain",
+  );
+});
+
+test("an unsubmitted trusted request records uncertain", async () => {
+  const run = harness({ trustedSubmitted: false });
+  await run.workflow.scan(SETTINGS);
+  run.setRows([{ key: inbound().conversationId, signature: "new", unread: true }]);
+
+  assert.equal(await run.workflow.scan(SETTINGS), "uncertain");
+  assert.deepEqual(run.trustedTexts, ["Reply draft"]);
+});
 
 test("page adapter exposes semantic role, visibility, and labels", () => {
   assert.equal(dmContent.pageRole({ pathname: "/messages/thread/one" }), "messages");
@@ -291,10 +340,11 @@ test("one inbound fingerprint is planned and sent only once", async () => {
   await run.workflow.scan(SETTINGS);
   run.setRows([{ key: inbound().conversationId, signature: "new", unread: true }]);
   assert.equal(await run.workflow.scan(SETTINGS), "sent");
-  assert.equal(run.clicks, 1);
+  assert.equal(run.trustedTexts.length, 1);
+  assert.equal(run.clicks, 0);
   run.setRows([{ key: inbound().conversationId, signature: "newer-render", unread: true }]);
   assert.equal(await run.workflow.scan(SETTINGS), "duplicate");
-  assert.equal(run.clicks, 1);
+  assert.equal(run.trustedTexts.length, 1);
   assert.equal(run.calls.filter((call) => call.type === "TIKPOC_DM_PLAN").length, 1);
   const processed = Object.values(run.storage.values.tikpocDmProcessed);
   assert.equal(processed.length, 1);
@@ -322,7 +372,7 @@ test("an open conversation detects a new inbound when its row is unchanged", asy
 
   assert.equal(await run.workflow.scan(SETTINGS), "baseline");
   assert.equal(await run.workflow.scan(SETTINGS), "sent");
-  assert.equal(run.clicks, 1);
+  assert.equal(run.trustedTexts.length, 1);
   assert.equal(
     run.calls.filter((call) => call.type === "TIKPOC_DM_PLAN").length,
     1,
@@ -338,7 +388,7 @@ test("the first active inbound after an empty startup view is new", async () => 
 
   assert.equal(await run.workflow.scan(SETTINGS), "baseline");
   assert.equal(await run.workflow.scan(SETTINGS), "sent");
-  assert.equal(run.clicks, 1);
+  assert.equal(run.trustedTexts.length, 1);
 });
 
 test("a stable TikTok conversation id reaches planning after navigation", async () => {
@@ -458,7 +508,7 @@ test("a matching outbound bubble records sent and completes the action", async (
   await run.workflow.scan(SETTINGS);
   run.setRows([{ key: inbound().conversationId, signature: "new", unread: true }]);
   assert.equal(await run.workflow.scan(SETTINGS), "sent");
-  assert.equal(run.clicks, 1);
+  assert.equal(run.trustedTexts.length, 1);
   assert.equal(run.calls.find((call) => call.type === "TIKPOC_DM_RESULT").body.state, "sent");
   assert.equal(
     run.calls.find((call) => call.type === "TIKPOC_ACTION_RESULT").body.state,
@@ -478,18 +528,18 @@ test("missing outbound confirmation records uncertain and does not immediately r
   );
   run.setRows([{ key: inbound().conversationId, signature: "rerender", unread: true }]);
   assert.equal(await run.workflow.scan(SETTINGS), "duplicate");
-  assert.equal(run.clicks, 1);
+  assert.equal(run.trustedTexts.length, 1);
 });
 
-test("a lost result response after click does not click the same fingerprint again", async () => {
+test("a lost result response after trusted send does not send the fingerprint again", async () => {
   const run = harness({ failResult: true });
   await run.workflow.scan(SETTINGS);
   run.setRows([{ key: inbound().conversationId, signature: "new", unread: true }]);
   await assert.rejects(run.workflow.scan(SETTINGS), /result response lost/);
-  assert.equal(run.clicks, 1);
+  assert.equal(run.trustedTexts.length, 1);
   run.setRows([{ key: inbound().conversationId, signature: "rerender", unread: true }]);
   assert.equal(await run.workflow.scan(SETTINGS), "duplicate");
-  assert.equal(run.clicks, 1);
+  assert.equal(run.trustedTexts.length, 1);
 });
 
 test("an idle scan sends one exact-target welcome with a dedicated lease", async () => {
@@ -504,7 +554,7 @@ test("an idle scan sends one exact-target welcome with a dedicated lease", async
 
   assert.equal(await run.workflow.scan(SETTINGS), "welcome_sent");
   assert.equal(run.welcomeOpens, 1);
-  assert.equal(run.clicks, 1);
+  assert.equal(run.trustedTexts.length, 1);
   const claim = run.calls.find((call) =>
     call.type === "TIKPOC_ACTION_CLAIM" && call.body.action_type === "welcome_send"
   );
@@ -520,7 +570,7 @@ test("an idle scan sends one exact-target welcome with a dedicated lease", async
     "completed",
   );
   assert.equal(await run.workflow.scan(SETTINGS), "idle");
-  assert.equal(run.clicks, 1);
+  assert.equal(run.trustedTexts.length, 1);
 });
 
 test("an actionable inbound message takes priority over a pending welcome", async () => {
