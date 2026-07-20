@@ -593,6 +593,29 @@ class TerminalProfileDriver(FakeDriver):
         self.page_source = f'<node text="{marker}" />'
 
 
+class StaleTerminalThenValidDriver(FakeDriver):
+    def __init__(self) -> None:
+        super().__init__()
+        self.page_source = PROFILE_XML.replace("@sample", "@previous").replace(
+            "</hierarchy>", '<node text="Account banned" /></hierarchy>'
+        )
+
+    def execute_script(self, name: str, arguments: dict[str, str]) -> None:
+        self.scripts.append((name, arguments))
+
+
+class TerminalUsernameFallbackDriver(StableIdBlankUsernameFallbackDriver):
+    def execute_script(self, name: str, arguments: dict[str, str]) -> None:
+        super().execute_script(name, arguments)
+        if arguments["url"].startswith("https://www.tiktok.com/@"):
+            self.page_source = PROFILE_XML.replace("@sample", "@old_name").replace(
+                "</hierarchy>",
+                '<node text="Account banned" />'
+                '<node text="This account is no longer available" />'
+                "</hierarchy>",
+            )
+
+
 def _stable_target() -> PoolTarget:
     return PoolTarget(
         pool_id="pool-1",
@@ -608,8 +631,17 @@ def _stable_target() -> PoolTarget:
 
 
 def test_explicit_banned_profile_is_terminal() -> None:
+    driver = TerminalProfileDriver(
+        "Account banned - this account is no longer available"
+    )
+    driver.page_source = PROFILE_XML.replace(
+        "</hierarchy>",
+        '<node text="Account banned" />'
+        '<node text="This account is no longer available" />'
+        "</hierarchy>",
+    )
     device = AppiumTikTokDevice(
-        TerminalProfileDriver("Account banned - this account is no longer available"),
+        driver,
         metric_read_attempts=1,
         poll_interval=0,
     )
@@ -632,6 +664,59 @@ def test_blank_profile_is_not_terminal() -> None:
     with pytest.raises(ValueError) as captured:
         device.confirm_profile_identity(target)
     assert not isinstance(captured.value, ProfilePermanentlyUnavailable)
+
+
+def test_stale_terminal_page_does_not_poison_next_target() -> None:
+    driver = StaleTerminalThenValidDriver()
+    device = AppiumTikTokDevice(
+        driver,
+        metric_read_attempts=2,
+        poll_interval=0,
+        sleeper=lambda _: setattr(driver, "page_source", PROFILE_XML),
+    )
+    target = _stable_target()
+
+    device.open_target(target)
+    device.confirm_profile_identity(target)
+
+    assert device._confirmed_profile_username == "sample"
+
+
+def test_video_unavailable_message_is_not_terminal_profile_evidence() -> None:
+    device = AppiumTikTokDevice(
+        TerminalProfileDriver("This video is no longer available"),
+        metric_read_attempts=1,
+        poll_interval=0,
+    )
+    target = _stable_target()
+
+    device.open_target(target)
+
+    with pytest.raises(ValueError) as captured:
+        device.confirm_profile_identity(target)
+    assert not isinstance(captured.value, ProfilePermanentlyUnavailable)
+
+
+def test_username_fallback_preserves_terminal_profile_exception() -> None:
+    device = AppiumTikTokDevice(
+        TerminalUsernameFallbackDriver(), metric_read_attempts=1, poll_interval=0
+    )
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="uid:123",
+        target_id="123",
+        sec_uid="sec-1",
+        username="old_name",
+        profile_url="https://www.tiktok.com/@old_name",
+        source_video_id="",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    device.open_target(target)
+
+    with pytest.raises(ProfilePermanentlyUnavailable, match="account banned"):
+        device.confirm_profile_identity(target)
 
 
 def test_appium_device_opens_profile_with_deep_link() -> None:
