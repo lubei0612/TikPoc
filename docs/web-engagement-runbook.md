@@ -271,4 +271,6 @@ IKUN Product Publisher 的公开产品说明、隐私政策、服务条款与 OA
 - OAuth Redirect URI: `https://tiktok-developer-site-eta.vercel.app/oauth/callback`
 - Platform: `Web`
 
+TikTok URL Properties 要求的签名文件已部署到生产站点根目录，并通过 HTTPS `200` 可访问；可返回 TikTok Developer 页面重新点击验证，不需要修改文件内容。
+
 OAuth 回调页只读取 TikTok 返回的 `code`、`state`、`error` 和 `error_description`，不把授权码写入日志或浏览器存储，并在渲染结果后清除地址栏查询参数。静态站点不需要也不保存 TikTok Client Secret。TikTok Developer 应用继续保持 Draft；完成 Login Kit、Content Posting API、所需 scopes、真实服务端 OAuth 交换和端到端演示视频后再提交审核。
