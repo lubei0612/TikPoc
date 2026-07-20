@@ -1308,6 +1308,22 @@ class AmbiguousSemanticActionDriver(SemanticActionDriver):
         return elements
 
 
+class DelayedInitialActionControlDriver(SemanticActionDriver):
+    def __init__(self, *, missing_reads: int) -> None:
+        super().__init__()
+        self.missing_reads = missing_reads
+        self.initial_reads = 0
+
+    def find_elements(self, by: str, value: str):
+        if "Video liked" in value and "Like video" in value and not self.liked:
+            self.semantic_queries.append(value)
+            self.initial_reads += 1
+            if self.initial_reads <= self.missing_reads:
+                return []
+            return [self.like]
+        return super().find_elements(by, value)
+
+
 class HiddenRepostUnavailableDriver(RepostUnavailableDriver):
     def find_elements(self, by: str, value: str):
         if self.share_open and (
@@ -1330,6 +1346,20 @@ class SteppingClock:
 
 def test_execute_like_waits_for_delayed_selected_state() -> None:
     driver = SemanticActionDriver(delayed_like_reads=2)
+    device = AppiumTikTokDevice(
+        driver,
+        poll_interval=0,
+        action_timeout=2,
+        clock=SteppingClock(),
+        sleeper=lambda _: None,
+    )
+
+    assert device.execute_outcome(OutcomeKind.LIKE) is ActionResult.CONFIRMED
+    assert driver.clicked_labels == ["Like"]
+
+
+def test_execute_like_waits_for_delayed_initial_control() -> None:
+    driver = DelayedInitialActionControlDriver(missing_reads=2)
     device = AppiumTikTokDevice(
         driver,
         poll_interval=0,

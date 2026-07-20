@@ -267,7 +267,12 @@ class AppiumTikTokDevice:
         normalized = OutcomeKind(outcome)
         if normalized is OutcomeKind.TRACE:
             return ActionResult.CONFIRMED
-        state, control, control_kind = self._outcome_observation(normalized)
+        if normalized in {OutcomeKind.LIKE, OutcomeKind.FAVORITE}:
+            state, control, control_kind = self._wait_for_outcome_observation(
+                normalized
+            )
+        else:
+            state, control, control_kind = self._outcome_observation(normalized)
         if state is True:
             return ActionResult.CONFIRMED
 
@@ -653,6 +658,19 @@ class AppiumTikTokDevice:
                 return True
             if self.clock() >= deadline:
                 return False
+            self.sleeper(self.poll_interval)
+
+    def _wait_for_outcome_observation(
+        self, outcome: OutcomeKind
+    ) -> tuple[bool | None, object | None, str]:
+        deadline = self.clock() + self.action_timeout
+        while True:
+            observation = self._outcome_observation(outcome)
+            state, control, _ = observation
+            if state is not None or control is not None:
+                return observation
+            if self.clock() >= deadline:
+                return observation
             self.sleeper(self.poll_interval)
 
     def _wait_for_outcome_control(self, outcome: OutcomeKind, kind: str):
