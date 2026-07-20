@@ -17,7 +17,7 @@ _PRICE_ONLY = re.compile(
 )
 _PRICE_TOKEN = re.compile(r"(?:[￥¥💰]\s*\d+(?:\.\d+)?|\b[pP]\s*\d{2,5}\b)")
 _CONTACT = re.compile(
-    r"(?:微信|威信|wechat|whatsapp|telegram|电话|手机|手机号|qq|vx|wx|\+?\d[\d\s-]{7,}\d)",
+    r"(?:微信|威信|wechat|whatsapp|telegram|手机号|qq|vx|wx|(?:电话|手机)\s*[:：]?\s*\+?\d|\+?\d[\d\s-]{7,}\d)",
     re.IGNORECASE,
 )
 _SUPPLIER_ONLY = re.compile(

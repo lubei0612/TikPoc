@@ -38,6 +38,12 @@ def test_catalog_description_drops_inventory_and_price_code_only_copy() -> None:
     assert sanitize_catalog_description(source) == ""
 
 
+def test_catalog_description_keeps_phone_as_product_capacity_fact() -> None:
+    source = "内部空间合理，手机、卡包、钥匙都能装下"
+
+    assert sanitize_catalog_description(source) == source
+
+
 def test_catalog_client_fetches_bounded_sanitized_products() -> None:
     seen: dict[str, object] = {}
 
