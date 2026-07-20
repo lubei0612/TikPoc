@@ -274,7 +274,6 @@ async function recoverMonitoring() {
     return false;
   }
   await ensureMonitoringTabs();
-  await setAccountAutomation(settings, true);
   return true;
 }
 
@@ -355,10 +354,14 @@ if (chrome.runtime.onStartup) {
 
 if (chrome.storage && chrome.storage.onChanged) {
   chrome.storage.onChanged.addListener((changes) => {
-    if (changes && changes[SETTINGS_KEY] &&
-        changes[SETTINGS_KEY].newValue &&
-        changes[SETTINGS_KEY].newValue.monitoringStarted) {
-      recoverMonitoring().catch(() => {});
+    const change = changes && changes[SETTINGS_KEY];
+    const previous = change && change.oldValue || {};
+    const current = change && change.newValue || {};
+    if (current.monitoringStarted) {
+      ensureMonitoringTabs().catch(() => {});
+      if (!previous.accountId && current.accountId) {
+        setAccountAutomation(current, true).catch(() => {});
+      }
     }
   });
 }

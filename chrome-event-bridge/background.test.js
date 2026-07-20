@@ -413,6 +413,7 @@ test("a completed followback wakes open TikTok tabs for welcome scanning", async
 
 function monitoringHarness() {
   let messageListener;
+  let alarmListener;
   const createdUrls = [];
   const reloadedTabIds = [];
   const requests = [];
@@ -443,9 +444,12 @@ function monitoringHarness() {
             if (callback) callback();
           },
         },
-        onChanged: { addListener() {} },
+        onChanged: { addListener(listener) { context.storageListener = listener; } },
       },
-      alarms: { create() {}, onAlarm: { addListener() {} } },
+      alarms: {
+        create() {},
+        onAlarm: { addListener(listener) { alarmListener = listener; } },
+      },
       tabs: {
         async query() { return tabs.map((tab) => ({ ...tab })); },
         async create({ url }) {
@@ -480,7 +484,19 @@ function monitoringHarness() {
       }, {}, resolve), true);
     });
   }
-  return { createdUrls, reloadedTabIds, requests, setMonitoring, settings, tabs };
+  async function fireHealthAlarm() {
+    alarmListener({ name: "tikpoc-browser-health" });
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  return {
+    createdUrls,
+    fireHealthAlarm,
+    reloadedTabIds,
+    requests,
+    setMonitoring,
+    settings,
+    tabs,
+  };
 }
 
 test("one-click monitoring opens missing pages and enables the bound account", async () => {
@@ -552,4 +568,17 @@ test("concurrent monitoring recovery creates one observer pair", async () => {
     "https://www.tiktok.com/",
     "https://www.tiktok.com/messages",
   ]);
+});
+
+test("health recovery does not override account action switches", async () => {
+  const run = monitoringHarness();
+  await run.setMonitoring(true);
+  const actionRequests = () => run.requests.filter(
+    ({ url }) => url.includes("/api/accounts/"),
+  ).length;
+  assert.equal(actionRequests(), 2);
+
+  await run.fireHealthAlarm();
+
+  assert.equal(actionRequests(), 2);
 });
