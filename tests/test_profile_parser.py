@@ -1,8 +1,5 @@
 from tikpoc.models import ProfileMetrics
-from tikpoc.profile_parser import (
-    parse_profile_page,
-    video_controls_visible,
-)
+from tikpoc.profile_parser import parse_profile_page
 
 
 PROFILE_XML = """
@@ -42,16 +39,6 @@ def test_parse_profile_page_accepts_appium_element_tags() -> None:
 
     assert page.username == "sample"
     assert page.metrics == ProfileMetrics(following=12, followers=10, posts=4)
-
-
-def test_video_controls_visible_reads_semantic_share_description() -> None:
-    source = (
-        '<hierarchy><node content-desc="Share video. 42 shares" '
-        'bounds="[900,1000][1000,1100]" /></hierarchy>'
-    )
-
-    assert video_controls_visible(source) is True
-    assert video_controls_visible("<hierarchy />") is False
 
 
 def test_parse_profile_page_accepts_current_tiktok_resource_ids() -> None:

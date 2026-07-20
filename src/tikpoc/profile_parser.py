@@ -49,14 +49,6 @@ def profile_surface_visible(page_source: str) -> bool:
     return False
 
 
-def video_controls_visible(page_source: str) -> bool:
-    root = ElementTree.fromstring(page_source)
-    return any(
-        node.attrib.get("content-desc", "").strip().startswith("Share video.")
-        for node in root.iter()
-    )
-
-
 def parse_profile_page(page_source: str) -> ProfilePage:
     root = ElementTree.fromstring(page_source)
     username = parse_profile_username(page_source)

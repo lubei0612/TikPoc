@@ -21,7 +21,6 @@ from .profile_parser import (
     parse_profile_username,
     parse_visible_post_keys,
     profile_surface_visible,
-    video_controls_visible,
 )
 
 
@@ -126,7 +125,6 @@ class AppiumTikTokDevice:
         self.sleeper = sleeper
         self.route_opener = route_opener
         self._profile_source: str | None = None
-        self._video_source: str | None = None
         self._confirmed_profile_username = ""
 
     def _invalidate_profile_source(self) -> None:
@@ -418,36 +416,12 @@ class AppiumTikTokDevice:
         raise last_error or ValueError("profile metrics are incomplete")
 
     def list_video_keys(self) -> tuple[str, ...]:
-        if self._profile_source is not None:
-            try:
-                page = parse_profile_page(self._profile_source)
-                return tuple(str(index) for index in range(page.visible_post_count))
-            except ValueError:
-                pass
         return self.list_visible_posts()
 
     def open_and_confirm_video(self, video_key: str) -> None:
         self.open_post(video_key)
-        if self._wait_for_video_source() is None:
+        if self._wait_for_element(SHARE_CONTROL_XPATH) is None:
             raise RuntimeError("video controls did not become visible")
-
-    def _wait_for_video_source(self) -> str | None:
-        deadline = self.clock() + self.action_timeout
-        while True:
-            try:
-                source = str(self.driver.page_source)
-            except Exception:
-                source = ""
-            if source:
-                try:
-                    if video_controls_visible(source):
-                        self._video_source = source
-                        return source
-                except ValueError:
-                    pass
-            if self.clock() >= deadline:
-                return None
-            self.sleeper(self.poll_interval)
 
     def capture_diagnostics(self) -> DeviceDiagnostics:
         return DeviceDiagnostics(ui_summary=str(self.driver.page_source)[:2_000])
