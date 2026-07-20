@@ -154,6 +154,9 @@ test("browser event transport sends JSON without setting Origin", async () => {
     Set,
     chrome: {
       runtime: {
+        getURL() {
+          return "chrome-extension://abcdefghijklmnopabcdefghijklmnop/";
+        },
         onMessage: {
           addListener(listener) {
             messageListener = listener;
@@ -191,7 +194,11 @@ test("browser event transport sends JSON without setting Origin", async () => {
 
   assert.equal(response.ok, true);
   assert.equal(response.result.accepted, true);
-  assert.equal(request.url, "http://127.0.0.1:8766/api/browser-events");
+  assert.equal(
+    request.url,
+    "http://127.0.0.1:8766/api/browser-events?extension_origin=" +
+      "chrome-extension%3A%2F%2Fabcdefghijklmnopabcdefghijklmnop",
+  );
   assert.equal(request.options.method, "POST");
   assert.equal(request.options.headers["Content-Type"], "application/json");
   assert.equal(Object.hasOwn(request.options.headers, "Origin"), false);

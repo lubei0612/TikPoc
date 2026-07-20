@@ -576,6 +576,56 @@ def test_browser_post_routes_accept_verified_chrome_extension_origin(
         server.shutdown()
 
 
+def test_browser_routes_accept_verified_extension_identity_query_without_origin(
+    tmp_path: Path,
+) -> None:
+    extension_origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+    service = FakeBrowserDmService()
+    client = TestClient(
+        create_app(
+            tmp_path / "db.sqlite",
+            registry=_registry(tmp_path),
+            browser_dm_service=service,
+            browser_extension_origins=(extension_origin,),
+        )
+    )
+    params = {"extension_origin": extension_origin}
+
+    bindings = client.get("/api/browser-bindings", params=params)
+    event = client.post(
+        "/api/browser-events",
+        params=params,
+        json=_browser_post_bodies()["/api/browser-events"],
+    )
+
+    assert bindings.status_code == 200
+    assert event.status_code == 200
+    assert event.json() == {"accepted": True}
+
+
+def test_invalid_page_origin_cannot_override_with_extension_identity_query(
+    tmp_path: Path,
+) -> None:
+    extension_origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+    client = TestClient(
+        create_app(
+            tmp_path / "db.sqlite",
+            registry=_registry(tmp_path),
+            browser_dm_service=FakeBrowserDmService(),
+            browser_extension_origins=(extension_origin,),
+        )
+    )
+
+    response = client.get(
+        "/api/browser-bindings",
+        params={"extension_origin": extension_origin},
+        headers={"Origin": "https://www.tiktok.com"},
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {"error": "browser origin is not allowed"}
+
+
 def test_tiktok_page_origin_cannot_call_browser_control_apis(tmp_path: Path) -> None:
     extension_origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
     database_path = tmp_path / "db.sqlite"

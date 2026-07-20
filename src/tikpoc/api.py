@@ -265,7 +265,14 @@ def create_app(
         if path not in _BROWSER_PATHS:
             return await call_next(request)
         origin = request.headers.get("origin")
+        extension_identity = request.query_params.get("extension_origin")
         allowed_origin = origin if origin in browser_origins else None
+        allowed_extension_identity = (
+            extension_identity
+            if origin is None and extension_identity in browser_origins
+            else None
+        )
+        browser_identity_verified = bool(allowed_origin or allowed_extension_identity)
         if request.method == "OPTIONS":
             if allowed_origin is None:
                 return Response(status_code=404)
@@ -275,7 +282,7 @@ def create_app(
             )
             response.headers["Access-Control-Allow-Headers"] = "Content-Type"
         elif request.method == "POST":
-            if allowed_origin is None:
+            if not browser_identity_verified:
                 return _json({"error": "browser origin is not allowed"}, 403)
             media_type = request.headers.get("content-type", "").split(";", 1)[0]
             if media_type.strip().lower() != "application/json":
@@ -284,7 +291,7 @@ def create_app(
                 )
             else:
                 response = await call_next(request)
-        elif request.method == "GET" and allowed_origin is None:
+        elif request.method == "GET" and not browser_identity_verified:
             return _json({"error": "browser origin is not allowed"}, 403)
         else:
             response = await call_next(request)

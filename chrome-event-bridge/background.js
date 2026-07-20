@@ -33,12 +33,37 @@ function localDashboardUrl(value) {
   return url.origin;
 }
 
+function extensionIdentityOrigin() {
+  const extensionUrl = chrome.runtime && chrome.runtime.getURL
+    ? chrome.runtime.getURL("")
+    : "";
+  let url;
+  try {
+    url = new URL(extensionUrl);
+  } catch (_error) {
+    return "";
+  }
+  if (url.protocol !== "chrome-extension:" || !url.hostname) {
+    return "";
+  }
+  return `chrome-extension://${url.hostname}`;
+}
+
+function authenticatedLocalUrl(dashboardUrl, path) {
+  const url = new URL(`${dashboardUrl}${path}`);
+  const extensionOrigin = extensionIdentityOrigin();
+  if (extensionOrigin) {
+    url.searchParams.set("extension_origin", extensionOrigin);
+  }
+  return url.toString();
+}
+
 async function postLocal(dashboardUrlValue, path, payload) {
   const dashboardUrl = localDashboardUrl(dashboardUrlValue);
   if (!dashboardUrl) {
     throw new Error("Dashboard URL must use http://127.0.0.1 or http://localhost");
   }
-  const response = await fetch(`${dashboardUrl}${path}`, {
+  const response = await fetch(authenticatedLocalUrl(dashboardUrl, path), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -55,7 +80,9 @@ async function getLocal(dashboardUrlValue, path) {
   if (!dashboardUrl) {
     throw new Error("Dashboard URL must use http://127.0.0.1 or http://localhost");
   }
-  const response = await fetch(`${dashboardUrl}${path}`, { method: "GET" });
+  const response = await fetch(authenticatedLocalUrl(dashboardUrl, path), {
+    method: "GET",
+  });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(body.error || `Dashboard returned HTTP ${response.status}`);
