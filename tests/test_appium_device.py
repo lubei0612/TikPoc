@@ -15,7 +15,6 @@ from tikpoc.device import (
     ProfileIdentityMismatch,
     ProfilePermanentlyUnavailable,
     _favorite_pixel_state,
-    _terminal_profile_marker,
 )
 from tikpoc.models import ProfileMetrics
 from tikpoc.profile_parser import parse_profile_username
@@ -771,28 +770,6 @@ def test_video_unavailable_message_is_not_terminal_profile_evidence() -> None:
     with pytest.raises(ValueError) as captured:
         device.confirm_profile_identity(target)
     assert not isinstance(captured.value, ProfilePermanentlyUnavailable)
-
-
-def test_missing_account_heading_with_error_companion_is_terminal() -> None:
-    source = (
-        '<hierarchy><node text="Couldn\'t find this account" '
-        'resource-id="com.zhiliaoapp.musically:id/xcn" />'
-        '<node text="Try searching for another account" '
-        'resource-id="com.zhiliaoapp.musically:id/message_tv" /></hierarchy>'
-    )
-
-    assert _terminal_profile_marker(source) == "couldn't find this account"
-
-
-def test_localized_terminal_heading_with_error_companion_is_terminal() -> None:
-    source = (
-        '<hierarchy><node text="账号已注销" '
-        'resource-id="com.zhiliaoapp.musically:id/xcn" />'
-        '<node text="该账号已不可用" '
-        'resource-id="com.zhiliaoapp.musically:id/message_tv" /></hierarchy>'
-    )
-
-    assert _terminal_profile_marker(source) == "账号已注销"
 
 
 def test_username_fallback_preserves_terminal_profile_exception() -> None:

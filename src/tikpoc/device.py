@@ -99,19 +99,8 @@ def _terminal_profile_marker(source: str) -> str:
         for value in (text, description)
         if value
     }
-    heading_texts = {
-        value
-        for resource_id, text, description in nodes
-        if resource_id.endswith(":id/xcn")
-        for value in (text, description)
-        if value
-    }
     marker = next(
-        (
-            marker
-            for marker in TERMINAL_PROFILE_MARKERS[2:]
-            if marker in message_texts or (message_texts and marker in heading_texts)
-        ),
+        (marker for marker in TERMINAL_PROFILE_MARKERS[2:] if marker in message_texts),
         "",
     )
     if marker:
