@@ -538,3 +538,18 @@ test("starting monitoring refreshes reused observer pages once", async () => {
   assert.deepEqual(run.createdUrls, []);
   assert.deepEqual(run.reloadedTabIds, [10, 11]);
 });
+
+test("concurrent monitoring recovery creates one observer pair", async () => {
+  const run = monitoringHarness();
+
+  const responses = await Promise.all([
+    run.setMonitoring(true),
+    run.setMonitoring(true),
+  ]);
+
+  assert.equal(responses.every(({ ok }) => ok), true);
+  assert.deepEqual(run.createdUrls, [
+    "https://www.tiktok.com/",
+    "https://www.tiktok.com/messages",
+  ]);
+});

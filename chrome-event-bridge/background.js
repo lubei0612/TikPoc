@@ -7,6 +7,7 @@ const TRUSTED_SEND = "TIKPOC_TRUSTED_SEND";
 const SET_MONITORING = "TIKPOC_SET_MONITORING";
 const SETTINGS_KEY = "tikpocSettings";
 const trustedSendQueues = new Map();
+let monitoringTabsQueue = Promise.resolve();
 const POST_ROUTES = new Map([
   [REPORT_EVENT, "/api/browser-events"],
   ["TIKPOC_DM_PLAN", "/api/browser-dm/reply-plan"],
@@ -185,7 +186,7 @@ function isTikTokObserverTab(tab) {
   return url.origin === "https://www.tiktok.com" && !isMessagesTab(tab);
 }
 
-async function ensureMonitoringTabs({ refreshExisting = false } = {}) {
+async function ensureMonitoringTabsOnce({ refreshExisting = false } = {}) {
   if (!chrome.tabs || typeof chrome.tabs.query !== "function" ||
       typeof chrome.tabs.create !== "function") {
     throw new Error("Chrome tab management is unavailable");
@@ -207,6 +208,15 @@ async function ensureMonitoringTabs({ refreshExisting = false } = {}) {
     await chrome.tabs.reload(messagesTab.id);
   }
   return created;
+}
+
+function ensureMonitoringTabs(options = {}) {
+  const run = monitoringTabsQueue.then(
+    () => ensureMonitoringTabsOnce(options),
+    () => ensureMonitoringTabsOnce(options),
+  );
+  monitoringTabsQueue = run.catch(() => {});
+  return run;
 }
 
 async function setAccountAutomation(settings, enabled) {
