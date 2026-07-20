@@ -86,3 +86,17 @@ metrics as an inaccessible trace.
 - Compare throughput, identity mean/P90/max, deferred errors, uncertain actions,
   identity mismatches, quota integrity, worker health, and proxy health with the
   accepted build. Revert if stability regresses.
+
+## Task 9: Correct Zero-Post Eligibility
+
+- Add a failing adapter test for a public Profile whose parsed hierarchy reports
+  zero posts while semantic post containers are visible.
+- Use one semantic post query only for zero-post profiles whose following count
+  is greater than followers, and cache the returned elements for video opening.
+- Keep genuinely empty profiles ineligible and preserve private/inaccessible
+  behavior.
+- Run adapter, rule, worker, full regression, Ruff, and diff checks.
+- Reclassify only pending work through fresh observations; do not rewrite prior
+  confirmed visits or action evidence.
+- Run a six-device canary and verify newly observed qualifying profiles receive
+  planned interactions rather than `insufficient_posts` trace-only plans.

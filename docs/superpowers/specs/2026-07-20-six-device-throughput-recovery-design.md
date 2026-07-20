@@ -158,3 +158,18 @@ Commit `bfda6d3` restores the accepted 30-second default. Do not reapply the
 20-second global command timeout. The accepted semantic-action and semantic-post
 optimizations remain in place, and production resumes from the same durable
 round after regression verification.
+
+## Eligibility Correction: Semantic Post Fallback
+
+The current approved rule accepts a public profile when `following > followers`
+and at least one video is visible. Some current TikTok profile hierarchies retain
+the username and statistics but omit the legacy `cover` nodes, causing visible
+video grids to be persisted with `post_count=0` and incorrectly completed as
+`insufficient_posts` trace-only visits.
+
+When parsed metrics report zero posts and following is greater than followers,
+query the current Profile's semantic post-container elements once. If at least
+one is visible, use that count for qualification and retain the same element
+tuple for deterministic video selection and click. A genuinely empty result
+remains `insufficient_posts`. Do not infer videos from coordinates or fabricate
+a count when neither the hierarchy nor semantic containers provide evidence.
