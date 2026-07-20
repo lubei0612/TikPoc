@@ -190,6 +190,13 @@
     return Boolean(value && typeof value === "object" && value.version === 2);
   }
 
+  function followerScanPhase({ baselineReady, followbackEnabled }) {
+    if (!baselineReady) {
+      return "baseline";
+    }
+    return followbackEnabled ? "action" : "observe";
+  }
+
   function shouldEstablishFollowerBaseline({
     candidateCount,
     activityOpenedAt,
@@ -257,6 +264,7 @@
     createCoalescingRunner,
     extractFollowerEventId,
     followerBaselineReady,
+    followerScanPhase,
     followButtonState,
     isFollowerNotification,
     installContinuousTriggers,

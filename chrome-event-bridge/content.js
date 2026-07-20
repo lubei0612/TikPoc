@@ -400,11 +400,7 @@
           bindingResult,
         ),
       });
-      if (
-        !core.browserFeatureEnabled(settings, "browserFollowbackEnabled") ||
-        !settings.deviceId ||
-        !settings.dashboardUrl
-      ) {
+      if (!settings.deviceId || !settings.dashboardUrl) {
         return;
       }
       if (bindingResult.state !== "ready") {
@@ -422,7 +418,14 @@
         .filter(visible)
         .slice(-600);
       const candidates = links.map(candidateFromLink).filter(Boolean);
-      if (!core.followerBaselineReady(baselines[settings.accountId])) {
+      const scanPhase = core.followerScanPhase({
+        baselineReady: core.followerBaselineReady(baselines[settings.accountId]),
+        followbackEnabled: core.browserFeatureEnabled(
+          settings,
+          "browserFollowbackEnabled",
+        ),
+      });
+      if (scanPhase === "baseline") {
         if (core.shouldEstablishFollowerBaseline({
           candidateCount: candidates.length,
           activityOpenedAt,
@@ -430,6 +433,9 @@
         })) {
           await establishBaseline(boundSettings, candidates, processed, baselines);
         }
+        return;
+      }
+      if (scanPhase !== "action") {
         return;
       }
       for (const candidate of candidates) {

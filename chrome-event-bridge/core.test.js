@@ -237,3 +237,18 @@ test("follower baseline waits for rows or a stable empty panel", () => {
     now: 60_000,
   }), false);
 });
+
+test("disabled followback still establishes a baseline before staying read-only", () => {
+  assert.equal(core.followerScanPhase({
+    baselineReady: false,
+    followbackEnabled: false,
+  }), "baseline");
+  assert.equal(core.followerScanPhase({
+    baselineReady: true,
+    followbackEnabled: false,
+  }), "observe");
+  assert.equal(core.followerScanPhase({
+    baselineReady: true,
+    followbackEnabled: true,
+  }), "action");
+});
