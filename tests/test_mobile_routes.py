@@ -23,7 +23,6 @@ def test_adb_router_opens_stable_profile_with_warm_activity() -> None:
         "shell",
         "am",
         "start",
-        "-W",
         "-a",
         "android.intent.action.VIEW",
         "-d",

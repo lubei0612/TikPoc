@@ -49,7 +49,7 @@ def create_driver(appium_url: str, udid: str, *, command_timeout: int = 30):
         options=options,
         client_config=AppiumClientConfig(appium_url, timeout=command_timeout),
     )
-    driver.update_settings({"waitForIdleTimeout": 0})
+    driver.update_settings({"ignoreUnimportantViews": True, "waitForIdleTimeout": 0})
     return driver
 
 

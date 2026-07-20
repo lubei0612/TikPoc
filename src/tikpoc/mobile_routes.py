@@ -38,7 +38,6 @@ class AdbProfileRouter:
             "shell",
             "am",
             "start",
-            "-W",
             "-a",
             "android.intent.action.VIEW",
             "-d",

@@ -29,7 +29,10 @@ def test_create_driver_sets_a_hard_http_command_timeout(monkeypatch) -> None:
     assert captured["command_executor"] == "http://127.0.0.1:4723"
     assert captured["client_config"].timeout == 17
     assert "appium:systemPort" not in captured["capabilities"]
-    assert captured["settings"] == {"waitForIdleTimeout": 0}
+    assert captured["settings"] == {
+        "ignoreUnimportantViews": True,
+        "waitForIdleTimeout": 0,
+    }
 
 
 def test_create_driver_assigns_unique_myt_parallel_ports(monkeypatch) -> None:
