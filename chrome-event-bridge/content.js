@@ -197,6 +197,7 @@
     };
     let actionIdentity = null;
     let actionState = null;
+    let actionReason = "";
     try {
       if (candidate.state === "completed") {
         await report(settings, "followback_completed", key, {
@@ -256,6 +257,7 @@
         : "completed";
       const completed = state === "completed";
       actionState = completed ? "completed" : "uncertain";
+      actionReason = completed ? "" : "followback_unresolved";
       await report(
         settings,
         completed ? "followback_completed" : "followback_unresolved",
@@ -269,6 +271,7 @@
       });
     } catch (_error) {
       actionState = actionIdentity ? "uncertain" : null;
+      actionReason = actionIdentity ? "followback_unresolved" : "";
       const attempts = Number(processed[key]?.attempts || 0) + 1;
       await saveProcessed(processed, key, {
         status: "unresolved",
@@ -281,7 +284,11 @@
           await sendMessage({
             type: "TIKPOC_ACTION_RESULT",
             dashboardUrl: settings.dashboardUrl,
-            body: { ...actionIdentity, state: actionState },
+            body: {
+              ...actionIdentity,
+              state: actionState,
+              reason: actionReason,
+            },
           });
         } catch (_error) {
           // The server lease remains busy until expiry when result delivery fails.

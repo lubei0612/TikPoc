@@ -13,6 +13,9 @@ const leadPayload = (selected: object | null = null) => ({
       enabled: true,
       ai_enabled: true,
       followback_enabled: true,
+      followback_circuit_state: "closed",
+      followback_circuit_reason: "",
+      followback_cooldown_until_ms: 0,
       private_channel_configured: true,
       model_configured: true,
     },
@@ -151,6 +154,23 @@ it("keeps AI and follow-back controls isolated by account and page health", asyn
     "/api/accounts/account-01/followback-enable",
     expect.objectContaining({ method: "POST" }),
   ));
+});
+
+it("shows follow-back cooldown without disabling AI replies", async () => {
+  const payload = leadPayload();
+  payload.accounts[0] = {
+    ...payload.accounts[0],
+    followback_circuit_state: "cooldown",
+    followback_circuit_reason: "platform_follow_reverted",
+    followback_cooldown_until_ms: Date.now() + 60_000,
+  };
+  vi.spyOn(globalThis, "fetch").mockImplementation(() => jsonResponse(payload));
+
+  render(<InboxView />);
+
+  expect(await screen.findByText(/回关冷却中/)).toBeVisible();
+  expect(screen.getByRole("checkbox", { name: "account-01 AI 自动回复" })).toBeEnabled();
+  expect(screen.getByRole("checkbox", { name: "account-01 自动回关" })).toBeDisabled();
 });
 
 it("creates an immutable manual plan and records sale amounts in minor units", async () => {

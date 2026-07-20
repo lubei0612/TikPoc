@@ -19,6 +19,17 @@ const errorText = (reason: unknown) => localizeError(reason, "线索操作失败
 type ScopedText = { key: string; text: string };
 type ScopedAction = { key: string; name: string };
 
+const followbackCircuitText = (state: string, cooldownUntilMs: number) => {
+  if (state === "cooldown") {
+    const expiry = cooldownUntilMs > 0
+      ? new Date(cooldownUntilMs).toLocaleString()
+      : "等待恢复";
+    return `回关冷却中 · ${expiry}`;
+  }
+  if (state === "canary") return "等待单次验证";
+  return "回关正常";
+};
+
 export function InboxView() {
   const [snapshot, setSnapshot] = useState<LeadInboxSnapshot | null>(null);
   const [selectedConversation, setSelectedConversation] = useState<LeadConversation | null>(null);
@@ -141,11 +152,16 @@ export function InboxView() {
           {snapshot.accounts.map((item) => {
             const activityState = browserState(item.account_id, "activity");
             const messagesState = browserState(item.account_id, "messages");
+            const circuitState = item.followback_circuit_state ?? "closed";
+            const circuitText = followbackCircuitText(
+              circuitState,
+              item.followback_cooldown_until_ms ?? 0,
+            );
             return <div className="account-control" key={item.account_id}>
               <strong>{item.account_id}</strong>
               <small>{item.private_channel_configured ? "私域已就绪" : "私域未配置"}</small>
               <label><span>AI 回复<small>{localizeValue(messagesState)}</small></span><input aria-label={`${item.account_id} AI 自动回复`} type="checkbox" checked={item.ai_enabled} disabled={!item.enabled || messagesState !== "ready" || action?.key === `account:${item.account_id}:ai`} onChange={(event) => toggleAccount(item.account_id, "ai", event.target.checked)} /></label>
-              <label><span>自动回关<small>{localizeValue(activityState)}</small></span><input aria-label={`${item.account_id} 自动回关`} type="checkbox" checked={item.followback_enabled} disabled={!item.enabled || activityState !== "ready" || action?.key === `account:${item.account_id}:followback`} onChange={(event) => toggleAccount(item.account_id, "followback", event.target.checked)} /></label>
+              <label><span>自动回关<small>{circuitText} · {localizeValue(activityState)}</small></span><input aria-label={`${item.account_id} 自动回关`} type="checkbox" checked={item.followback_enabled} disabled={!item.enabled || activityState !== "ready" || circuitState === "cooldown" || action?.key === `account:${item.account_id}:followback`} onChange={(event) => toggleAccount(item.account_id, "followback", event.target.checked)} /></label>
             </div>;
           })}
         </div>

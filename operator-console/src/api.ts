@@ -138,6 +138,9 @@ export interface LeadAccount {
   enabled: boolean;
   ai_enabled: boolean;
   followback_enabled: boolean;
+  followback_circuit_state: "closed" | "cooldown" | "canary";
+  followback_circuit_reason: string;
+  followback_cooldown_until_ms: number;
   private_channel_configured: boolean;
   model_configured: boolean;
 }
