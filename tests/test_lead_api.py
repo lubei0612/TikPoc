@@ -603,6 +603,122 @@ def test_account_setting_command_rejects_changed_enabled_flag(tmp_path: Path) ->
     )
 
 
+def test_followback_cooldown_blocks_claim_and_preserves_ai(tmp_path: Path) -> None:
+    app, database = _seeded_app(tmp_path)
+    client = TestClient(app)
+    command = {
+        "command_id": "cooldown-01",
+        "reason": "platform_follow_reverted",
+        "cooldown_seconds": 60,
+    }
+
+    first = client.post("/api/accounts/account-01/followback-cooldown", json=command)
+    duplicate = client.post(
+        "/api/accounts/account-01/followback-cooldown", json=command
+    )
+
+    assert first.status_code == 200
+    assert duplicate.json() == first.json()
+    assert first.json()["followback_circuit_state"] == "cooldown"
+    assert first.json()["followback_cooldown_until_ms"] == 65_000
+
+    claim = client.post(
+        "/api/browser-actions/claim",
+        headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
+        json={
+            **_browser_identity(),
+            "action_type": "followback",
+            "action_key": "follow:new",
+            "owner_id": "activity-tab",
+            "timestamp_ms": 5_000,
+            "lease_seconds": 30,
+        },
+    )
+    assert claim.json() == {"claimed": False, "circuit_state": "cooldown"}
+    readiness = client.get("/api/leads").json()["accounts"][0]
+    assert readiness["ai_enabled"] is True
+    assert readiness["followback_circuit_state"] == "cooldown"
+    assert readiness["followback_circuit_reason"] == "platform_follow_reverted"
+    assert readiness["followback_cooldown_until_ms"] == 65_000
+    bindings = client.get(
+        "/api/browser-bindings",
+        headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
+    ).json()["accounts"]
+    binding = next(row for row in bindings if row["account_id"] == "account-01")
+    assert binding["followback_circuit_state"] == "cooldown"
+    assert binding["followback_circuit_reason"] == "platform_follow_reverted"
+    assert binding["followback_cooldown_until_ms"] == 65_000
+    assert (
+        database.account_operator_settings(
+            "account-01", default_ai_enabled=True, default_followback_enabled=True
+        )["followback_enabled"]
+        is True
+    )
+
+
+def test_followback_enable_conflicts_during_active_cooldown(tmp_path: Path) -> None:
+    app, _database = _seeded_app(tmp_path)
+    client = TestClient(app)
+    client.post(
+        "/api/accounts/account-01/followback-cooldown",
+        json={
+            "command_id": "cooldown-01",
+            "reason": "platform_follow_reverted",
+            "cooldown_seconds": 60,
+        },
+    )
+
+    response = client.post(
+        "/api/accounts/account-01/followback-enable",
+        json={"command_id": "follow-on", "enabled": True},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "error": "followback_cooldown_active",
+        "cooldown_until_ms": 65_000,
+    }
+
+
+def test_expired_followback_cooldown_admits_one_canary_claim(tmp_path: Path) -> None:
+    app, database = _seeded_app(tmp_path)
+    database.open_browser_action_circuit(
+        "account-01",
+        "followback",
+        reason="platform_follow_reverted",
+        opened_at_ms=1_000,
+        cooldown_until_ms=5_000,
+    )
+    client = TestClient(app)
+    headers = {"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"}
+
+    first = client.post(
+        "/api/browser-actions/claim",
+        headers=headers,
+        json={
+            **_browser_identity(),
+            "action_type": "followback",
+            "action_key": "follow:canary-one",
+            "owner_id": "activity-tab-one",
+            "timestamp_ms": 5_000,
+        },
+    )
+    second = client.post(
+        "/api/browser-actions/claim",
+        headers=headers,
+        json={
+            **_browser_identity(),
+            "action_type": "followback",
+            "action_key": "follow:canary-two",
+            "owner_id": "activity-tab-two",
+            "timestamp_ms": 5_001,
+        },
+    )
+
+    assert first.json() == {"claimed": True}
+    assert second.json() == {"claimed": False, "circuit_state": "canary"}
+
+
 def test_disabled_account_readiness_masks_persisted_operator_switches_and_blocks_claims(
     tmp_path: Path,
 ) -> None:

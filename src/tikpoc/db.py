@@ -2254,6 +2254,76 @@ class Database:
             )
             return result
 
+    def record_followback_cooldown_command(
+        self,
+        account_id: str,
+        command_id: str,
+        *,
+        reason: str,
+        cooldown_seconds: int,
+        now_ms: int,
+    ) -> dict[str, object]:
+        _require_identity(account_id, command_id, reason)
+        if len(reason) > 100:
+            raise ValueError("browser action circuit reason is too long")
+        if not 60 <= int(cooldown_seconds) <= 604_800:
+            raise ValueError("invalid followback cooldown duration")
+        if int(now_ms) < 0:
+            raise ValueError("browser action circuit timestamp must be nonnegative")
+        request: dict[str, object] = {
+            "reason": reason,
+            "cooldown_seconds": int(cooldown_seconds),
+        }
+        cooldown_until_ms = int(now_ms) + int(cooldown_seconds) * 1_000
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            stored = self._stored_operator_result(
+                connection,
+                "followback_cooldown",
+                account_id,
+                "",
+                command_id,
+                request,
+            )
+            if stored is not None:
+                return stored
+            connection.execute(
+                """
+                INSERT INTO browser_action_circuits(
+                    account_id, action_type, state, reason, opened_at_ms,
+                    cooldown_until_ms, canary_action_key, updated_at_ms
+                ) VALUES (?, 'followback', 'cooldown', ?, ?, ?, '', ?)
+                ON CONFLICT(account_id, action_type) DO UPDATE SET
+                    state='cooldown', reason=excluded.reason,
+                    opened_at_ms=excluded.opened_at_ms,
+                    cooldown_until_ms=excluded.cooldown_until_ms,
+                    canary_action_key='', updated_at_ms=excluded.updated_at_ms
+                """,
+                (
+                    account_id,
+                    reason,
+                    int(now_ms),
+                    cooldown_until_ms,
+                    int(now_ms),
+                ),
+            )
+            result: dict[str, object] = {
+                "account_id": account_id,
+                "followback_circuit_state": "cooldown",
+                "followback_circuit_reason": reason,
+                "followback_cooldown_until_ms": cooldown_until_ms,
+            }
+            self._store_operator_result(
+                connection,
+                "followback_cooldown",
+                account_id,
+                "",
+                command_id,
+                request,
+                result,
+            )
+            return result
+
     def lead_conversations(
         self, *, account_ids: tuple[str, ...], limit: int = 20, now_ms: int
     ) -> list[dict[str, object]]:

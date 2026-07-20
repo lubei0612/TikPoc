@@ -1762,6 +1762,9 @@ def test_browser_bindings_expose_only_nonsecret_profile_mapping(
                 "browser_followback_enabled": True,
                 "browser_dm_enabled": True,
                 "binding_ready": True,
+                "followback_circuit_state": "closed",
+                "followback_circuit_reason": "",
+                "followback_cooldown_until_ms": 0,
             },
             {
                 "account_id": "account-02",
@@ -1772,6 +1775,9 @@ def test_browser_bindings_expose_only_nonsecret_profile_mapping(
                 "browser_followback_enabled": False,
                 "browser_dm_enabled": False,
                 "binding_ready": False,
+                "followback_circuit_state": "closed",
+                "followback_circuit_reason": "",
+                "followback_cooldown_until_ms": 0,
             },
         ]
     }

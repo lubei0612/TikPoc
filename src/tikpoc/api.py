@@ -31,6 +31,7 @@ from .api_models import (
     BrowserReplyResultRequest,
     BrowserWelcomeResultRequest,
     DeviceEventRequest,
+    FollowbackCooldownCommand,
     LeadCommand,
     LeadSaleCommand,
     LeadTakeoverCommand,
@@ -368,6 +369,9 @@ def create_app(
                     account.enabled and account.browser_followback_enabled
                 ),
             )
+            circuit = database.browser_action_circuit(
+                account.account_id, "followback", now_ms=int(clock() * 1_000)
+            )
             return {
                 "account_id": account.account_id,
                 "device_id": account.device_id,
@@ -379,6 +383,9 @@ def create_app(
                 ),
                 "browser_dm_enabled": bool(account.enabled and settings["ai_enabled"]),
                 "binding_ready": bool(account.expected_tiktok_username),
+                "followback_circuit_state": circuit["state"],
+                "followback_circuit_reason": circuit["reason"],
+                "followback_cooldown_until_ms": circuit["cooldown_until_ms"],
             }
 
         return _json({"accounts": [binding_payload(account) for account in accounts]})
@@ -541,14 +548,35 @@ def create_app(
                         body.account_id, follower_username
                     ):
                         return _json({"claimed": False})
-                claimed = database.claim_browser_action(
-                    body.account_id,
-                    body.action_type,
-                    body.action_key,
-                    body.owner_id,
-                    body.timestamp_ms,
-                    body.lease_seconds,
-                )
+                    claimed = database.claim_browser_followback_action(
+                        body.account_id,
+                        body.action_key,
+                        body.owner_id,
+                        body.timestamp_ms,
+                        body.lease_seconds,
+                    )
+                    if not claimed:
+                        circuit = database.browser_action_circuit(
+                            body.account_id,
+                            "followback",
+                            now_ms=body.timestamp_ms,
+                        )
+                        if circuit["state"] != "closed":
+                            return _json(
+                                {
+                                    "claimed": False,
+                                    "circuit_state": circuit["state"],
+                                }
+                            )
+                else:
+                    claimed = database.claim_browser_action(
+                        body.account_id,
+                        body.action_type,
+                        body.action_key,
+                        body.owner_id,
+                        body.timestamp_ms,
+                        body.lease_seconds,
+                    )
         except BrowserBindingConflict as error:
             return _json({"error": error.error_code}, 409)
         except (KeyError, TypeError, ValueError, ValidationError):
@@ -562,13 +590,23 @@ def create_app(
                 await _json_object(request)
             )
             _browser_account(registry, body)
-            recorded = database.finish_browser_action(
-                body.account_id,
-                body.action_type,
-                body.action_key,
-                body.owner_id,
-                body.state,
-            )
+            if body.action_type == "followback":
+                recorded = database.finish_browser_followback_action(
+                    body.account_id,
+                    body.action_key,
+                    body.owner_id,
+                    body.state,
+                    reason=body.reason,
+                    now_ms=int(clock() * 1_000),
+                )
+            else:
+                recorded = database.finish_browser_action(
+                    body.account_id,
+                    body.action_type,
+                    body.action_key,
+                    body.owner_id,
+                    body.state,
+                )
             if (
                 recorded
                 and body.action_type == "followback"
@@ -807,6 +845,9 @@ def create_app(
             ),
         )
         runtime_model = runtime_settings.provider_credentials()
+        circuit = database.browser_action_circuit(
+            account.account_id, "followback", now_ms=int(clock() * 1_000)
+        )
         return {
             "account_id": account.account_id,
             "device_id": account.device_id,
@@ -816,6 +857,9 @@ def create_app(
             "followback_enabled": bool(
                 account.enabled and settings["followback_enabled"]
             ),
+            "followback_circuit_state": circuit["state"],
+            "followback_circuit_reason": circuit["reason"],
+            "followback_cooldown_until_ms": circuit["cooldown_until_ms"],
             "private_channel_configured": any(
                 value.strip()
                 for value in (
@@ -1107,6 +1151,18 @@ def create_app(
             account = operator_account(account_id)
         except KeyError:
             return _json({"error": "web account not found"}, 404)
+        if setting == "followback" and body.enabled:
+            circuit = database.browser_action_circuit(
+                account_id, "followback", now_ms=int(clock() * 1_000)
+            )
+            if circuit["state"] == "cooldown":
+                return _json(
+                    {
+                        "error": "followback_cooldown_active",
+                        "cooldown_until_ms": circuit["cooldown_until_ms"],
+                    },
+                    409,
+                )
         try:
             return _json(
                 database.set_account_operator_setting(
@@ -1132,6 +1188,28 @@ def create_app(
         account_id: str, body: AccountEnableCommand
     ) -> JSONResponse:
         return update_account_setting(account_id, body, setting="followback")
+
+    @app.post("/api/accounts/{account_id}/followback-cooldown")
+    def account_followback_cooldown(
+        account_id: str, body: FollowbackCooldownCommand
+    ) -> JSONResponse:
+        try:
+            operator_account(account_id)
+            return _json(
+                database.record_followback_cooldown_command(
+                    account_id,
+                    body.command_id,
+                    reason=body.reason,
+                    cooldown_seconds=body.cooldown_seconds,
+                    now_ms=int(clock() * 1_000),
+                )
+            )
+        except KeyError:
+            return _json({"error": "web account not found"}, 404)
+        except OperatorCommandConflict as error:
+            return _json({"error": str(error)}, 409)
+        except ValueError as error:
+            return _json({"error": str(error)}, 400)
 
     static = Path(__file__).parent / "static"
     console = static / "console"

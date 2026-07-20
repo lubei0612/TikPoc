@@ -76,6 +76,7 @@ class BrowserActionResultRequest(BrowserIdentityRequest):
     action_key: Identifier
     owner_id: Identifier
     state: Identifier
+    reason: Annotated[str, StringConstraints(max_length=100)] = ""
 
 
 class BrowserHealthRequest(BrowserIdentityRequest):
@@ -157,6 +158,14 @@ class LeadSaleCommand(LeadCommand):
 
 class AccountEnableCommand(LeadCommand):
     enabled: bool
+
+
+class FollowbackCooldownCommand(LeadCommand):
+    reason: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
+    ]
+    cooldown_seconds: int = Field(default=86_400, ge=60, le=604_800)
 
 
 class ProviderSettingsCommand(ApiRequest):
