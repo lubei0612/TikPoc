@@ -147,3 +147,37 @@ test("automatic binding is the default and manual mode is explicit", () => {
   assert.equal(optionsCore.bindingModeLabel({}), "自动识别");
   assert.equal(optionsCore.bindingModeLabel({ bindingMode: "manual" }), "人工绑定");
 });
+
+test("new Profiles receive usable automation defaults", () => {
+  assert.deepEqual(optionsCore.defaultSettings({}), {
+    dashboardUrl: "http://127.0.0.1:8766",
+    enabled: true,
+    browserFollowbackEnabled: true,
+    browserDmEnabled: true,
+    autoOpenActivity: true,
+    bindingMode: "auto",
+    monitoringStarted: false,
+  });
+});
+
+test("usable defaults preserve explicit operator choices", () => {
+  assert.deepEqual(optionsCore.defaultSettings({
+    dashboardUrl: "http://localhost:9000",
+    enabled: false,
+    browserFollowbackEnabled: false,
+    browserDmEnabled: false,
+    autoOpenActivity: false,
+    bindingMode: "manual",
+    monitoringStarted: true,
+    accountId: "account-01",
+  }), {
+    dashboardUrl: "http://localhost:9000",
+    enabled: false,
+    browserFollowbackEnabled: false,
+    browserDmEnabled: false,
+    autoOpenActivity: false,
+    bindingMode: "manual",
+    monitoringStarted: true,
+    accountId: "account-01",
+  });
+});

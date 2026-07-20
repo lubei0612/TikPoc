@@ -256,6 +256,8 @@ async function setMonitoring(message) {
     monitoringStarted: started,
     browserFollowbackEnabled: started,
     browserDmEnabled: started,
+    autoOpenActivity: current.autoOpenActivity !== false,
+    bindingMode: current.bindingMode === "manual" ? "manual" : "auto",
   };
   await storeSettings(settings);
   if (started) {

@@ -14,7 +14,7 @@ chrome.storage.local.get([
   "tikpocBindingStatus",
   "tikpocAutoConnectStatus",
 ], (stored) => {
-  const settings = stored.tikpocSettings || {};
+  const settings = TikPocOptionsCore.defaultSettings(stored.tikpocSettings || {});
   popupSettings = settings;
   const binding = TikPocOptionsCore.popupBinding(settings, stored.tikpocBindingStatus);
   const state = document.querySelector("#state");

@@ -507,6 +507,8 @@ test("one-click monitoring opens missing pages and enables the bound account", a
   assert.equal(response.ok, true);
   assert.equal(run.settings.monitoringStarted, true);
   assert.equal(run.settings.enabled, true);
+  assert.equal(run.settings.autoOpenActivity, true);
+  assert.equal(run.settings.bindingMode, "auto");
   assert.deepEqual(run.createdUrls, [
     "https://www.tiktok.com/",
     "https://www.tiktok.com/messages",

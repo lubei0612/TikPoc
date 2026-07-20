@@ -98,19 +98,21 @@ function loadBindings(dashboardUrl, selectedAccountId = "") {
 }
 
 chrome.storage.local.get([SETTINGS_KEY, "tikpocAutoConnectStatus"], (stored) => {
-  const settings = stored[SETTINGS_KEY] || {};
+  const rawSettings = stored[SETTINGS_KEY] || {};
+  const settings = TikPocOptionsCore.defaultSettings(rawSettings);
+  if (JSON.stringify(settings) !== JSON.stringify(rawSettings)) {
+    chrome.storage.local.set({ [SETTINGS_KEY]: settings });
+  }
   currentSettings = settings;
   autoConnectStatus = stored.tikpocAutoConnectStatus || null;
   lastConnectionTest = settings.lastConnectionTest || null;
   document.querySelector("#dashboard-url").value =
     settings.dashboardUrl || "http://127.0.0.1:8766";
-  document.querySelector("#enabled").checked = Boolean(settings.enabled);
+  document.querySelector("#enabled").checked = settings.enabled;
   document.querySelector("#browser-followback-enabled").checked =
     settings.browserFollowbackEnabled !== false;
   document.querySelector("#browser-dm-enabled").checked = settings.browserDmEnabled !== false;
-  document.querySelector("#auto-open-activity").checked = Boolean(
-    settings.autoOpenActivity,
-  );
+  document.querySelector("#auto-open-activity").checked = settings.autoOpenActivity;
   autoBindingEnabled.checked = TikPocOptionsCore.bindingMode(settings) === "auto";
   updateBindingDetail();
   if (settings.lastConnectionTest?.ok) {

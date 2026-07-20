@@ -17,6 +17,20 @@
     return bindingMode(settings) === "manual" ? "人工绑定" : "自动识别";
   }
 
+  function defaultSettings(settings) {
+    const current = settings || {};
+    return {
+      ...current,
+      dashboardUrl: current.dashboardUrl || "http://127.0.0.1:8766",
+      enabled: current.enabled !== false,
+      browserFollowbackEnabled: current.browserFollowbackEnabled !== false,
+      browserDmEnabled: current.browserDmEnabled !== false,
+      autoOpenActivity: current.autoOpenActivity !== false,
+      bindingMode: bindingMode(current),
+      monitoringStarted: current.monitoringStarted === true,
+    };
+  }
+
   function settingsForBinding(settings, binding) {
     return {
       ...settings,
@@ -108,6 +122,7 @@
     bindingObservation,
     bindingStateLabel,
     canObserveBinding,
+    defaultSettings,
     mergeRuntimeSettings,
     popupBinding,
     requiresRebindConfirmation,
