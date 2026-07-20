@@ -1,5 +1,6 @@
 from tests.test_profile_parser import PROFILE_XML
 import pytest
+from selenium.common.exceptions import StaleElementReferenceException
 from tikpoc.acquisition_models import (
     ActionResult,
     OutcomeKind,
@@ -312,6 +313,18 @@ class BoundedVideoDriver(CachedProfileObservationDriver):
         if "Share video" in value:
             return [FakeElement()]
         return super().find_elements(by, value)
+
+
+class MissingVideoControlDriver(BoundedVideoDriver):
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if "Share video" in value:
+            return []
+        return super().find_elements(by, value)
+
+
+class StaleClickElement(FakeElement):
+    def click(self) -> None:
+        raise StaleElementReferenceException("cached post became stale")
 
 
 class CurrentPostContainerDriver(FakeDriver):
@@ -818,8 +831,55 @@ def test_cached_profile_opens_and_verifies_video_with_semantic_elements() -> Non
     device.open_and_confirm_video("2")
 
     assert driver.posts[2].clicked is True
-    assert driver.post_queries == 2
+    assert driver.post_queries == 1
     assert driver.page_source_reads == 1
+
+
+def test_cached_post_stale_click_is_an_explicit_failure() -> None:
+    driver = BoundedVideoDriver()
+    driver.posts[2] = StaleClickElement()
+    device = AppiumTikTokDevice(driver, action_timeout=0)
+
+    assert device.list_video_keys() == ("0", "1", "2", "3")
+
+    with pytest.raises(
+        StaleElementReferenceException, match="cached post became stale"
+    ):
+        device.open_and_confirm_video("2")
+
+
+def test_cached_post_requires_visible_share_control_after_click() -> None:
+    driver = MissingVideoControlDriver()
+    device = AppiumTikTokDevice(driver, action_timeout=0)
+
+    assert device.list_video_keys() == ("0", "1", "2", "3")
+
+    with pytest.raises(RuntimeError, match="video controls did not become visible"):
+        device.open_and_confirm_video("2")
+
+
+@pytest.mark.parametrize("invalidate", ["route", "back", "restart", "consume"])
+def test_semantic_post_cache_is_scoped_to_one_profile_action(invalidate: str) -> None:
+    driver = BoundedVideoDriver()
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+    original_posts = driver.posts
+
+    assert device.list_visible_posts() == ("0", "1", "2", "3")
+    replacement_posts = [FakeElement() for _ in range(4)]
+    if invalidate == "route":
+        device.open_profile("sample")
+    elif invalidate == "back":
+        device.return_to_baseline()
+    elif invalidate == "restart":
+        device.restart_app()
+    else:
+        device.open_post("0")
+    driver.posts = replacement_posts
+
+    device.open_post("0")
+
+    assert replacement_posts[0].clicked is True
+    assert original_posts[0].clicked is (invalidate == "consume")
 
 
 def test_opening_video_invalidates_reusable_profile_snapshot() -> None:

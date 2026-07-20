@@ -281,6 +281,33 @@ def test_slow_action_is_deferred_without_false_completion(tmp_path: Path) -> Non
     assert device.diagnostic_calls == 1
 
 
+def test_video_verification_failure_is_durably_deferred(tmp_path: Path) -> None:
+    repository, assignment = _claimed_assignment(tmp_path)
+    device = ScriptedVerifiedDevice(metrics=ProfileMetrics(20, 10, 5))
+
+    def missing_controls(video_key: str) -> None:
+        device.opened_videos.append(video_key)
+        raise RuntimeError("video controls did not become visible")
+
+    device.open_and_confirm_video = missing_controls
+    worker = MobileAssignmentWorker(
+        repository,
+        device,
+        device_id="phone-01",
+        owner_id="worker-1",
+        clock_ms=lambda: 1_000,
+        plan_provider=_forced_plan(OutcomeKind.LIKE),
+    )
+
+    worker.run_assignment(assignment)
+
+    stored = repository.assignment(assignment.assignment_id)
+    assert stored.phase is AssignmentPhase.DEFERRED
+    assert stored.last_error_code == "RuntimeError"
+    assert stored.completed_at_ms is None
+    assert repository.round_completion(assignment.round_id).completed == 0
+
+
 def test_visible_unavailable_action_completes_as_trace_fallback(
     tmp_path: Path,
 ) -> None:

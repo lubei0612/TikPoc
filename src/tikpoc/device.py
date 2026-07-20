@@ -131,9 +131,11 @@ class AppiumTikTokDevice:
         self.route_opener = route_opener
         self._profile_source: str | None = None
         self._confirmed_profile_username = ""
+        self._visible_post_elements: tuple[object, ...] | None = None
 
     def _invalidate_profile_source(self) -> None:
         self._profile_source = None
+        self._visible_post_elements = None
 
     def _open_route(self, uri: str) -> None:
         self._invalidate_profile_source()
@@ -211,11 +213,15 @@ class AppiumTikTokDevice:
         raise last_error or ValueError("profile metrics are incomplete")
 
     def list_visible_posts(self) -> tuple[str, ...]:
-        elements = self._post_elements()
+        elements = tuple(self._post_elements())
+        self._visible_post_elements = elements
         return tuple(str(index) for index in range(len(elements)))
 
     def open_post(self, post_id: str) -> None:
-        elements = self._post_elements()
+        elements = self._visible_post_elements
+        self._visible_post_elements = None
+        if elements is None:
+            elements = tuple(self._post_elements())
         index = int(post_id)
         if index < 0 or index >= len(elements):
             raise ValueError(f"post is no longer visible: {post_id}")
