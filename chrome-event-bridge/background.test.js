@@ -4,6 +4,148 @@ const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
+function trustedSendHarness({ holdFirstAttach = false, failCommand = "" } = {}) {
+  let messageListener;
+  const attached = [];
+  const detached = [];
+  const commands = [];
+  let releaseFirstAttach;
+  let attachCount = 0;
+  const firstAttach = new Promise((resolve) => { releaseFirstAttach = resolve; });
+  const context = {
+    URL,
+    Set,
+    Map,
+    chrome: {
+      runtime: {
+        onMessage: { addListener(listener) { messageListener = listener; } },
+        onInstalled: { addListener() {} },
+        onStartup: { addListener() {} },
+        openOptionsPage() {},
+      },
+      alarms: { create() {}, onAlarm: { addListener() {} } },
+      tabs: { query: async () => [], sendMessage: async () => {} },
+      debugger: {
+        async attach(target) {
+          attached.push({ ...target });
+          attachCount += 1;
+          if (holdFirstAttach && attachCount === 1) {
+            await firstAttach;
+          }
+        },
+        async sendCommand(target, method, params) {
+          commands.push({ target: { ...target }, method, params });
+          if (method === failCommand) {
+            throw new Error("command failed");
+          }
+        },
+        async detach(target) { detached.push({ ...target }); },
+      },
+    },
+    async fetch() { throw new Error("unexpected fetch"); },
+  };
+  vm.runInNewContext(
+    fs.readFileSync(path.join(__dirname, "background.js"), "utf8"),
+    context,
+  );
+  function send(message, sender = {
+    url: "https://www.tiktok.com/messages",
+    tab: { id: 42, url: "https://www.tiktok.com/messages" },
+  }) {
+    return new Promise((resolve) => {
+      assert.equal(messageListener(message, sender, resolve), true);
+    });
+  }
+  return {
+    attached,
+    commands,
+    detached,
+    releaseFirstAttach,
+    send,
+  };
+}
+
+test("trusted message input attaches, types, submits, and detaches", async () => {
+  const run = trustedSendHarness();
+
+  const response = await run.send({
+    type: "TIKPOC_TRUSTED_SEND",
+    text: "Thanks for your interest.",
+  });
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.submitted, true);
+  assert.deepEqual(run.attached, [{ tabId: 42 }]);
+  assert.deepEqual(run.commands.map(({ method }) => method), [
+    "Input.dispatchKeyEvent",
+    "Input.dispatchKeyEvent",
+    "Input.dispatchKeyEvent",
+    "Input.dispatchKeyEvent",
+    "Input.insertText",
+    "Input.dispatchKeyEvent",
+    "Input.dispatchKeyEvent",
+  ]);
+  assert.equal(run.commands[4].params.text, "Thanks for your interest.");
+  assert.deepEqual(run.detached, [{ tabId: 42 }]);
+});
+
+test("trusted message input rejects non-Messages senders", async () => {
+  const run = trustedSendHarness();
+
+  const response = await run.send(
+    { type: "TIKPOC_TRUSTED_SEND", text: "Hello" },
+    { url: "https://www.tiktok.com/@buyer", tab: { id: 42 } },
+  );
+
+  assert.equal(response.ok, false);
+  assert.equal(run.attached.length, 0);
+});
+
+test("trusted message input serializes sends per tab", async () => {
+  const run = trustedSendHarness({ holdFirstAttach: true });
+  const first = run.send({ type: "TIKPOC_TRUSTED_SEND", text: "First" });
+  const second = run.send({ type: "TIKPOC_TRUSTED_SEND", text: "Second" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(run.attached.length, 1);
+
+  run.releaseFirstAttach();
+  const responses = await Promise.all([first, second]);
+
+  assert.equal(responses.every(({ ok }) => ok), true);
+  assert.equal(run.attached.length, 2);
+  assert.equal(run.detached.length, 2);
+});
+
+test("trusted message input detaches after a command failure", async () => {
+  const run = trustedSendHarness({ failCommand: "Input.insertText" });
+
+  const response = await run.send({
+    type: "TIKPOC_TRUSTED_SEND",
+    text: "Hello",
+  });
+
+  assert.equal(response.ok, false);
+  assert.deepEqual(run.detached, [{ tabId: 42 }]);
+});
+
+test("trusted message input keeps separate tabs independent", async () => {
+  const run = trustedSendHarness({ holdFirstAttach: true });
+  const first = run.send({ type: "TIKPOC_TRUSTED_SEND", text: "First" });
+  const second = run.send(
+    { type: "TIKPOC_TRUSTED_SEND", text: "Second" },
+    {
+      url: "https://www.tiktok.com/messages",
+      tab: { id: 84, url: "https://www.tiktok.com/messages" },
+    },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(run.attached, [{ tabId: 42 }, { tabId: 84 }]);
+  assert.equal((await second).ok, true);
+  run.releaseFirstAttach();
+  assert.equal((await first).ok, true);
+});
+
 test("browser event transport sends JSON without setting Origin", async () => {
   let messageListener;
   let request;

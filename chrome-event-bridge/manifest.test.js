@@ -26,3 +26,11 @@ test("injects the DM bridge into same-origin Messages frames only", () => {
     "https://www.tiktok.com/business-suite/*",
   ]);
 });
+
+test("grants debugger permission for trusted message input", () => {
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(__dirname, "manifest.json"), "utf8"),
+  );
+
+  assert.ok(manifest.permissions.includes("debugger"));
+});

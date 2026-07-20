@@ -3,7 +3,7 @@
   "name": "TikPoc Event Bridge",
   "version": "0.1.0",
   "description": "Relays TikTok follower events to the local TikPoc dashboard.",
-  "permissions": ["storage", "alarms", "tabs"],
+  "permissions": ["storage", "alarms", "tabs", "debugger"],
   "host_permissions": [
     "http://127.0.0.1/*",
     "http://localhost/*"
