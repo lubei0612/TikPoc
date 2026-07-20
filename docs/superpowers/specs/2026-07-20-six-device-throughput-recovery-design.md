@@ -67,3 +67,23 @@ Promotion requires:
 If the gate passes, continue the same round from its new durable checkpoint. If
 it fails, pause again and use the stage evidence for the next single-variable
 optimization.
+
+## Second Canary: Semantic Action Query Consolidation
+
+The first clean five-minute window after deferred recovery completed 239
+assignments in 394.563 seconds, or 363.4 assignments per device-hour. Route and
+metrics costs fell to roughly 0.5 seconds and single-digit milliseconds, while
+eligible video actions still paid for repeated UiAutomator hierarchy queries.
+Like averaged 10.8 seconds, favorite 24.5 seconds, and repost 25.5 seconds in the
+action stage alone.
+
+Keep semantic controls and visible post-action verification, but query each
+outcome's active and inactive controls with one XPath union. Return both the
+observed state and the reusable inactive control from that query. Execution may
+reuse that control for the click; reconciliation only consumes the state. Every
+post-click poll performs a fresh combined semantic query, so selected/reposted
+state remains the terminal acceptance condition.
+
+Do not use coordinates, cached XML, or an HTTP/Appium command response as action
+confirmation. A missing or ambiguous combined result remains uncertain, and a
+visible repost share surface still distinguishes unavailable from uncertain.

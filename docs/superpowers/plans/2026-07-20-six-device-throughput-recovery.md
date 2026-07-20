@@ -47,3 +47,16 @@ metrics as an inaccessible trace.
   stages, coverage, retries, identity, actions, and quotas.
 - Continue the round only if the approved gate passes; otherwise preserve the
   new checkpoint and iterate from measured evidence.
+
+## Task 6: Consolidate Semantic Action Queries
+
+- Add failing adapter tests that count semantic driver queries and require one
+  pre-click query plus one fresh post-click verification query for like and
+  favorite.
+- Add a failing repost test requiring one pre-click state query while preserving
+  the visible share, repost, and selected-state sequence.
+- Implement one combined semantic state/control query per outcome and reuse the
+  returned inactive control for execution.
+- Run focused tests, full regression, Ruff, and diff checks.
+- Run a fresh six-device canary from the same durable checkpoint and apply the
+  existing 400-per-device-hour acceptance gate.
