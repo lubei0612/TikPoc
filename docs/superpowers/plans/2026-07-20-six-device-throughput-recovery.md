@@ -106,8 +106,8 @@ metrics as an inaccessible trace.
 - Add failing model/repository tests for a terminal `skipped` phase, durable
   `profile_unreachable` evidence, released leases, and round operational
   completion when `completed + skipped == total`.
-- Add failing worker tests proving profile-opening `ValueError` defers attempts
-  one and two, skips attempt three, and never records a confirmed visit.
+- Add a failing worker test proving the first profile-opening plain `ValueError`
+  skips that device assignment and never records a confirmed visit.
 - Add negative tests proving `ProfileIdentityMismatch`, errors after identity
   confirmation, video failures, and uncertain action work remain deferred.
 - Implement one repository-owned skip transition and a worker policy that
@@ -115,6 +115,8 @@ metrics as an inaccessible trace.
   attempt count before using it.
 - Keep coverage and capacity strict: skipped assignments stay incomplete for
   `N/N`, while fleet operational exhaustion accepts completed plus skipped.
+- Keep assignments independent across devices; one device's unreachable result
+  must not suppress the target for any other configured device.
 - Run mobile worker, acquisition repository/service, fleet runtime, capacity,
   full Python, Ruff, format, and diff verification.
 - Resume only pending/deferred work in the existing production round. Do not

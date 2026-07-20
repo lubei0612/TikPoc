@@ -197,12 +197,12 @@ Some target profiles never load a confirmable profile route even after the
 device adapter's bounded route, baseline, and restart recovery. Retrying these
 assignments forever consumes a device slot without producing useful exposure.
 
-After the third assignment claim, a plain profile-opening `ValueError` becomes
-a terminal `skipped` assignment only when the durable assignment is still in
-`profile_opening` and has no confirmed visit. The transition records
+After the first assignment claim, a plain profile-opening `ValueError` becomes
+a terminal per-device `skipped` assignment only when the durable assignment is
+still in `profile_opening` and has no confirmed visit. The transition records
 `profile_unreachable`, the original error category, diagnostics, attempt count,
-and terminal timestamp, then releases the assignment lease. Earlier attempts
-remain `deferred` with the existing retry delay.
+and terminal timestamp, then releases the assignment lease. The observation
+does not suppress the same target on other configured devices.
 
 `ProfileIdentityMismatch`, failures after identity confirmation, video/action
 failures, and uncertain actions remain deferred. They must not be converted to

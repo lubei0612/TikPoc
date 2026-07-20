@@ -84,6 +84,16 @@ user-approved document and update this guide in the same change.
   repost; when no action is due, retain the visit as trace-only.
 - Trace-only means the confirmed profile/video visit is retained without an
   interaction action.
+- Performance work must preserve this acquisition behavior. Never gain speed by
+  weakening eligibility, turning an eligible due interaction into trace-only,
+  skipping a selected action, reducing visible action verification, or changing
+  durable multi-device coverage accounting.
+- A profile-opening route that cannot be reached is attempted once on that
+  device and then recorded as skipped. Do not suppress the target globally from
+  one device observation; every other configured device retains its assignment.
+- Keep throughput fixes minimal and local. Do not add Inbox navigation, target
+  classification, or new workflow branches unless required by approved business
+  logic and separately verified against visible live state.
 - Per-account rolling one-hour limits are: like `100`, favorite `14`, repost
   `25`.
 - A repost is complete only after the visible repost control inside the share

@@ -57,7 +57,7 @@ class PlanProvider(Protocol):
     ) -> ActionPlan: ...
 
 
-MAX_PROFILE_OPEN_ATTEMPTS = 3
+MAX_PROFILE_OPEN_ATTEMPTS = 1
 
 
 class ProfileUnreachable(ValueError):

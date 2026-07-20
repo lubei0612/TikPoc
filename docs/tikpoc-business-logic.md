@@ -97,7 +97,7 @@ following > followers AND video_count >= 1
 
 普通慢页面会在本地执行有界恢复，包括重新检查、返回基线、重启 TikTok 或重建 Appium 会话。动作结果不确定时先读取当前状态进行 reconciliation，禁止直接再次点击可能会切换状态的控件。
 
-只有在第 3 次 assignment claim 后仍停留在 `profile_opening`、没有 confirmed visit，并且 `open_target` 或 `confirm_profile_identity` 抛出精确的普通 `ValueError` 时，才记录 `profile_unreachable/skipped`。前两次仍为 deferred；`ProfileIdentityMismatch`、身份确认后的错误、视频/动作失败和 uncertain 结果继续 deferred。可见且类型明确的 private/inaccessible 主页按身份确认后的 trace 处理，不归入 skipped。skipped 不计 N/N 覆盖；运营耗尽可用 `completed + skipped` 判断 worker 是否还有可处理任务。
+首次 assignment claim 仍停留在 `profile_opening`、没有 confirmed visit，并且 `open_target` 或 `confirm_profile_identity` 抛出精确的普通 `ValueError` 时，立即记录该设备 assignment 为 `profile_unreachable/skipped`。该结果不跨设备传播，其他启用设备仍保留并执行自己的 assignment；`ProfileIdentityMismatch`、身份确认后的错误、视频/动作失败和 uncertain 结果继续 deferred。可见且类型明确的 private/inaccessible 主页按身份确认后的 trace 处理，不归入 skipped。skipped 不计 N/N 覆盖；运营耗尽可用 `completed + skipped` 判断 worker 是否还有可处理任务。
 
 ## 5. 浏览器线索承接
 
@@ -192,7 +192,7 @@ SQLite 是当前移动轮次、动作节奏、租约和本地浏览器会话的�
 ## 10. 恢复生产前检查表
 
 - [x] 当前代码包含视频至少 1 个的语义识别修复。
-- [x] 持续无法确认 profile route/identity 且满足严格 plain `ValueError`、无 confirmed visit、claim 不少于 3 次边界的任务进入 terminal skipped/unreachable。
+- [x] 无法确认 profile route/identity 且满足严格 plain `ValueError`、无 confirmed visit的任务，在该设备首次 claim 后进入 terminal skipped/unreachable；不跨设备传播。
 - [x] skipped 不计入 N/N 覆盖，但不会无限阻塞运营完成。
 - [ ] Python、Chrome Node、Android build、Ruff、format 和 diff 检查通过。
 - [ ] 全部启用设备的 ADB、TikTok 登录、代理和 Appium 健康。

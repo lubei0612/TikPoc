@@ -1739,8 +1739,8 @@ class AcquisitionRepository:
             if row["visit_confirmed_at_ms"] is not None:
                 raise ValueError("confirmed visit cannot be skipped as unreachable")
             attempt_count = int(row["attempt_count"])
-            if attempt_count < 3:
-                raise ValueError("unreachable assignment requires three attempts")
+            if attempt_count < 1:
+                raise ValueError("unreachable assignment requires an attempted claim")
             cursor = connection.execute(
                 """
                 UPDATE round_assignments
