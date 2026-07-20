@@ -599,24 +599,13 @@ class StaleTerminalThenValidDriver(FakeDriver):
         self.page_source = (
             '<hierarchy><node text="@previous" '
             'resource-id="com.zhiliaoapp.musically:id/s7e" />'
-            '<node text="Account banned" '
-            'resource-id="com.zhiliaoapp.musically:id/xcn" />'
-            '<node text="This account is no longer available" '
-            'resource-id="com.zhiliaoapp.musically:id/message_tv" />'
+            '<node text="Account banned" />'
+            '<node text="This account is no longer available" />'
             "</hierarchy>"
         )
 
     def execute_script(self, name: str, arguments: dict[str, str]) -> None:
         self.scripts.append((name, arguments))
-
-    def find_elements(self, by: str, value: str) -> list[FakeElement]:
-        if value in {
-            "com.zhiliaoapp.musically:id/s7e",
-            "com.zhiliaoapp.musically:id/rgn",
-        }:
-            username = parse_profile_username(self.page_source)
-            return [FakeElement(f"@{username}")] if username else []
-        return super().find_elements(by, value)
 
 
 class TerminalUsernameFallbackDriver(StableIdBlankUsernameFallbackDriver):
@@ -626,10 +615,8 @@ class TerminalUsernameFallbackDriver(StableIdBlankUsernameFallbackDriver):
             self.page_source = (
                 '<hierarchy><node text="@old_name" '
                 'resource-id="com.zhiliaoapp.musically:id/s7e" />'
-                '<node text="Account banned" '
-                'resource-id="com.zhiliaoapp.musically:id/xcn" />'
-                '<node text="This account is no longer available" '
-                'resource-id="com.zhiliaoapp.musically:id/message_tv" />'
+                '<node text="Account banned" />'
+                '<node text="This account is no longer available" />'
                 "</hierarchy>"
             )
 
@@ -645,10 +632,8 @@ class MarkerOnlyTerminalAfterRouteDriver(FakeDriver):
     def execute_script(self, name: str, arguments: dict[str, str]) -> None:
         super().execute_script(name, arguments)
         self.page_source = (
-            '<hierarchy><node text="Account banned" '
-            'resource-id="com.zhiliaoapp.musically:id/xcn" />'
-            '<node text="This account is no longer available" '
-            'resource-id="com.zhiliaoapp.musically:id/message_tv" /></hierarchy>'
+            '<hierarchy><node text="Account banned" />'
+            '<node text="This account is no longer available" /></hierarchy>'
         )
 
 
@@ -673,10 +658,8 @@ def test_explicit_banned_profile_is_terminal() -> None:
     driver.page_source = (
         '<hierarchy><node text="@sample" '
         'resource-id="com.zhiliaoapp.musically:id/s7e" />'
-        '<node text="Account banned" '
-        'resource-id="com.zhiliaoapp.musically:id/xcn" />'
-        '<node text="This account is no longer available" '
-        'resource-id="com.zhiliaoapp.musically:id/message_tv" />'
+        '<node text="Account banned" />'
+        '<node text="This account is no longer available" />'
         "</hierarchy>"
     )
     device = AppiumTikTokDevice(
@@ -715,7 +698,6 @@ def test_stale_terminal_page_does_not_poison_next_target() -> None:
     )
     target = _stable_target()
     device._confirmed_profile_username = "older_success"
-    device._terminal_page_active = True
 
     device.open_target(target)
     device.confirm_profile_identity(target)
@@ -737,16 +719,11 @@ def test_marker_only_terminal_page_is_accepted_after_route_changes() -> None:
 
 def test_profile_content_with_terminal_words_is_not_terminal_evidence() -> None:
     driver = FakeDriver()
-    driver.page_source = (
-        '<hierarchy><node text="@sample" '
-        'resource-id="com.zhiliaoapp.musically:id/s7e" />'
-        '<node text="12" resource-id="com.zhiliaoapp.musically:id/s5y" />'
-        '<node text="Following" resource-id="com.zhiliaoapp.musically:id/s5x" />'
-        '<node text="10" resource-id="com.zhiliaoapp.musically:id/s5y" />'
-        '<node text="Followers" resource-id="com.zhiliaoapp.musically:id/s5x" />'
-        '<node text="Account banned" resource-id="com.example:id/bio" />'
-        '<node text="This account is no longer available" '
-        'resource-id="com.example:id/caption" /></hierarchy>'
+    driver.page_source = PROFILE_XML.replace(
+        "</hierarchy>",
+        '<node text="Account banned" />'
+        '<node text="This account is no longer available" />'
+        "</hierarchy>",
     )
     device = AppiumTikTokDevice(driver, metric_read_attempts=1, poll_interval=0)
     target = _stable_target()
