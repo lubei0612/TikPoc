@@ -371,6 +371,139 @@ def test_identity_mismatch_is_durable_and_blocks_capacity(tmp_path: Path) -> Non
     assert device.diagnostic_calls == 1
 
 
+def test_profile_opening_value_error_skips_only_after_three_claims(
+    tmp_path: Path,
+) -> None:
+    repository, assignment = _claimed_assignment(tmp_path)
+    device = ScriptedVerifiedDevice(metrics=ProfileMetrics(20, 10, 5))
+
+    def unreachable(target) -> None:
+        raise ValueError("stable and username profile routes did not load")
+
+    device.open_target = unreachable
+    worker = MobileAssignmentWorker(
+        repository,
+        device,
+        device_id="phone-01",
+        owner_id="worker-1",
+        clock_ms=lambda: 1_000,
+    )
+
+    worker.run_assignment(assignment)
+    assert (
+        repository.assignment(assignment.assignment_id).phase
+        is AssignmentPhase.DEFERRED
+    )
+    for expected_attempt in (2, 3):
+        repository.retry_assignment(assignment.assignment_id)
+        claimed = repository.claim_next_assignment(
+            assignment.round_id,
+            "phone-01",
+            "worker-1",
+            now_ms=1_000,
+        )
+        assert claimed is not None and claimed.attempt_count == expected_attempt
+        worker.run_assignment(claimed)
+
+    stored = repository.assignment(assignment.assignment_id)
+    assert stored.phase is AssignmentPhase.SKIPPED
+    assert stored.attempt_count == 3
+    assert stored.visit_confirmed_at_ms is None
+    assert stored.last_error_code == "profile_unreachable"
+    assert repository.round_completion(assignment.round_id).skipped == 1
+    assert device.diagnostic_calls == 3
+    transition = repository.assignment_phase_history(assignment.assignment_id)[-1]
+    assert transition.details["original_error_code"] == "ValueError"
+    assert transition.details["failure_stage"] == "route"
+
+
+def test_third_identity_mismatch_remains_deferred(tmp_path: Path) -> None:
+    repository, assignment = _claimed_assignment(tmp_path)
+    with repository._connect() as connection:
+        connection.execute(
+            "UPDATE round_assignments SET attempt_count = 3 WHERE assignment_id = ?",
+            (assignment.assignment_id,),
+        )
+    device = ScriptedVerifiedDevice(metrics=ProfileMetrics(20, 10, 5))
+
+    def mismatch(target) -> None:
+        raise ProfileIdentityMismatch("profile mismatch")
+
+    device.confirm_profile_identity = mismatch
+    worker = MobileAssignmentWorker(
+        repository,
+        device,
+        device_id="phone-01",
+        owner_id="worker-1",
+        clock_ms=lambda: 1_000,
+    )
+
+    worker.run_assignment(repository.assignment(assignment.assignment_id))
+
+    stored = repository.assignment(assignment.assignment_id)
+    assert stored.phase is AssignmentPhase.DEFERRED
+    assert stored.last_error_code == "ProfileIdentityMismatch"
+
+
+def test_value_error_after_identity_confirmation_remains_deferred(
+    tmp_path: Path,
+) -> None:
+    repository, assignment = _claimed_assignment(tmp_path)
+    with repository._connect() as connection:
+        connection.execute(
+            "UPDATE round_assignments SET attempt_count = 3 WHERE assignment_id = ?",
+            (assignment.assignment_id,),
+        )
+    device = ScriptedVerifiedDevice(metrics=ProfileMetrics(20, 10, 5))
+
+    def unreadable_metrics() -> ProfileObservation:
+        raise ValueError("profile metrics are incomplete")
+
+    device.read_profile_observation = unreadable_metrics
+    worker = MobileAssignmentWorker(
+        repository,
+        device,
+        device_id="phone-01",
+        owner_id="worker-1",
+        clock_ms=lambda: 1_000,
+    )
+
+    worker.run_assignment(repository.assignment(assignment.assignment_id))
+
+    stored = repository.assignment(assignment.assignment_id)
+    assert stored.phase is AssignmentPhase.DEFERRED
+    assert stored.visit_confirmed_at_ms == 1_000
+    assert stored.last_error_code == "ValueError"
+
+
+def test_third_device_readiness_value_error_remains_deferred(tmp_path: Path) -> None:
+    repository, assignment = _claimed_assignment(tmp_path)
+    with repository._connect() as connection:
+        connection.execute(
+            "UPDATE round_assignments SET attempt_count = 3 WHERE assignment_id = ?",
+            (assignment.assignment_id,),
+        )
+    device = ScriptedVerifiedDevice(metrics=ProfileMetrics(20, 10, 5))
+
+    def unavailable_device() -> None:
+        raise ValueError("Appium session is unavailable")
+
+    device.ensure_ready = unavailable_device
+    worker = MobileAssignmentWorker(
+        repository,
+        device,
+        device_id="phone-01",
+        owner_id="worker-1",
+        clock_ms=lambda: 1_000,
+    )
+
+    worker.run_assignment(repository.assignment(assignment.assignment_id))
+
+    stored = repository.assignment(assignment.assignment_id)
+    assert stored.phase is AssignmentPhase.DEFERRED
+    assert stored.last_error_code == "ValueError"
+
+
 def test_ineligible_profile_completes_without_opening_video(tmp_path: Path) -> None:
     repository, assignment = _claimed_assignment(tmp_path)
     device = ScriptedVerifiedDevice(metrics=ProfileMetrics(10, 20, 5))

@@ -131,7 +131,10 @@ def _process_launcher(
 
 
 def _round_completed(completion) -> bool:
-    return completion.total > 0 and completion.completed == completion.total
+    return (
+        completion.total > 0
+        and completion.completed + completion.skipped == completion.total
+    )
 
 
 def _active_device_ids(health) -> set[str]:

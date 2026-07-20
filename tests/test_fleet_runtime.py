@@ -16,11 +16,17 @@ from tikpoc.fleet import (
 )
 from tikpoc.fleet_runtime import (
     FencedVerifiedDevice,
+    _round_completed,
     run_acquisition_fleet,
     run_device_worker,
 )
 
 from tests.test_fleet import _two_device_config
+
+
+def test_round_operational_completion_includes_terminal_skips() -> None:
+    assert _round_completed(RoundCompletion(2, 1, 1, 0, skipped=1)) is True
+    assert _round_completed(RoundCompletion(2, 1, 1, 0, skipped=0)) is False
 
 
 class RecordingFence:

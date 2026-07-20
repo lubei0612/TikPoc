@@ -22,6 +22,7 @@ class AssignmentPhase(StrEnum):
     ACTION_EXECUTING = "action_executing"
     ACTION_RECONCILING = "action_reconciling"
     DEFERRED = "deferred"
+    SKIPPED = "skipped"
     COMPLETED = "completed"
 
 
@@ -188,6 +189,7 @@ class RoundCompletion:
     visits_confirmed: int
     completed: int
     deferred: int
+    skipped: int = 0
 
 
 @dataclass(frozen=True)

@@ -945,6 +945,43 @@ def test_assignment_controls_are_durable_and_protect_active_leases(
     )
 
 
+def test_skipped_assignment_rejects_operator_control_commands(tmp_path: Path) -> None:
+    app, round_id, _ = _seeded_operations_app(tmp_path)
+    client = TestClient(app)
+    repository = app.state.acquisition
+    with sqlite3.connect(repository.path) as connection:
+        assignment_id = int(
+            connection.execute(
+                """
+                SELECT assignment_id FROM round_assignments
+                WHERE round_id = ? ORDER BY assignment_id LIMIT 1
+                """,
+                (round_id,),
+            ).fetchone()[0]
+        )
+        connection.execute(
+            """
+            UPDATE round_assignments
+            SET phase = 'skipped', completed_at_ms = 11_000,
+                last_error_code = 'profile_unreachable'
+            WHERE assignment_id = ?
+            """,
+            (assignment_id,),
+        )
+
+    response = client.post(
+        "/api/commands/pause",
+        json={
+            "command_id": "pause-skipped-assignment",
+            "scope": "assignment",
+            "scope_id": str(assignment_id),
+        },
+    )
+
+    assert response.status_code == 409
+    assert "terminal assignment" in response.json()["error"]
+
+
 def test_failed_commands_are_persisted_and_bound_to_original_content(
     tmp_path: Path,
 ) -> None:

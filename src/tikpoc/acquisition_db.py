@@ -38,6 +38,7 @@ _ALLOWED_PHASE_TRANSITIONS = {
     AssignmentPhase.PROFILE_OPENING: {
         AssignmentPhase.IDENTITY_CONFIRMED,
         AssignmentPhase.DEFERRED,
+        AssignmentPhase.SKIPPED,
     },
     AssignmentPhase.IDENTITY_CONFIRMED: {
         AssignmentPhase.WAITING_SNAPSHOT,
@@ -1168,7 +1169,8 @@ class AcquisitionRepository:
                 UPDATE round_assignments
                 SET lease_expires_at_ms = ?
                 WHERE assignment_id = ? AND lease_owner = ?
-                  AND lease_expires_at_ms > ? AND phase <> 'completed'
+                  AND lease_expires_at_ms > ?
+                  AND phase NOT IN ('completed', 'skipped')
                 """,
                 (expires_at_ms, assignment_id, owner_id, now_ms),
             )
@@ -1186,7 +1188,7 @@ class AcquisitionRepository:
                 FROM round_assignments
                 WHERE lease_owner IS NOT NULL
                   AND lease_expires_at_ms <= ?
-                  AND phase <> 'completed'
+                  AND phase NOT IN ('completed', 'skipped')
                 """,
                 (now_ms,),
             ).fetchall()
@@ -1386,8 +1388,8 @@ class AcquisitionRepository:
             if row is None:
                 raise ValueError("assignment owner does not hold the lease")
             previous = AssignmentPhase(str(row["phase"]))
-            if previous is AssignmentPhase.COMPLETED:
-                raise ValueError("completed assignment cannot be deferred")
+            if previous in {AssignmentPhase.COMPLETED, AssignmentPhase.SKIPPED}:
+                raise ValueError("terminal assignment cannot be deferred")
             connection.execute(
                 """
                 UPDATE round_assignments
@@ -1410,6 +1412,78 @@ class AcquisitionRepository:
                     "ui_summary": diagnostics.ui_summary,
                 },
             )
+            return self._assignment_by_id(connection, assignment_id)
+
+    def skip_unreachable_assignment(
+        self,
+        assignment_id: int,
+        owner_id: str,
+        *,
+        now_ms: int,
+        error_code: str,
+        original_error_code: str,
+        failure_stage: str,
+        diagnostics: DeviceDiagnostics,
+    ) -> RoundAssignment:
+        normalized_error = str(error_code).strip()
+        normalized_original_error = str(original_error_code).strip()
+        normalized_stage = str(failure_stage).strip()
+        if not normalized_error or not normalized_original_error:
+            raise ValueError("skip error codes must be nonempty")
+        if normalized_stage not in {"route", "identity"}:
+            raise ValueError("skip failure stage must be route or identity")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT round_id, phase, attempt_count, visit_confirmed_at_ms
+                FROM round_assignments
+                WHERE assignment_id = ? AND lease_owner = ?
+                """,
+                (assignment_id, owner_id),
+            ).fetchone()
+            if row is None:
+                raise ValueError("assignment owner does not hold the lease")
+            if (
+                AssignmentPhase(str(row["phase"]))
+                is not AssignmentPhase.PROFILE_OPENING
+            ):
+                raise ValueError("only a profile-opening assignment can be skipped")
+            if row["visit_confirmed_at_ms"] is not None:
+                raise ValueError("confirmed visit cannot be skipped as unreachable")
+            attempt_count = int(row["attempt_count"])
+            if attempt_count < 3:
+                raise ValueError("unreachable assignment requires three attempts")
+            cursor = connection.execute(
+                """
+                UPDATE round_assignments
+                SET phase = 'skipped', completed_at_ms = ?, last_error_code = ?,
+                    lease_owner = NULL, lease_expires_at_ms = 0
+                WHERE assignment_id = ? AND lease_owner = ?
+                  AND phase = 'profile_opening'
+                  AND visit_confirmed_at_ms IS NULL
+                """,
+                (now_ms, normalized_error, assignment_id, owner_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("assignment phase or lease owner changed")
+            self._insert_phase_history(
+                connection,
+                assignment_id,
+                AssignmentPhase.PROFILE_OPENING,
+                AssignmentPhase.SKIPPED,
+                now_ms,
+                {
+                    "attempt_count": attempt_count,
+                    "error_code": normalized_error,
+                    "failure_stage": normalized_stage,
+                    "original_error_code": normalized_original_error,
+                    "screenshot_path": diagnostics.screenshot_path,
+                    "ui_summary": diagnostics.ui_summary,
+                },
+            )
+            round_id = str(row["round_id"])
+            self._mark_round_completed_if_terminal(connection, round_id)
             return self._assignment_by_id(connection, assignment_id)
 
     def complete_assignment(
@@ -1454,19 +1528,7 @@ class AcquisitionRepository:
                 {},
             )
             round_id = str(row["round_id"])
-            incomplete = connection.execute(
-                """
-                SELECT 1 FROM round_assignments
-                WHERE round_id = ? AND phase <> 'completed'
-                LIMIT 1
-                """,
-                (round_id,),
-            ).fetchone()
-            if incomplete is None:
-                connection.execute(
-                    "UPDATE exposure_rounds SET state = 'completed' WHERE round_id = ?",
-                    (round_id,),
-                )
+            self._mark_round_completed_if_terminal(connection, round_id)
             return self._assignment_by_id(connection, assignment_id)
 
     def round_completion(self, round_id: str) -> RoundCompletion:
@@ -1476,7 +1538,8 @@ class AcquisitionRepository:
                 SELECT COUNT(*) AS total,
                        SUM(CASE WHEN visit_confirmed_at_ms IS NOT NULL THEN 1 ELSE 0 END) AS visits,
                        SUM(CASE WHEN phase = 'completed' THEN 1 ELSE 0 END) AS completed,
-                       SUM(CASE WHEN phase = 'deferred' THEN 1 ELSE 0 END) AS deferred
+                       SUM(CASE WHEN phase = 'deferred' THEN 1 ELSE 0 END) AS deferred,
+                       SUM(CASE WHEN phase = 'skipped' THEN 1 ELSE 0 END) AS skipped
                 FROM round_assignments
                 WHERE round_id = ?
                 """,
@@ -1487,6 +1550,7 @@ class AcquisitionRepository:
                 visits_confirmed=int(row["visits"] or 0),
                 completed=int(row["completed"] or 0),
                 deferred=int(row["deferred"] or 0),
+                skipped=int(row["skipped"] or 0),
             )
 
     def round_coverage(self, round_id: str) -> dict[str, object]:
@@ -3158,6 +3222,24 @@ class AcquisitionRepository:
             state=ActionPlanState(str(row["state"])),
             created_at_ms=int(row["created_at_ms"]),
         )
+
+    @staticmethod
+    def _mark_round_completed_if_terminal(
+        connection: sqlite3.Connection, round_id: str
+    ) -> None:
+        incomplete = connection.execute(
+            """
+            SELECT 1 FROM round_assignments
+            WHERE round_id = ? AND phase NOT IN ('completed', 'skipped')
+            LIMIT 1
+            """,
+            (round_id,),
+        ).fetchone()
+        if incomplete is None:
+            connection.execute(
+                "UPDATE exposure_rounds SET state = 'completed' WHERE round_id = ?",
+                (round_id,),
+            )
 
     @staticmethod
     def _insert_phase_history(

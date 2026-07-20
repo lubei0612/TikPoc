@@ -49,6 +49,13 @@ PlanProvider = Callable[
     [AcquisitionRepository, str, str, str, int],
     ActionPlan,
 ]
+MAX_PROFILE_OPEN_ATTEMPTS = 3
+
+
+class ProfileUnreachable(ValueError):
+    def __init__(self, stage: str, message: str) -> None:
+        super().__init__(message)
+        self.stage = stage
 
 
 def _default_plan_provider(
@@ -114,7 +121,16 @@ class MobileAssignmentWorker:
         try:
             self._run_claimed(current)
         except Exception as error:
-            self._defer(current.assignment_id, type(error).__name__)
+            stored = self.repository.assignment(current.assignment_id)
+            if (
+                type(error) is ProfileUnreachable
+                and stored.phase is AssignmentPhase.PROFILE_OPENING
+                and stored.visit_confirmed_at_ms is None
+                and stored.attempt_count >= MAX_PROFILE_OPEN_ATTEMPTS
+            ):
+                self._skip_unreachable(current.assignment_id, error)
+            else:
+                self._defer(current.assignment_id, type(error).__name__)
 
     def _run_claimed(self, assignment: RoundAssignment) -> None:
         target = PoolTarget(
@@ -130,12 +146,22 @@ class MobileAssignmentWorker:
         )
         route_started_at_ms = self.clock_ms()
         self.device.ensure_ready()
-        self.device.open_target(target)
+        try:
+            self.device.open_target(target)
+        except ValueError as error:
+            if type(error) is ValueError:
+                raise ProfileUnreachable("route", str(error)) from error
+            raise
         self._record_stage(
             assignment.assignment_id, AssignmentStage.ROUTE, route_started_at_ms
         )
         identity_started_at_ms = self.clock_ms()
-        self.device.confirm_profile_identity(target)
+        try:
+            self.device.confirm_profile_identity(target)
+        except ValueError as error:
+            if type(error) is ValueError:
+                raise ProfileUnreachable("identity", str(error)) from error
+            raise
         self._record_stage(
             assignment.assignment_id, AssignmentStage.IDENTITY, identity_started_at_ms
         )
@@ -351,10 +377,7 @@ class MobileAssignmentWorker:
             result = self.device.execute_outcome(plan.effective_outcome)
 
     def _defer(self, assignment_id: int, error_code: str) -> None:
-        try:
-            diagnostics = self.device.capture_diagnostics()
-        except Exception:
-            diagnostics = DeviceDiagnostics(ui_summary="diagnostic capture failed")
+        diagnostics = self._capture_diagnostics()
         self.repository.defer_assignment(
             assignment_id,
             self.owner_id,
@@ -363,6 +386,24 @@ class MobileAssignmentWorker:
             error_code=error_code,
             diagnostics=diagnostics,
         )
+
+    def _skip_unreachable(self, assignment_id: int, error: ProfileUnreachable) -> None:
+        original_error = error.__cause__ or error
+        self.repository.skip_unreachable_assignment(
+            assignment_id,
+            self.owner_id,
+            now_ms=self.clock_ms(),
+            error_code="profile_unreachable",
+            original_error_code=type(original_error).__name__,
+            failure_stage=error.stage,
+            diagnostics=self._capture_diagnostics(),
+        )
+
+    def _capture_diagnostics(self) -> DeviceDiagnostics:
+        try:
+            return self.device.capture_diagnostics()
+        except Exception:
+            return DeviceDiagnostics(ui_summary="diagnostic capture failed")
 
     def _renew_lease(self, assignment_id: int) -> None:
         now_ms = self.clock_ms()

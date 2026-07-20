@@ -141,6 +141,7 @@ _KNOWN_COMMAND_CONFLICTS = {
     "assignment state does not allow command",
     "command id has different content",
     "completed assignment does not allow command",
+    "terminal assignment does not allow command",
     "device state does not allow command",
     "fleet contains a stopped round",
     "round state does not allow command",
@@ -773,9 +774,9 @@ class AcquisitionService:
                 if assignment is None:
                     raise AcquisitionNotFound(control_scope_id)
                 control_scope_id = str(assignment_id)
-                if str(assignment["phase"]) == "completed":
+                if str(assignment["phase"]) in {"completed", "skipped"}:
                     raise AcquisitionConflict(
-                        "completed assignment does not allow command"
+                        "terminal assignment does not allow command"
                     )
                 if (
                     command_type in {"pause", "stop"}
