@@ -25,7 +25,7 @@ def _myt_slot_offset(udid: str) -> int | None:
     return offset if 0 <= offset < 100 and remainder == 0 else None
 
 
-def create_driver(appium_url: str, udid: str, *, command_timeout: int = 20):
+def create_driver(appium_url: str, udid: str, *, command_timeout: int = 30):
     capabilities = {
         "platformName": "Android",
         "appium:automationName": "UiAutomator2",
