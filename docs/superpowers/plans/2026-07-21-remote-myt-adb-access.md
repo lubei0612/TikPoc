@@ -8,6 +8,24 @@
 
 **Tech Stack:** Tailscale, Android Debug Bridge, Appium 3 / UiAutomator2, Clash Meta for Android, TikPoc Fleet, SQLite, launchd, optional Vercel CLI.
 
+## Execution checkpoint — 2026-07-21
+
+- The available MYT FRP client was used instead of installing a subnet router on
+  the MYT host. Six mappings terminate on the VPS at ports `40000-40005`.
+- The VPS and operator Mac joined the same Tailnet. The ignored remote Fleet
+  configuration uses `100.101.215.87:40000-40005`.
+- Public access to FRP ADB ports and the dashboard was removed with the VPS
+  firewall; FRP control and Tailscale transport remain available.
+- Clash Meta `2.11.31.Meta` was installed and configured on all six slots.
+  Always-on VPN is configured, the legacy device HTTP proxies are empty, and
+  visible TikTok profile loading passed on every slot.
+- Slot 01 passed reboot restoration. Fleet was restarted against the remote
+  Tailnet endpoints and resumed the same durable round with six healthy workers.
+- Multiple node labels were assigned, but the measured egress identity was
+  shared. Six independent exits remain a provider-capability gate.
+- The final manual acceptance gate is moving the Mac to an unrelated Internet
+  connection and observing the existing remote Fleet for at least ten minutes.
+
 ---
 
 ## Task 1: Freeze and record the production checkpoint

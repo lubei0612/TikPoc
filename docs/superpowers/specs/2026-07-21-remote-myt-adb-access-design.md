@@ -1,7 +1,7 @@
 # Remote MYT ADB Access Design
 
 **Date:** 2026-07-21  
-**Status:** Approved design, pending implementation plan  
+**Status:** Implemented through remote Fleet canary; independent-network handoff remains  
 **Scope:** Keep TikPoc running when the operator Mac leaves the MYT LAN
 
 ## 1. Problem
@@ -14,6 +14,24 @@ The current operator Mac and MYT gateway share the `192.168.28.0/24` LAN:
 - TikPoc Fleet, Appium, SQLite, dashboard, and proxy relay currently run on the Mac.
 
 When the Mac leaves this LAN, it loses the route to the MYT ADB endpoints. The current proxy relay also disappears from the devices. Worker leases then expire and all device work stops even though durable round state remains intact.
+
+## 1.1 Implemented Transport Decision
+
+The deployed path supersedes the original subnet-router proposal below. The MYT
+gateway already provides an FRP client, so the accepted production path is:
+
+```text
+Android slot ADB 30000-30500 -> MYT FRP client
+  -> fixed VPS FRPS (public control 7000)
+  -> Tailnet 100.101.215.87:40000-40005
+  -> operator Mac + Appium + TikPoc Fleet
+```
+
+The VPS firewall keeps FRP ADB ports and the dashboard available through
+`tailscale0` while leaving only SSH, FRP control, and Tailscale transport on the
+public interface. The ignored remote Fleet configuration maps durable device IDs
+to the Tailnet endpoints without changing account, Appium, round, or coverage
+identities.
 
 ## 2. Goals
 
@@ -81,6 +99,21 @@ Each device requires:
 7. a restart test proving the VPN returns automatically.
 
 Subscription URLs, tokens, node credentials, and device public IPs must not enter Git, committed docs, test fixtures, command output, or application logs.
+
+### Implemented device state
+
+All six devices now have the verified APK installed, the subscription imported,
+the Clash VPN running, Android Always-on VPN configured, background restrictions
+relaxed, and the legacy global HTTP proxy removed. Slot 01 passed a reboot test:
+ADB returned, Always-on remained configured, the global proxy stayed empty, and
+the Clash VPN network returned automatically. Visible TikTok profile loads passed
+on all six devices after removing the Mac relay dependency.
+
+The configured subscription exposes multiple selectable node labels, but the six
+tested selections currently resolve to one shared egress identity. This matches
+the previous upstream behavior and does not block remote connectivity, but it is
+not evidence of six independent public exits. Independent exits require a
+provider plan that actually supplies distinct egress identities.
 
 ## 6. Vercel Boundary
 
@@ -187,4 +220,3 @@ The rollout is accepted only when all conditions pass:
 ## 11. Later Controller Migration
 
 After the remote-access canary, the preferred long-term architecture is to run Fleet, Appium, SQLite, monitoring, and proxy supervision on an always-on node in the MYT network. The Mac then becomes only a remote operator console. That migration requires its own design because it changes service supervision, filesystem locations, backup ownership, database locking, and deployment procedures.
-
