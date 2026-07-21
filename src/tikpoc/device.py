@@ -29,7 +29,11 @@ from .profile_parser import (
 
 TIKTOK_PACKAGE = "com.zhiliaoapp.musically"
 POST_CONTAINER_ID = f"{TIKTOK_PACKAGE}:id/eqx"
-POST_CONTAINER_IDS = (POST_CONTAINER_ID, f"{TIKTOK_PACKAGE}:id/efq")
+POST_CONTAINER_IDS = (
+    POST_CONTAINER_ID,
+    f"{TIKTOK_PACKAGE}:id/efq",
+    f"{TIKTOK_PACKAGE}:id/cover",
+)
 POST_CONTAINER_XPATH = (
     "//*["
     + " or ".join(f'@resource-id="{resource_id}"' for resource_id in POST_CONTAINER_IDS)
@@ -397,6 +401,27 @@ class AppiumTikTokDevice:
                     self.sleeper(self.poll_interval)
                 continue
             lowered = source.lower()
+            if "account banned" in lowered or "no longer available" in lowered:
+                return ProfileObservation(
+                    observed_username=observed_username,
+                    metrics=None,
+                    private_account=False,
+                    access_state=ProfileAccessState.SUSPENDED,
+                )
+            if any(
+                marker in lowered
+                for marker in (
+                    "couldn't find this account",
+                    "account not found",
+                    "user not found",
+                )
+            ):
+                return ProfileObservation(
+                    observed_username=observed_username,
+                    metrics=None,
+                    private_account=False,
+                    access_state=ProfileAccessState.MISSING,
+                )
             if "this account is private" in lowered or "此帐户为私密帐户" in source:
                 return ProfileObservation(
                     observed_username=observed_username,
@@ -422,6 +447,12 @@ class AppiumTikTokDevice:
                         followers=metrics.followers,
                         posts=len(semantic_posts),
                     )
+                elif attempt + 1 < self.metric_read_attempts:
+                    last_error = ValueError("profile post grid is not ready")
+                    source = None
+                    self._profile_source = None
+                    self.sleeper(self.poll_interval)
+                    continue
             if page.visible_post_count == 3:
                 self.driver.swipe(540, 1900, 540, 1050, 600)
                 self.sleeper(self.poll_interval)

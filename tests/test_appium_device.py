@@ -408,6 +408,45 @@ class CurrentPostContainerDriver(FakeDriver):
         return super().find_elements(by, value)
 
 
+class CurrentCoverPostContainerDriver(FakeDriver):
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if by == "xpath" and "com.zhiliaoapp.musically:id/cover" in value:
+            return self.posts
+        return []
+
+
+class DelayedCurrentPostGridDriver(CachedProfileObservationDriver):
+    def __init__(self) -> None:
+        empty_source = "\n".join(
+            line
+            for line in PROFILE_XML.splitlines()
+            if "id/cover" not in line and "id/tv_play_count" not in line
+        )
+        super().__init__(empty_source)
+        self.empty_source = empty_source
+
+    @property
+    def page_source(self) -> str:
+        self.page_source_reads += 1
+        return self.empty_source if self.page_source_reads == 1 else PROFILE_XML
+
+    @page_source.setter
+    def page_source(self, value: str) -> None:
+        self._page_source = value
+
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if by == "xpath" and any(
+            resource_id in value
+            for resource_id in (
+                "com.zhiliaoapp.musically:id/eqx",
+                "com.zhiliaoapp.musically:id/efq",
+                "com.zhiliaoapp.musically:id/cover",
+            )
+        ):
+            return []
+        return super().find_elements(by, value)
+
+
 class RenamedStableRouteDriver(FakeDriver):
     def __init__(self, *, changes_route: bool = True) -> None:
         super().__init__()
@@ -726,6 +765,13 @@ def test_appium_device_accepts_current_post_container_id() -> None:
     assert driver.posts[1].clicked is True
 
 
+def test_appium_device_accepts_current_cover_post_container_id() -> None:
+    driver = CurrentCoverPostContainerDriver()
+    device = AppiumTikTokDevice(driver)
+
+    assert device.list_visible_posts() == ("0", "1", "2", "3")
+
+
 def test_favorite_pixel_state_reads_current_yellow_active_icon() -> None:
     active = BytesIO()
     Image.new("RGB", (2, 2), (255, 205, 0)).save(active, format="PNG")
@@ -839,6 +885,54 @@ def test_zero_parsed_posts_use_visible_semantic_video_containers() -> None:
     assert driver.post_queries == 1
 
 
+def test_zero_parsed_posts_wait_for_delayed_current_post_grid() -> None:
+    driver = DelayedCurrentPostGridDriver()
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+
+    observation = device.read_profile_observation()
+
+    assert observation.metrics == ProfileMetrics(12, 10, 4)
+    assert driver.page_source_reads == 2
+
+
+def test_banned_profile_is_not_classified_as_public_zero_posts() -> None:
+    banned = "\n".join(
+        line
+        for line in PROFILE_XML.splitlines()
+        if "id/cover" not in line and "id/tv_play_count" not in line
+    ).replace(
+        "</hierarchy>",
+        '<node text="Account banned" />\n'
+        '<node text="The account sample is no longer available" />\n'
+        "</hierarchy>",
+    )
+    driver = CachedProfileObservationDriver(banned)
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+
+    observation = device.read_profile_observation()
+
+    assert observation.metrics is None
+    assert observation.access_state is ProfileAccessState.SUSPENDED
+
+
+def test_missing_profile_is_not_classified_as_public_zero_posts() -> None:
+    missing = "\n".join(
+        line
+        for line in PROFILE_XML.splitlines()
+        if "id/cover" not in line and "id/tv_play_count" not in line
+    ).replace(
+        "</hierarchy>",
+        '<node text="Couldn\'t find this account" />\n</hierarchy>',
+    )
+    driver = CachedProfileObservationDriver(missing)
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+
+    observation = device.read_profile_observation()
+
+    assert observation.metrics is None
+    assert observation.access_state is ProfileAccessState.MISSING
+
+
 def test_zero_parsed_posts_ignore_hidden_semantic_containers() -> None:
     driver = SemanticOnlyVideoDriver(
         [FakeElement(attributes={"displayed": False}) for _ in range(4)]
@@ -848,7 +942,7 @@ def test_zero_parsed_posts_ignore_hidden_semantic_containers() -> None:
     observation = device.read_profile_observation()
 
     assert observation.metrics == ProfileMetrics(12, 10, 0)
-    assert driver.post_queries == 1
+    assert driver.post_queries == 2
 
 
 def test_zero_parsed_posts_count_only_visible_semantic_containers() -> None:
@@ -875,7 +969,7 @@ def test_zero_parsed_posts_keep_zero_when_semantic_grid_is_empty() -> None:
     observation = device.read_profile_observation()
 
     assert observation.metrics == ProfileMetrics(12, 10, 0)
-    assert driver.post_queries == 1
+    assert driver.post_queries == 2
 
 
 def test_zero_parsed_posts_accept_current_semantic_container_in_one_query() -> None:
