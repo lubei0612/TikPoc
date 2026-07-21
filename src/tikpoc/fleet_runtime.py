@@ -4,7 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
-from .acquisition_db import AcquisitionRepository
+from .acquisition_db import AcquisitionRepository, DeviceWorkerLeaseLost
 from .acquisition_models import AssignmentPhase, OutcomeKind, PoolTarget
 from .device import AppiumTikTokDevice
 from .fleet import (
@@ -87,6 +87,8 @@ def run_device_worker(
     driver = fence.execute(driver_factory, device.appium_url, device.adb_endpoint)
     try:
         raw_device = device_factory(driver)
+        if hasattr(raw_device, "diagnostics_dir"):
+            raw_device.diagnostics_dir = database_path.parent / "screenshots"
         raw_device.route_opener = route_factory(device.adb_endpoint).open
         verified_device = FencedVerifiedDevice(raw_device, fence)
         worker = worker_factory(
@@ -98,20 +100,23 @@ def run_device_worker(
             worker_fence_token=fence.fence_token,
             clock_ms=clock_ms,
         )
-        while not stop_event.is_set():
-            fence.assert_active()
-            assignment = repository.claim_next_assignment(
-                round_id,
-                device.device_id,
-                fence.owner_id,
-                now_ms=clock_ms(),
-                worker_account_id=fence.account_id,
-                worker_fence_token=fence.fence_token,
-            )
-            if assignment is None:
-                stop_event.wait(idle_sleep_seconds)
-                continue
-            worker.run_assignment(assignment)
+        try:
+            while not stop_event.is_set():
+                fence.assert_active()
+                assignment = repository.claim_next_assignment(
+                    round_id,
+                    device.device_id,
+                    fence.owner_id,
+                    now_ms=clock_ms(),
+                    worker_account_id=fence.account_id,
+                    worker_fence_token=fence.fence_token,
+                )
+                if assignment is None:
+                    stop_event.wait(idle_sleep_seconds)
+                    continue
+                worker.run_assignment(assignment)
+        except DeviceWorkerLeaseLost:
+            return
     finally:
         driver.quit()
 

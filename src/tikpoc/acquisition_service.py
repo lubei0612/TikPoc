@@ -24,6 +24,8 @@ _SCREENSHOT_MEDIA_TYPES = {
 }
 _BROWSER_PAGE_ROLES = ("activity", "messages")
 _BROWSER_HEARTBEAT_STALE_MS = 120_000
+_MOBILE_PHASE_STALL_MS = 120_000
+_MOBILE_PROGRESS_STALE_MS = 300_000
 
 
 def merge_browser_health_rows(
@@ -821,16 +823,39 @@ class AcquisitionService:
     ) -> list[dict[str, object]]:
         rows = connection.execute(
             """
-            SELECT seed.device_id, health.account_id, health.state AS health,
+            SELECT seed.device_id, exposure_round.state AS round_state,
+                   health.account_id, health.state AS health,
                    health.error_code, health.updated_at_ms,
                    COALESCE(device_control.state, 'running') AS control_state,
                    assignment.assignment_id, assignment.identity_key,
                    assignment.phase, assignment.attempt_count,
                    assignment.last_error_code, assignment.visit_confirmed_at_ms,
                    assignment.completed_at_ms,
+                   (
+                       SELECT MAX(history.changed_at_ms)
+                       FROM assignment_phase_history AS history
+                       WHERE history.assignment_id = assignment.assignment_id
+                         AND history.to_phase = assignment.phase
+                   ) AS current_phase_started_at_ms,
+                   (
+                       SELECT MAX(history.changed_at_ms)
+                       FROM assignment_phase_history AS history
+                       JOIN round_assignments AS progressed
+                         ON progressed.assignment_id = history.assignment_id
+                       WHERE progressed.round_id = seed.round_id
+                         AND progressed.device_id = seed.device_id
+                   ) AS last_progress_at_ms,
+                   (
+                       SELECT COUNT(*) FROM round_assignments AS remaining
+                       WHERE remaining.round_id = seed.round_id
+                         AND remaining.device_id = seed.device_id
+                         AND remaining.phase NOT IN ('completed', 'skipped')
+                   ) AS remaining_count,
                    COALESCE(assignment_control.state, 'running')
                        AS assignment_control_state
             FROM round_device_seeds AS seed
+            JOIN exposure_rounds AS exposure_round
+              ON exposure_round.round_id = seed.round_id
             LEFT JOIN fleet_device_health AS health ON health.device_id = seed.device_id
             LEFT JOIN operator_control_states AS device_control
               ON device_control.scope = 'device'
@@ -883,6 +908,7 @@ class AcquisitionService:
                 int(row["duration_ms"])
             )
         devices = []
+        now_ms = self.clock_ms()
         for row in rows:
             values = durations.get(str(row["device_id"]), [])
             mean_ms = 0.0 if not values else sum(values) / len(values)
@@ -901,13 +927,68 @@ class AcquisitionService:
                     "last_error_code": row["last_error_code"],
                     "control_state": str(row["assignment_control_state"]),
                 }
+            reported_health = str(row["health"] or "unknown")
+            health = reported_health
+            health_error_code = row["error_code"]
+            monitoring_active = (
+                str(row["round_state"]) == "running"
+                and str(row["control_state"]) == "running"
+                and str(row["assignment_control_state"]) == "running"
+            )
+            phase_started_at_ms = (
+                None
+                if row["current_phase_started_at_ms"] is None
+                else int(row["current_phase_started_at_ms"])
+            )
+            last_progress_at_ms = (
+                None
+                if row["last_progress_at_ms"] is None
+                else int(row["last_progress_at_ms"])
+            )
+            progress_values = [
+                value
+                for value in (
+                    phase_started_at_ms,
+                    last_progress_at_ms,
+                    None if row["updated_at_ms"] is None else int(row["updated_at_ms"]),
+                )
+                if value is not None
+            ]
+            progress_age_ms = (
+                0 if not progress_values else max(0, now_ms - max(progress_values))
+            )
+            if (
+                monitoring_active
+                and reported_health == "healthy"
+                and assignment is not None
+            ):
+                phase_age_ms = (
+                    0
+                    if phase_started_at_ms is None
+                    else max(0, now_ms - phase_started_at_ms)
+                )
+                if phase_age_ms >= _MOBILE_PHASE_STALL_MS:
+                    health = "degraded"
+                    health_error_code = "phase_stalled"
+            if (
+                monitoring_active
+                and health == "healthy"
+                and int(row["remaining_count"] or 0) > 0
+                and progress_age_ms >= _MOBILE_PROGRESS_STALE_MS
+            ):
+                health = "degraded"
+                health_error_code = "no_recent_progress"
             devices.append(
                 {
                     "device_id": str(row["device_id"]),
                     "account_id": row["account_id"],
-                    "health": str(row["health"] or "unknown"),
-                    "health_error_code": row["error_code"],
+                    "health": health,
+                    "reported_health": reported_health,
+                    "health_error_code": health_error_code,
                     "health_updated_at_ms": row["updated_at_ms"],
+                    "last_progress_at_ms": last_progress_at_ms,
+                    "current_phase_started_at_ms": phase_started_at_ms,
+                    "progress_age_ms": progress_age_ms,
                     "control_state": str(row["control_state"]),
                     "current_assignment": assignment,
                     "mean_ms": mean_ms,

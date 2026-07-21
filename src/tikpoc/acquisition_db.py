@@ -1180,6 +1180,46 @@ class AcquisitionRepository:
                 fence_token=worker_fence_token,
                 now_ms=effective_now_ms,
             )
+            expired_rows = connection.execute(
+                """
+                SELECT assignment_id, phase, visit_confirmed_at_ms,
+                       next_attempt_at_ms
+                FROM round_assignments
+                WHERE round_id = ? AND device_id = ?
+                  AND lease_owner IS NOT NULL
+                  AND lease_expires_at_ms <= ?
+                  AND phase NOT IN ('completed', 'skipped')
+                """,
+                (round_id, device_id, effective_now_ms),
+            ).fetchall()
+            for expired in expired_rows:
+                assignment_id = int(expired["assignment_id"])
+                previous = AssignmentPhase(str(expired["phase"]))
+                next_phase = (
+                    AssignmentPhase.PENDING
+                    if expired["visit_confirmed_at_ms"] is None
+                    else AssignmentPhase.DEFERRED
+                )
+                next_attempt_at_ms = max(
+                    int(expired["next_attempt_at_ms"]), effective_now_ms
+                )
+                connection.execute(
+                    """
+                    UPDATE round_assignments
+                    SET phase = ?, lease_owner = NULL,
+                        lease_expires_at_ms = 0, next_attempt_at_ms = ?
+                    WHERE assignment_id = ?
+                    """,
+                    (next_phase.value, next_attempt_at_ms, assignment_id),
+                )
+                self._insert_phase_history(
+                    connection,
+                    assignment_id,
+                    previous,
+                    next_phase,
+                    effective_now_ms,
+                    {"reason": "lease_expired"},
+                )
             row = connection.execute(
                 """
                 SELECT assignment.assignment_id, assignment.phase

@@ -1,6 +1,9 @@
+import hashlib
+import os
 import time
 from collections.abc import Callable
 from io import BytesIO
+from pathlib import Path
 from typing import Protocol
 
 from PIL import Image, UnidentifiedImageError
@@ -125,6 +128,7 @@ class AppiumTikTokDevice:
         clock: Callable[[], float] = time.monotonic,
         sleeper: Callable[[float], None] = time.sleep,
         route_opener: Callable[[str], None] | None = None,
+        diagnostics_dir: Path | None = None,
     ) -> None:
         self.driver = driver
         self.metric_read_attempts = metric_read_attempts
@@ -134,6 +138,7 @@ class AppiumTikTokDevice:
         self.clock = clock
         self.sleeper = sleeper
         self.route_opener = route_opener
+        self.diagnostics_dir = diagnostics_dir
         self._profile_source: str | None = None
         self._confirmed_profile_username = ""
         self._visible_post_elements: tuple[object, ...] | None = None
@@ -452,7 +457,72 @@ class AppiumTikTokDevice:
             raise RuntimeError("video controls did not become visible")
 
     def capture_diagnostics(self) -> DeviceDiagnostics:
-        return DeviceDiagnostics(ui_summary=str(self.driver.page_source)[:2_000])
+        try:
+            source = str(self.driver.page_source)
+        except Exception:
+            source = ""
+        try:
+            activity = str(getattr(self.driver, "current_activity", "unknown"))
+        except Exception:
+            activity = "unavailable"
+        try:
+            window = self.driver.get_window_size()
+            window_summary = f"{int(window['width'])}x{int(window['height'])}"
+        except Exception:
+            window_summary = "unavailable"
+
+        controls: list[str] = []
+        for label, xpath in (
+            ("like", LIKE_STATE_XPATH),
+            ("favorite", FAVORITE_STATE_XPATH),
+            ("share", SHARE_CONTROL_XPATH),
+            ("repost", REPOST_STATE_XPATH),
+        ):
+            try:
+                elements = self.driver.find_elements(By.XPATH, xpath)
+            except Exception:
+                continue
+            for element in elements[:2]:
+                try:
+                    if not element.is_displayed():
+                        continue
+                    rect = element.rect
+                    descriptor = str(
+                        element.get_attribute("content-desc")
+                        or element.get_attribute("text")
+                        or getattr(element, "text", "")
+                        or label
+                    ).strip()
+                    controls.append(
+                        f"{label}:{descriptor}@{int(rect['x'])},{int(rect['y'])},"
+                        f"{int(rect['width'])}x{int(rect['height'])}"
+                    )
+                except Exception:
+                    continue
+        screenshot_path = ""
+        if self.diagnostics_dir is not None:
+            try:
+                self.diagnostics_dir.mkdir(parents=True, exist_ok=True)
+                candidate = self.diagnostics_dir / (
+                    f"diagnostic-{os.getpid()}-{time.time_ns()}.png"
+                )
+                saved = self.driver.save_screenshot(str(candidate))
+                if saved and candidate.is_file():
+                    screenshot_path = str(candidate)
+                elif candidate.exists():
+                    candidate.unlink()
+            except Exception:
+                screenshot_path = ""
+        summary = "; ".join(
+            (
+                f"activity={activity}",
+                f"window={window_summary}",
+                f"source_sha256={hashlib.sha256(source.encode()).hexdigest()[:16]}",
+                f"source_length={len(source)}",
+                f"controls={'|'.join(controls) or 'none'}",
+            )
+        )
+        return DeviceDiagnostics(screenshot_path=screenshot_path, ui_summary=summary)
 
     def recover(self, phase: AssignmentPhase) -> None:
         self.sleeper(self.poll_interval)

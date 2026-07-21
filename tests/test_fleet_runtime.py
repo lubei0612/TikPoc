@@ -10,6 +10,7 @@ from tikpoc.acquisition_models import (
     RoundCompletion,
 )
 from tikpoc.fleet import (
+    DeviceWorkerLeaseLost,
     FleetConfig,
     FleetWorkerHealth,
     FleetWorkerState,
@@ -48,6 +49,8 @@ class RecordingFence:
 
 
 class ProtocolDevice:
+    diagnostics_dir: Path | None = None
+
     def ensure_ready(self) -> None:
         return None
 
@@ -177,6 +180,7 @@ def test_device_worker_processes_assignments_until_stopped(tmp_path: Path) -> No
     assert captured["worker_fence_token"] == fence.fence_token
     assert isinstance(captured["device"], FencedVerifiedDevice)
     assert callable(captured["device"].device.route_opener)
+    assert captured["device"].device.diagnostics_dir == tmp_path / "screenshots"
     assert driver.closed is True
 
 
@@ -207,6 +211,54 @@ def test_device_worker_checks_fence_before_creating_appium_session(
         )
 
     assert driver_created is False
+
+
+def test_device_worker_stops_cleanly_when_assignment_worker_loses_fence(
+    tmp_path: Path,
+) -> None:
+    stop_event = threading.Event()
+    fence = RecordingFence()
+
+    class FakeRepository:
+        def __init__(self, path: Path) -> None:
+            self.path = path
+            self.claimed = False
+
+        def claim_next_assignment(self, *args, **kwargs):
+            if self.claimed:
+                return None
+            self.claimed = True
+            return object()
+
+    class FakeDriver:
+        closed = False
+
+        def quit(self) -> None:
+            self.closed = True
+
+    class LostWorker:
+        def __init__(self, *args, **kwargs) -> None:
+            return
+
+        def run_assignment(self, assignment) -> None:
+            raise DeviceWorkerLeaseLost("assignment lease expired")
+
+    driver = FakeDriver()
+    run_device_worker(
+        tmp_path / "db.sqlite",
+        "round-1",
+        _two_device_config(tmp_path).devices[0],
+        fence,
+        stop_event,
+        repository_factory=FakeRepository,
+        driver_factory=lambda *args: driver,
+        device_factory=lambda driver: ProtocolDevice(),
+        route_factory=lambda endpoint: type("Router", (), {"open": lambda *a: None})(),
+        worker_factory=LostWorker,
+        clock_ms=lambda: 1_000,
+    )
+
+    assert driver.closed is True
 
 
 class FakeStopEvent:

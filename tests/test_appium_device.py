@@ -8,6 +8,7 @@ from tikpoc.acquisition_models import (
     ProfileAccessState,
 )
 from io import BytesIO
+from pathlib import Path
 
 from PIL import Image
 from tikpoc.device import (
@@ -1504,3 +1505,26 @@ def test_repost_resume_uses_already_open_share_surface() -> None:
     assert device.reconcile_outcome(OutcomeKind.REPOST) is ActionResult.NOT_APPLIED
     assert device.execute_outcome(OutcomeKind.REPOST) is ActionResult.CONFIRMED
     assert driver.clicked_labels == ["Repost"]
+
+
+def test_capture_diagnostics_records_screenshot_activity_window_and_controls(
+    tmp_path: Path,
+) -> None:
+    driver = FakeDriver()
+    driver.current_activity = "DeepLinkActivityV2"
+    driver.get_window_size = lambda: {"width": 1080, "height": 1920}
+
+    def save_screenshot(path: str) -> bool:
+        Path(path).write_bytes(b"png-evidence")
+        return True
+
+    driver.save_screenshot = save_screenshot
+    device = AppiumTikTokDevice(driver, diagnostics_dir=tmp_path)
+
+    diagnostics = device.capture_diagnostics()
+
+    assert diagnostics.screenshot_path.startswith(str(tmp_path))
+    assert Path(diagnostics.screenshot_path).is_file()
+    assert "activity=DeepLinkActivityV2" in diagnostics.ui_summary
+    assert "window=1080x1920" in diagnostics.ui_summary
+    assert "Like video." in diagnostics.ui_summary

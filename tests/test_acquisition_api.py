@@ -303,6 +303,130 @@ def test_operations_snapshot_contains_dynamic_round_devices_and_traces(
     )
 
 
+def test_operations_snapshot_marks_a_stalled_active_phase_as_degraded(
+    tmp_path: Path,
+) -> None:
+    app, round_id, _ = _seeded_operations_app(tmp_path, clock_seconds=400)
+    path = tmp_path / "tikpoc.db"
+    with sqlite3.connect(path) as connection:
+        assignment_id = int(
+            connection.execute(
+                """
+                SELECT assignment_id FROM round_assignments
+                WHERE round_id = ? AND device_id = 'phone-02' AND phase = 'pending'
+                ORDER BY assignment_id LIMIT 1
+                """,
+                (round_id,),
+            ).fetchone()[0]
+        )
+        connection.execute(
+            "UPDATE exposure_rounds SET state = 'running' WHERE round_id = ?",
+            (round_id,),
+        )
+        connection.execute(
+            """
+            UPDATE round_assignments
+            SET phase = 'profile_opening', lease_owner = 'worker-02',
+                lease_expires_at_ms = 500000
+            WHERE assignment_id = ?
+            """,
+            (assignment_id,),
+        )
+        connection.execute(
+            """
+            INSERT INTO assignment_phase_history(
+                assignment_id, from_phase, to_phase, details_json, changed_at_ms
+            ) VALUES (?, 'pending', 'profile_opening', '{}', 200000)
+            """,
+            (assignment_id,),
+        )
+
+    response = TestClient(app).get(f"/api/operations?round_id={round_id}")
+
+    assert response.status_code == 200
+    device = next(
+        row for row in response.json()["devices"] if row["device_id"] == "phone-02"
+    )
+    assert device["reported_health"] == "healthy"
+    assert device["health"] == "degraded"
+    assert device["health_error_code"] == "phase_stalled"
+    assert device["current_phase_started_at_ms"] == 200000
+    assert device["progress_age_ms"] == 200000
+
+
+def test_operations_snapshot_keeps_unstarted_device_health_unknown(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "unstarted.db"
+    repository = AcquisitionRepository(path, clock_ms=lambda: 10_000)
+    repository.migrate()
+    pool = repository.import_pool("comments.csv", "b" * 64, (_target(1),))
+    round_id = create_exposure_round(
+        repository,
+        pool_id=pool.pool_id,
+        device_seeds={"phone-01": "seed-01"},
+        starts_at_ms=1_000,
+        min_inter_device_gap_ms=0,
+        min_repeat_gap_ms=0,
+    )
+    app = create_app(path, clock=lambda: 10)
+
+    response = TestClient(app).get(f"/api/operations?round_id={round_id}")
+
+    assert response.status_code == 200
+    device = response.json()["devices"][0]
+    assert device["health"] == "unknown"
+    assert device["progress_age_ms"] == 0
+
+
+def test_operations_snapshot_does_not_degrade_a_paused_round(
+    tmp_path: Path,
+) -> None:
+    app, round_id, _ = _seeded_operations_app(tmp_path, clock_seconds=400)
+    path = tmp_path / "tikpoc.db"
+    with sqlite3.connect(path) as connection:
+        assignment_id = int(
+            connection.execute(
+                """
+                SELECT assignment_id FROM round_assignments
+                WHERE round_id = ? AND device_id = 'phone-02' AND phase = 'pending'
+                ORDER BY assignment_id LIMIT 1
+                """,
+                (round_id,),
+            ).fetchone()[0]
+        )
+        connection.execute(
+            "UPDATE exposure_rounds SET state = 'paused' WHERE round_id = ?",
+            (round_id,),
+        )
+        connection.execute(
+            """
+            UPDATE round_assignments
+            SET phase = 'profile_opening', lease_owner = 'worker-02',
+                lease_expires_at_ms = 500000
+            WHERE assignment_id = ?
+            """,
+            (assignment_id,),
+        )
+        connection.execute(
+            """
+            INSERT INTO assignment_phase_history(
+                assignment_id, from_phase, to_phase, details_json, changed_at_ms
+            ) VALUES (?, 'pending', 'profile_opening', '{}', 200000)
+            """,
+            (assignment_id,),
+        )
+
+    response = TestClient(app).get(f"/api/operations?round_id={round_id}")
+
+    assert response.status_code == 200
+    device = next(
+        row for row in response.json()["devices"] if row["device_id"] == "phone-02"
+    )
+    assert device["health"] == "healthy"
+    assert device["health_error_code"] is None
+
+
 def test_operations_snapshot_reads_browser_health_in_acquisition_transaction(
     tmp_path: Path, monkeypatch
 ) -> None:

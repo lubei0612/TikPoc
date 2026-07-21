@@ -590,6 +590,51 @@ def test_expired_assignment_lease_blocks_fenced_terminal_write(tmp_path: Path) -
     assert stored.lease_owner == "worker-01"
 
 
+def test_replaced_assignment_owner_is_reported_as_worker_lease_loss(
+    tmp_path: Path,
+) -> None:
+    repository = AcquisitionRepository(tmp_path / "tikpoc.db", clock_ms=lambda: 1_000)
+    repository.migrate()
+    imported = repository.import_pool("comments.csv", "3" * 64, (_target("sec:s1"),))
+    round_id = create_exposure_round(
+        repository,
+        pool_id=imported.pool_id,
+        device_seeds={"phone-01": "seed-01"},
+        starts_at_ms=1_000,
+        min_inter_device_gap_ms=0,
+        min_repeat_gap_ms=0,
+    )
+    assignment = repository.claim_next_assignment(
+        round_id, "phone-01", "worker-01", now_ms=1_000, lease_ttl_ms=100
+    )
+    assert assignment is not None
+    token = repository.claim_device_worker_lease(
+        "phone-01", "account-01", "worker-01", now_ms=1_000, ttl_ms=1_000
+    )
+    assert isinstance(token, int)
+    replacement = repository.claim_next_assignment(
+        round_id, "phone-01", "worker-02", now_ms=1_101, lease_ttl_ms=100
+    )
+    if replacement is None:
+        replacement = repository.claim_next_assignment(
+            round_id, "phone-01", "worker-02", now_ms=1_102, lease_ttl_ms=100
+        )
+    assert replacement is not None
+    assert replacement.assignment_id == assignment.assignment_id
+
+    with pytest.raises(DeviceWorkerLeaseLost):
+        repository.defer_assignment(
+            assignment.assignment_id,
+            "worker-01",
+            now_ms=1_103,
+            retry_delay_ms=100,
+            error_code="late_route_result",
+            diagnostics=DeviceDiagnostics(),
+            worker_account_id="account-01",
+            worker_fence_token=token,
+        )
+
+
 def test_transaction_fence_uses_current_repository_time(tmp_path: Path) -> None:
     repository = AcquisitionRepository(tmp_path / "tikpoc.db", clock_ms=lambda: 1_101)
     repository.migrate()
