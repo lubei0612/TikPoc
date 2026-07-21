@@ -16,11 +16,12 @@ from tikpoc.acquisition_models import (
     ProfileObservation,
 )
 from tikpoc.importer import Target
-from tikpoc.device import ProfileIdentityMismatch
+from tikpoc.device import AppiumTikTokDevice, ProfileIdentityMismatch
 from tikpoc.mobile_worker import MobileAssignmentWorker
 from tikpoc.models import ProfileMetrics
 from tikpoc.outcome_planner import get_or_create_plan
 from tikpoc.rounds import create_exposure_round
+from tests.test_appium_device import BoundedVideoDriver
 
 MANUAL_RETRY_AT_MS = 9_223_372_036_854_775_807
 
@@ -122,6 +123,57 @@ class TimedScriptedDevice(ScriptedVerifiedDevice):
     def execute_outcome(self, outcome: OutcomeKind) -> ActionResult:
         self.clock.advance(500)
         return super().execute_outcome(outcome)
+
+
+class SharedSnapshotDelayedGridDevice:
+    def __init__(self) -> None:
+        class DelayedGridDriver(BoundedVideoDriver):
+            def find_elements(self, by: str, value: str):
+                if (
+                    by == "xpath"
+                    and "com.zhiliaoapp.musically:id/cover" in value
+                    and self.post_queries == 0
+                ):
+                    self.post_queries += 1
+                    return []
+                return super().find_elements(by, value)
+
+        self.driver = DelayedGridDriver()
+        self.appium = AppiumTikTokDevice(
+            self.driver, metric_read_attempts=2, poll_interval=0
+        )
+        self.observation_reads = 0
+
+    def ensure_ready(self) -> None:
+        return
+
+    def open_target(self, target) -> None:
+        return
+
+    def confirm_profile_identity(self, target) -> None:
+        return
+
+    def read_profile_observation(self) -> ProfileObservation:
+        self.observation_reads += 1
+        raise AssertionError("shared snapshot should skip profile observation")
+
+    def list_video_keys(self) -> tuple[str, ...]:
+        return self.appium.list_video_keys()
+
+    def open_and_confirm_video(self, video_key: str) -> None:
+        self.appium.open_and_confirm_video(video_key)
+
+    def execute_outcome(self, outcome: OutcomeKind) -> ActionResult:
+        raise AssertionError("trace plan should not execute an interaction")
+
+    def reconcile_outcome(self, outcome: OutcomeKind) -> ActionResult:
+        raise AssertionError("trace plan should not reconcile an interaction")
+
+    def capture_diagnostics(self) -> DeviceDiagnostics:
+        return DeviceDiagnostics(screenshot_path="", ui_summary="")
+
+    def recover(self, phase: AssignmentPhase) -> None:
+        return
 
 
 def _claimed_assignment(
@@ -883,6 +935,78 @@ def test_eligible_trace_opens_video_without_interaction(tmp_path: Path) -> None:
     )
     assert len(device.opened_videos) == 1
     assert device.action_calls == []
+
+
+def test_shared_eligible_snapshot_waits_for_second_device_video_grid(
+    tmp_path: Path,
+) -> None:
+    repository = AcquisitionRepository(tmp_path / "tikpoc.db", clock_ms=lambda: 1_000)
+    repository.migrate()
+    target = Target(
+        target_id="user-1",
+        username="buyer",
+        profile_url="https://www.tiktok.com/@buyer",
+        source_video_id="video-source",
+        sec_uid="sec-1",
+        identity_key="sec:sec-1",
+        source_line_numbers=(2,),
+    )
+    pool = repository.import_pool("comments.csv", "2" * 64, (target,))
+    round_id = create_exposure_round(
+        repository,
+        pool_id=pool.pool_id,
+        device_seeds={"phone-01": "seed-a", "phone-02": "seed-b"},
+        starts_at_ms=1_000,
+        min_inter_device_gap_ms=0,
+    )
+    first = repository.claim_next_assignment(
+        round_id, "phone-01", "worker-1", now_ms=1_000
+    )
+    assert first is not None
+    repository.record_visit_confirmed(first.assignment_id, "worker-1", now_ms=1_000)
+    assert repository.claim_snapshot_lease(
+        round_id,
+        first.identity_key,
+        "phone-01",
+        now_ms=1_000,
+        ttl_ms=10_000,
+    )
+    repository.publish_profile_snapshot(
+        round_id,
+        first.identity_key,
+        device_id="phone-01",
+        observed_username="buyer",
+        metrics=ProfileMetrics(20, 10, 5),
+        private_account=False,
+        observed_at_ms=1_001,
+    )
+    repository.complete_assignment(
+        first.assignment_id,
+        "worker-1",
+        AssignmentPhase.IDENTITY_CONFIRMED,
+        now_ms=1_002,
+    )
+    second = repository.claim_next_assignment(
+        round_id, "phone-02", "worker-2", now_ms=2_000
+    )
+    assert second is not None
+    device = SharedSnapshotDelayedGridDevice()
+    worker = MobileAssignmentWorker(
+        repository,
+        device,
+        device_id="phone-02",
+        owner_id="worker-2",
+        clock_ms=lambda: 2_000,
+        plan_provider=_forced_plan(OutcomeKind.TRACE),
+    )
+
+    worker.run_assignment(second)
+
+    assert (
+        repository.assignment(second.assignment_id).phase is AssignmentPhase.COMPLETED
+    )
+    assert device.observation_reads == 0
+    assert device.driver.post_queries == 2
 
 
 def test_restart_reconciles_uncertain_plan_without_second_click_or_reservation(

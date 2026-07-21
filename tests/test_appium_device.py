@@ -447,6 +447,18 @@ class DelayedCurrentPostGridDriver(CachedProfileObservationDriver):
         return super().find_elements(by, value)
 
 
+class DelayedSemanticPostGridDriver(FakeDriver):
+    def __init__(self) -> None:
+        super().__init__()
+        self.post_queries = 0
+
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if by == "xpath" and "com.zhiliaoapp.musically:id/cover" in value:
+            self.post_queries += 1
+            return [] if self.post_queries == 1 else self.posts
+        return super().find_elements(by, value)
+
+
 class RenamedStableRouteDriver(FakeDriver):
     def __init__(self, *, changes_route: bool = True) -> None:
         super().__init__()
@@ -770,6 +782,14 @@ def test_appium_device_accepts_current_cover_post_container_id() -> None:
     device = AppiumTikTokDevice(driver)
 
     assert device.list_visible_posts() == ("0", "1", "2", "3")
+
+
+def test_appium_device_waits_for_delayed_semantic_post_grid() -> None:
+    driver = DelayedSemanticPostGridDriver()
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+
+    assert device.list_visible_posts() == ("0", "1", "2", "3")
+    assert driver.post_queries == 2
 
 
 def test_favorite_pixel_state_reads_current_yellow_active_icon() -> None:

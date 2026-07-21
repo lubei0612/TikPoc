@@ -234,7 +234,11 @@ class AppiumTikTokDevice:
     def list_visible_posts(self) -> tuple[str, ...]:
         elements = self._visible_post_elements
         if elements is None:
-            elements = tuple(self._post_elements())
+            for attempt in range(self.metric_read_attempts):
+                elements = tuple(self._post_elements())
+                if elements or attempt + 1 == self.metric_read_attempts:
+                    break
+                self.sleeper(self.poll_interval)
         self._visible_post_elements = elements
         return tuple(str(index) for index in range(len(elements)))
 
