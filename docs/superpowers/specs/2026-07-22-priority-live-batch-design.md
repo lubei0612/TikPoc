@@ -24,7 +24,9 @@ the existing Chinese-header workbook adapter is not reused by position.
 
 The machine-facing collector contract therefore accepts a real username and an
 optional platform user ID or sec UID. Collector-local IDs remain source
-lineage only.
+lineage only. JSON identity and route fields must be strings or null. Usernames
+must match TikTok handle syntax, and a supplied profile URL must be the matching
+TikTok HTTPS profile URL; malformed rows never enter a device queue.
 
 ## Scheduling Model
 

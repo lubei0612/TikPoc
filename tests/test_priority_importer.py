@@ -144,6 +144,49 @@ def test_priority_jsonl_rejects_malformed_row_with_line_number(tmp_path: Path) -
         read_priority_targets(source, source_live_id="live-4")
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("username", {"unexpected": "object"}),
+        ("user_id", ["unexpected", "array"]),
+        ("profile_url", {"unexpected": "object"}),
+    ],
+)
+def test_priority_jsonl_rejects_non_string_machine_fields(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    source = tmp_path / "live.jsonl"
+    row = {"username": "buyer", field: value}
+    source.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=rf"JSONL line 1.*{field}.*string or null"):
+        read_priority_targets(source, source_live_id="live-schema")
+
+
+def test_priority_jsonl_counts_invalid_tiktok_handle(tmp_path: Path) -> None:
+    source = tmp_path / "live.jsonl"
+    source.write_text(
+        "\n".join(("{}", '{"username":"bad/name"}', '{"username":"valid.name"}')),
+        encoding="utf-8",
+    )
+
+    result = read_priority_targets(source, source_live_id="live-handle")
+
+    assert [target.username for target in result.targets] == ["valid.name"]
+    assert result.skipped_invalid == 2
+
+
+def test_priority_jsonl_rejects_non_tiktok_profile_url(tmp_path: Path) -> None:
+    source = tmp_path / "live.jsonl"
+    source.write_text(
+        '{"username":"buyer","profile_url":"https://example.com/@buyer"}\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="source line 1.*TikTok profile URL"):
+        read_priority_targets(source, source_live_id="live-url")
+
+
 def test_priority_importer_accepts_current_english_follower_headers(
     tmp_path: Path,
 ) -> None:

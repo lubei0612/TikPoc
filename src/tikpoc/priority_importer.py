@@ -1,7 +1,9 @@
 import json
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from openpyxl import load_workbook
 
@@ -13,6 +15,16 @@ _REQUIRED_PRIORITY_WORKBOOK_COLUMNS = {
     "follower_uid",
     "follower_sec_uid",
 }
+_HANDLE_PATTERN = re.compile(r"[A-Za-z0-9._]{1,24}")
+_JSON_TEXT_FIELDS = (
+    "username",
+    "user_id",
+    "sec_uid",
+    "profile_url",
+    "source_video_id",
+    "source_live_id",
+    "collected_at",
+)
 
 
 @dataclass(frozen=True)
@@ -52,17 +64,21 @@ def _read_jsonl(path: Path, live_id: str) -> PriorityImportResult:
                 raise ValueError(f"JSONL line {line_number} is malformed") from error
             if not isinstance(row, dict):
                 raise ValueError(f"JSONL line {line_number} must be an object")
-            row_live_id = str(row.get("source_live_id") or live_id).strip()
+            values = {
+                field: _json_text(row, field, line_number)
+                for field in _JSON_TEXT_FIELDS
+            }
+            row_live_id = str(values["source_live_id"] or live_id).strip()
             if row_live_id != live_id:
                 raise ValueError(
                     f"JSONL line {line_number} has a different source_live_id"
                 )
             target = _target_from_values(
-                username=row.get("username"),
-                target_id=row.get("user_id"),
-                sec_uid=row.get("sec_uid"),
-                profile_url=row.get("profile_url"),
-                source_video_id=row.get("source_video_id"),
+                username=values["username"],
+                target_id=values["user_id"],
+                sec_uid=values["sec_uid"],
+                profile_url=values["profile_url"],
+                source_video_id=values["source_video_id"],
                 source_line_number=line_number,
             )
             if target is None:
@@ -122,15 +138,15 @@ def _target_from_values(
     source_line_number: int,
 ) -> Target | None:
     normalized_username = str(username or "").strip().removeprefix("@").lower()
-    if not normalized_username:
+    if _HANDLE_PATTERN.fullmatch(normalized_username) is None:
         return None
     raw_target_id = str(target_id or "").strip()
     normalized_target_id = (
         "" if raw_target_id.lower().startswith("dom-") else raw_target_id
     )
     normalized_sec_uid = str(sec_uid or "").strip()
-    normalized_profile_url = str(profile_url or "").strip() or (
-        f"https://www.tiktok.com/@{normalized_username}"
+    normalized_profile_url = _profile_url(
+        profile_url, normalized_username, source_line_number
     )
     identity_key = target_identity_key(
         sec_uid=normalized_sec_uid,
@@ -212,3 +228,29 @@ def _cell(row: tuple[object, ...], index: int) -> str:
     if index >= len(row) or row[index] is None:
         return ""
     return str(row[index]).strip()
+
+
+def _json_text(row: dict[str, Any], field: str, line_number: int) -> str | None:
+    value = row.get(field)
+    if value is None or isinstance(value, str):
+        return value
+    raise ValueError(f"JSONL line {line_number} field {field} must be a string or null")
+
+
+def _profile_url(value: Any, username: str, line_number: int) -> str:
+    canonical = f"https://www.tiktok.com/@{username}"
+    raw = str(value or "").strip()
+    if not raw:
+        return canonical
+    parsed = urlsplit(raw)
+    if (
+        parsed.scheme.lower() != "https"
+        or parsed.hostname not in {"tiktok.com", "www.tiktok.com"}
+        or parsed.path.rstrip("/").lower() != f"/@{username}".lower()
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError(
+            f"source line {line_number} profile_url must be a TikTok profile URL"
+        )
+    return canonical
