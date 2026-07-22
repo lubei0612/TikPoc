@@ -28,6 +28,13 @@ def _parser() -> argparse.ArgumentParser:
     pool_import = commands.add_parser("pool-import")
     pool_import.add_argument("--db", type=Path, required=True)
     pool_import.add_argument("--csv", type=Path, required=True)
+    priority_import = commands.add_parser("priority-import")
+    priority_import.add_argument("--db", type=Path, required=True)
+    priority_import.add_argument("--devices", type=Path, required=True)
+    priority_import.add_argument("--file", type=Path, required=True)
+    priority_import.add_argument("--source-live", required=True)
+    priority_status = commands.add_parser("priority-status")
+    priority_status.add_argument("--db", type=Path, required=True)
     supabase_pool_import = commands.add_parser("supabase-pool-import")
     supabase_pool_import.add_argument("--csv", type=Path, required=True)
     supabase_pool_import.add_argument(
@@ -107,6 +114,29 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command in {"priority-import", "priority-status"}:
+        from .priority_service import PriorityBatchService, summary_json
+
+        _require_file(args.db, "database")
+        repository = AcquisitionRepository(args.db)
+        repository.migrate()
+        service = PriorityBatchService(repository)
+        try:
+            if args.command == "priority-import":
+                _require_file(args.devices, "device configuration")
+                _require_file(args.file, "priority input")
+                summary = service.import_batch(
+                    args.file,
+                    source_live_id=args.source_live,
+                    fleet_config=FleetConfig.from_path(args.devices),
+                )
+                payload = summary_json(summary)
+            else:
+                payload = service.status()
+        except (KeyError, OSError, ValueError) as error:
+            raise SystemExit(str(error)) from None
+        print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+        return 0
     if args.command == "proxy-guard":
         import time
 

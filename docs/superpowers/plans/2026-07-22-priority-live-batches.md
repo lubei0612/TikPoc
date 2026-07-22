@@ -333,7 +333,7 @@ git commit -m "feat: deduplicate priority coverage"
 - Test: `tests/test_fleet_runtime.py`
 - Test: `tests/test_priority_cli.py`
 
-- [ ] **Step 1: Write failing worker and CLI tests**
+- [x] **Step 1: Write failing worker and CLI tests**
 
 Require `run_device_worker` to call `claim_scheduled_assignment` using the
 ordinary round ID, and add CLI acceptance tests for:
@@ -349,7 +349,7 @@ The import command prints one JSON object containing `batch_id`,
 batches with per-device pending/completed/skipped counts and the current ordinary
 checkpoint. Replaying the import prints the same batch ID.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 uv run pytest tests/test_priority_cli.py tests/test_fleet_runtime.py -q
@@ -358,7 +358,7 @@ uv run pytest tests/test_priority_cli.py tests/test_fleet_runtime.py -q
 Expected: argparse rejects the new commands and the runtime still calls
 `claim_next_assignment`.
 
-- [ ] **Step 3: Implement the service, CLI, and runtime switch**
+- [x] **Step 3: Implement the service, CLI, and runtime switch**
 
 `PriorityBatchService.import_batch()` must:
 
@@ -373,7 +373,7 @@ Expected: argparse rejects the new commands and the runtime still calls
 Change only the worker claim call; do not alter `MobileAssignmentWorker`, action
 probabilities, quotas, retry handling, or verification behavior.
 
-- [ ] **Step 4: Verify and commit Task 5**
+- [x] **Step 4: Verify and commit Task 5**
 
 ```bash
 uv run pytest tests/test_priority_cli.py tests/test_fleet_runtime.py tests/test_mobile_worker.py -q

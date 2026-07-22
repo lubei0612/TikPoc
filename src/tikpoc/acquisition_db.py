@@ -1174,6 +1174,7 @@ class AcquisitionRepository:
         source_live_id: str,
         source_checksum: str,
         device_seeds: Mapping[str, str],
+        require_unique_active_parent: bool = False,
     ) -> PriorityBatch:
         normalized_batch_id = str(batch_id).strip()
         normalized_parent = str(parent_round_id).strip()
@@ -1273,6 +1274,26 @@ class AcquisitionRepository:
                 raise ValueError("parent round has no devices")
             if set(normalized_seeds) != parent_devices:
                 raise ValueError("device seeds must match parent round")
+            if require_unique_active_parent:
+                active_ordinary = tuple(
+                    str(row["round_id"])
+                    for row in connection.execute(
+                        """
+                        SELECT round.round_id
+                        FROM exposure_rounds AS round
+                        WHERE round.state IN ('pending','running')
+                          AND NOT EXISTS (
+                              SELECT 1 FROM priority_batches AS batch
+                              WHERE batch.priority_round_id = round.round_id
+                          )
+                        ORDER BY round.round_id
+                        """
+                    )
+                )
+                if active_ordinary != (normalized_parent,):
+                    raise ValueError(
+                        "priority import requires exactly one active ordinary round"
+                    )
 
             pool = connection.execute(
                 "SELECT source_checksum FROM target_pools WHERE pool_id = ?",
