@@ -534,6 +534,12 @@ Completed on `feat/web-lead-conversion`:
   and CLI verification passed `45` tests; the full Python suite passed `802`
   with the existing Starlette/httpx deprecation warning. Ruff, touched-file
   format, CLI help, and `git diff --check` passed.
+- The controlled slot-1 catalog publishing gate completed one TOP1-shop product
+  as one five-image TikTok photo post. The Post control was activated exactly
+  once; a first-use Profile modal caused the automatic result to freeze as
+  `uncertain`, and read-only visible evidence on the exact expected account then
+  reconciled that same job to `published`. Final durable status is
+  `published=1`, `uncertain=0`; no duplicate or automatic retry occurred.
 
 Outstanding at the current checkpoint:
 

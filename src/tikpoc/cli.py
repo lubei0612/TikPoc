@@ -768,6 +768,7 @@ def _run_catalog_publish(
         AdbMediaStager,
         AppiumTikTokPhotoUi,
         MobileCatalogPublisher,
+        start_publish_activity,
     )
     from .publishing_db import PublishingRepository
     from .runner import create_driver
@@ -780,6 +781,9 @@ def _run_catalog_publish(
         ui_factory=lambda: AppiumTikTokPhotoUi(
             create_driver(device.appium_url, device.adb_endpoint, command_timeout=60),
             timeout=30,
+            activity_opener=lambda: start_publish_activity(
+                device.adb_endpoint, adb_path=adb_path
+            ),
         ),
     )
     results = []

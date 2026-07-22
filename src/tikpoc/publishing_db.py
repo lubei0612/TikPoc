@@ -380,6 +380,41 @@ class PublishingRepository:
             rows = connection.execute(query, parameters).fetchall()
         return tuple(_job(row) for row in rows)
 
+    def reconcile_uncertain(
+        self,
+        job_id: int,
+        *,
+        visible_post_url: str,
+        now_ms: int,
+    ) -> PublishingJob:
+        evidence = visible_post_url.strip()
+        if not evidence:
+            raise ValueError("visible post evidence is required")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE publishing_jobs
+                SET state = 'published', visible_post_url = ?, finished_at_ms = ?,
+                    updated_at_ms = ?
+                WHERE job_id = ? AND state = 'uncertain'
+                """,
+                (evidence, now_ms, now_ms, job_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("job must be uncertain before reconciliation")
+            connection.execute(
+                """
+                INSERT INTO publishing_attempts(job_id, stage, detail, created_at_ms)
+                VALUES (?, 'reconciled_after_uncertain', ?, ?)
+                """,
+                (job_id, evidence[:500], now_ms),
+            )
+            row = connection.execute(
+                "SELECT * FROM publishing_jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()
+        return _job(row)
+
 
 def _job(row: sqlite3.Row | None) -> PublishingJob:
     if row is None:

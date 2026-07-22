@@ -225,6 +225,45 @@ def test_missing_visible_result_becomes_uncertain_and_is_not_retried(
     )
 
 
+def test_reconcile_dismisses_profile_modal_before_reading_visible_post() -> None:
+    class CloseButton:
+        clicks = 0
+
+        def is_displayed(self) -> bool:
+            return True
+
+        def click(self) -> None:
+            self.clicks += 1
+
+    class ProfileDriver:
+        page_source = """<hierarchy>
+            <node resource-id="com.zhiliaoapp.musically:id/s7e"
+                  text="@expected" />
+            <node resource-id="com.zhiliaoapp.musically:id/tv_play_count"
+                  text="new-post" />
+        </hierarchy>"""
+
+        def __init__(self) -> None:
+            self.close = CloseButton()
+
+        def execute_script(self, *_args, **_kwargs) -> None:
+            pass
+
+        def find_elements(self, _by, xpath):
+            return [self.close] if ":id/e2c" in xpath else []
+
+    driver = ProfileDriver()
+    ui = AppiumTikTokPhotoUi(driver, timeout=0)
+    ui.expected_username = "expected"
+    ui._submitted = True
+
+    evidence = ui.reconcile(frozenset({"old-post"}))
+
+    assert evidence is not None
+    assert evidence.startswith("tiktok-visible://@expected/")
+    assert driver.close.clicks == 1
+
+
 def test_verification_before_submit_releases_job_for_human_resolution(
     tmp_path: Path,
 ) -> None:

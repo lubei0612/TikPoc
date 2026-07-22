@@ -31,12 +31,17 @@ UPLOAD_XPATH = (
     '//*[@content-desc="Upload" or @text="Upload" or @content-desc="上传" '
     'or @text="上传"]'
 )
+ALBUM_LAUNCH_XPATH = (
+    f'//*[@resource-id="{TIKTOK_PACKAGE}:id/cwd" or '
+    f'@resource-id="{TIKTOK_PACKAGE}:id/view_bg2"]'
+)
 PHOTOS_XPATH = (
     '//*[@text="Photos" or @content-desc="Photos" or @text="照片" '
     'or @content-desc="照片"]'
 )
 ALBUM_XPATH = (
-    '//*[@text="All" or @text="Recents" or @text="Albums" or @text="相册" '
+    f'//*[@resource-id="{TIKTOK_PACKAGE}:id/dna" or @text="All" '
+    'or @text="Recents" or @text="Albums" or @text="相册" '
     'or @content-desc="All" or @content-desc="Recents"]'
 )
 MULTI_SELECT_XPATH = (
@@ -44,14 +49,20 @@ MULTI_SELECT_XPATH = (
     'or @text="选择多个" or @content-desc="选择多个"]'
 )
 THUMBNAIL_CHECK_XPATH = (
-    '//*[@resource-id="com.android.providers.media.module:id/icon_check" '
+    f'//*[@resource-id="{TIKTOK_PACKAGE}:id/ken" or '
+    '@resource-id="com.android.providers.media.module:id/icon_check" '
     'or contains(@resource-id,"select_check") or contains(@resource-id,"checkbox")]'
     " | //android.widget.GridView[1]/android.widget.FrameLayout/"
     "android.widget.FrameLayout/android.widget.Button"
 )
 NEXT_XPATH = (
-    '//*[@text="Next" or @content-desc="Next" or @text="下一步" '
+    f'//*[@resource-id="{TIKTOK_PACKAGE}:id/wpz" or @text="Next" '
+    'or @content-desc="Next" or @text="下一步" '
     'or @content-desc="下一步"]'
+)
+EDITOR_NEXT_XPATH = (
+    f'//*[@resource-id="{TIKTOK_PACKAGE}:id/p8v" or '
+    f'@resource-id="{TIKTOK_PACKAGE}:id/p8x" or @text="Next"]'
 )
 CAPTION_XPATH = "//android.widget.EditText"
 POST_XPATH = (
@@ -66,6 +77,14 @@ VERIFICATION_MARKERS = (
     "请完成验证",
     "安全验证",
 )
+PERMISSION_XPATH = (
+    '//*[@text="ALLOW ALL" or @text="WHILE USING THE APP" '
+    'or @text="ALLOW" or @text="允许全部" or @text="使用应用时允许"]'
+)
+PUBLISH_ACTIVITY = (
+    "com.zhiliaoapp.musically/"
+    "com.ss.android.ugc.aweme.shortvideo.ui.VideoRecordPermissionActivity"
+)
 
 
 class AppiumTikTokPhotoUi:
@@ -76,11 +95,13 @@ class AppiumTikTokPhotoUi:
         timeout: float = 10,
         poll_interval: float = 0.25,
         sleeper: Callable[[float], None] = time.sleep,
+        activity_opener: Callable[[], None] | None = None,
     ) -> None:
         self.driver = driver
         self.timeout = max(0.0, timeout)
         self.poll_interval = max(0.0, poll_interval)
         self.sleeper = sleeper
+        self.activity_opener = activity_opener
         self.expected_username = ""
         self._submitted = False
 
@@ -116,9 +137,30 @@ class AppiumTikTokPhotoUi:
         album_name = Path(next(iter(parents))).name
         if not album_name.startswith("job-"):
             raise ValueError("publishing album must be job-scoped")
-        self._click_required(CREATE_XPATH, "Create control")
-        self._click_required(UPLOAD_XPATH, "Upload control")
-        self._click_required(PHOTOS_XPATH, "Photos control")
+        create = self._first_now(CREATE_XPATH)
+        if create is not None:
+            create.click()
+        else:
+            if self.activity_opener is not None:
+                self.activity_opener()
+            else:
+                self.driver.execute_script(
+                    "mobile: startActivity", {"intent": PUBLISH_ACTIVITY}
+                )
+        self._allow_permissions()
+        self._dismiss_onboarding()
+        upload = self._first_now(UPLOAD_XPATH)
+        if upload is not None:
+            upload.click()
+            photos = self._first_now(PHOTOS_XPATH)
+            if photos is not None:
+                photos.click()
+        else:
+            self._click_required(ALBUM_LAUNCH_XPATH, "photo album control")
+        self._allow_permissions()
+        photos = self._first_now(PHOTOS_XPATH)
+        if photos is not None:
+            photos.click()
         album = self._first(ALBUM_XPATH)
         if album is not None:
             album.click()
@@ -138,8 +180,13 @@ class AppiumTikTokPhotoUi:
             )
         for thumbnail in thumbnails[: len(remote_paths)]:
             thumbnail.click()
+            self.sleeper(0.3)
+        self.sleeper(1.0)
         self._click_required(NEXT_XPATH, "Next control")
-        caption_input = self._first(CAPTION_XPATH)
+        caption_input = self._first_now(CAPTION_XPATH)
+        if caption_input is None:
+            self._click_required(EDITOR_NEXT_XPATH, "photo editor Next control")
+            caption_input = self._first(CAPTION_XPATH)
         if caption_input is None:
             raise RuntimeError("caption input is not visible")
         caption_input.clear()
@@ -168,6 +215,7 @@ class AppiumTikTokPhotoUi:
         )
         deadline = time.monotonic() + self.timeout
         while True:
+            self._dismiss_profile_modal()
             source = str(self.driver.page_source)
             if parse_profile_username(source) == self.expected_username:
                 added = set(parse_visible_post_keys(source)) - set(before)
@@ -212,6 +260,15 @@ class AppiumTikTokPhotoUi:
         elements = self._wait_elements(xpath)
         return elements[0] if elements else None
 
+    def _first_now(self, xpath: str) -> object | None:
+        for element in self.driver.find_elements(By.XPATH, xpath):
+            try:
+                if element.is_displayed():
+                    return element
+            except Exception:
+                continue
+        return None
+
     def _click_required(self, xpath: str, label: str) -> None:
         element = self._first(xpath)
         if element is None:
@@ -221,6 +278,57 @@ class AppiumTikTokPhotoUi:
     def _verification_visible(self) -> bool:
         source = str(self.driver.page_source).lower()
         return any(marker in source for marker in VERIFICATION_MARKERS)
+
+    def _allow_permissions(self) -> None:
+        for _ in range(3):
+            permission = self._first_now(PERMISSION_XPATH)
+            if permission is None:
+                return
+            permission.click()
+
+    def _dismiss_onboarding(self) -> None:
+        source = str(self.driver.page_source).lower()
+        if "start recording" not in source and "ai self" not in source:
+            return
+        close = self._first_now('//*[@content-desc="Close" or @text="Close"]')
+        if close is not None:
+            close.click()
+
+    def _dismiss_profile_modal(self) -> None:
+        close = self._first_now(
+            f'//*[@resource-id="{TIKTOK_PACKAGE}:id/e2c" or @content-desc="Close"]'
+        )
+        if close is not None:
+            close.click()
+
+
+def start_publish_activity(
+    adb_endpoint: str,
+    *,
+    adb_path: Path | None = None,
+    runner: Callable[..., object] = subprocess.run,
+) -> None:
+    executable = adb_path or Path.home() / "Library/Android/sdk/platform-tools/adb"
+    common = (str(executable), "-s", adb_endpoint, "shell", "am")
+    runner(
+        (*common, "force-stop", TIKTOK_PACKAGE),
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    runner(
+        (
+            *common,
+            "start",
+            "-n",
+            PUBLISH_ACTIVITY,
+        ),
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
 
 
 class PhotoPublishingUi(Protocol):

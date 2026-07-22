@@ -118,3 +118,19 @@ after the Post click is stored as `uncertain` and is never retried
 automatically. Identity, verification, or media-selection failures before the
 click return the job to `approved`. Inspect durable state with
 `tikpoc catalog status --db var/tikpoc.db`.
+
+## Slot 1 Live Acceptance (2026-07-22)
+
+A controlled run on slot 1 completed the pipeline for one TOP1-shop product:
+
+- one immutable product job staged five ordered images in its isolated album;
+- TikTok selected all five images and the publisher activated Post exactly once;
+- the first automatic reconciliation was obscured by a first-use Profile modal,
+  so the durable result correctly froze as `uncertain` without retrying;
+- read-only Profile evidence then confirmed the exact expected account, one new
+  visible product post, the expected footwear cover, and play count `0`;
+- the same job was reconciled from that visible evidence to `published`.
+
+Final durable status was `published=1`, `uncertain=0`. This proves the bounded
+one-product, multi-image slot-1 path; it does not authorize or claim an
+unattended bulk publishing run.
