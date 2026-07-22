@@ -37,6 +37,16 @@ def _clock_ms() -> int:
     return int(time.time() * 1_000)
 
 
+def _has_validated_tun_vpn(connectivity: str) -> bool:
+    blocks = connectivity.split("NetworkAgentInfo{")[1:]
+    return any(
+        "ni{VPN CONNECTED" in block
+        and "InterfaceName: tun0" in block
+        and "VALIDATED" in block
+        for block in blocks
+    )
+
+
 class ProxyGuard:
     def __init__(
         self,
@@ -68,23 +78,24 @@ class ProxyGuard:
 
     def reconcile(self) -> tuple[ProxyHealth, ...]:
         observed_at_ms = self.clock_ms()
-        try:
-            proxy_host = self.source_address(self.config.myt_host)
-        except (OSError, ValueError):
-            return tuple(
-                ProxyHealth(
-                    device.device_id,
-                    "unknown",
-                    "source_unavailable",
-                    None,
-                    "unknown",
-                    observed_at_ms,
-                )
-                for device in self.config.devices
-            )
+        device_states = {
+            device.device_id: self._device_state(device)
+            for device in self.config.devices
+        }
+        legacy_devices = tuple(
+            device
+            for device in self.config.devices
+            if device_states[device.device_id] == ("device", None)
+        )
+        proxy_host = None
+        if legacy_devices:
+            try:
+                proxy_host = self.source_address(self.config.myt_host)
+            except (OSError, ValueError):
+                proxy_host = None
         default_proxy_port = self.config.relay_upstream_port
         proxy_ports = {
-            device.proxy_port or default_proxy_port for device in self.config.devices
+            device.proxy_port or default_proxy_port for device in legacy_devices
         }
         listener_ready = {
             port: self.listener_probe("127.0.0.1", port) for port in proxy_ports
@@ -98,24 +109,82 @@ class ProxyGuard:
             listener_ready = {
                 port: self.listener_probe("127.0.0.1", port) for port in proxy_ports
             }
-        return tuple(
-            self._reconcile_device(
-                device,
-                proxy_host,
-                device.proxy_port or default_proxy_port,
-                observed_at_ms,
+        rows = []
+        for device in self.config.devices:
+            adb_state, vpn_package = device_states[device.device_id]
+            if adb_state != "device":
+                rows.append(
+                    ProxyHealth(
+                        device.device_id,
+                        adb_state,
+                        "device_unavailable",
+                        None,
+                        "unknown",
+                        observed_at_ms,
+                    )
+                )
+            elif vpn_package:
+                rows.append(
+                    self._reconcile_vpn_device(device, vpn_package, observed_at_ms)
+                )
+            elif proxy_host is None:
+                rows.append(
+                    ProxyHealth(
+                        device.device_id,
+                        adb_state,
+                        "source_unavailable",
+                        None,
+                        "unknown",
+                        observed_at_ms,
+                    )
+                )
+            elif not listener_ready[device.proxy_port or default_proxy_port]:
+                rows.append(
+                    ProxyHealth(
+                        device.device_id,
+                        adb_state,
+                        "listener_unavailable",
+                        None,
+                        "unknown",
+                        observed_at_ms,
+                    )
+                )
+            else:
+                rows.append(
+                    self._reconcile_device(
+                        device,
+                        proxy_host,
+                        device.proxy_port or default_proxy_port,
+                        observed_at_ms,
+                    )
+                )
+        return tuple(rows)
+
+    def _device_state(self, device: FleetDevice) -> tuple[str, str | None]:
+        try:
+            self._run((str(self.adb_path), "connect", device.adb_endpoint))
+            adb_state = self._run(
+                (str(self.adb_path), "-s", device.adb_endpoint, "get-state")
             )
-            if listener_ready[device.proxy_port or default_proxy_port]
-            else ProxyHealth(
-                device.device_id,
-                "unknown",
-                "listener_unavailable",
-                None,
-                "unknown",
-                observed_at_ms,
+            if adb_state != "device":
+                return adb_state or "offline", None
+            vpn_package = self._run(
+                (
+                    str(self.adb_path),
+                    "-s",
+                    device.adb_endpoint,
+                    "shell",
+                    "settings",
+                    "get",
+                    "secure",
+                    "always_on_vpn_app",
+                )
             )
-            for device in self.config.devices
-        )
+            if vpn_package in {"", "null", "none"}:
+                vpn_package = None
+            return adb_state, vpn_package
+        except (OSError, subprocess.SubprocessError, ValueError):
+            return "offline", None
 
     def _reconcile_device(
         self,
@@ -125,19 +194,7 @@ class ProxyGuard:
         observed_at_ms: int,
     ) -> ProxyHealth:
         try:
-            self._run((str(self.adb_path), "connect", device.adb_endpoint))
-            adb_state = self._run(
-                (str(self.adb_path), "-s", device.adb_endpoint, "get-state")
-            )
-            if adb_state != "device":
-                return ProxyHealth(
-                    device.device_id,
-                    adb_state or "offline",
-                    "device_unavailable",
-                    None,
-                    "unknown",
-                    observed_at_ms,
-                )
+            adb_state = "device"
             observed = (
                 self._setting(device, "http_proxy"),
                 self._setting(device, "global_http_proxy_host"),
@@ -187,6 +244,91 @@ class ProxyGuard:
                 "unknown",
                 observed_at_ms,
             )
+
+    def _reconcile_vpn_device(
+        self, device: FleetDevice, vpn_package: str, observed_at_ms: int
+    ) -> ProxyHealth:
+        recovered = False
+        if not self._vpn_ready(device, vpn_package):
+            if vpn_package == "com.github.metacubex.clash.meta":
+                try:
+                    self._run(
+                        (
+                            str(self.adb_path),
+                            "-s",
+                            device.adb_endpoint,
+                            "shell",
+                            "am",
+                            "start",
+                            "-a",
+                            f"{vpn_package}.action.START_CLASH",
+                            "-n",
+                            f"{vpn_package}/com.github.kr328.clash.ExternalControlActivity",
+                        )
+                    )
+                    self.sleeper(self.recovery_wait_seconds)
+                    recovered = self._vpn_ready(device, vpn_package)
+                except (OSError, subprocess.SubprocessError, ValueError):
+                    recovered = False
+            if not recovered:
+                return ProxyHealth(
+                    device.device_id,
+                    "device",
+                    "vpn_unavailable",
+                    None,
+                    "failed",
+                    observed_at_ms,
+                )
+        return ProxyHealth(
+            device.device_id,
+            "device",
+            "vpn_recovered" if recovered else "vpn_healthy",
+            None,
+            "unknown",
+            observed_at_ms,
+        )
+
+    def _vpn_ready(self, device: FleetDevice, vpn_package: str) -> bool:
+        try:
+            processes = self._run(
+                (
+                    str(self.adb_path),
+                    "-s",
+                    device.adb_endpoint,
+                    "shell",
+                    "ps",
+                    "-A",
+                )
+            )
+            interface = self._run(
+                (
+                    str(self.adb_path),
+                    "-s",
+                    device.adb_endpoint,
+                    "shell",
+                    "ip",
+                    "link",
+                    "show",
+                    "tun0",
+                )
+            )
+            connectivity = self._run(
+                (
+                    str(self.adb_path),
+                    "-s",
+                    device.adb_endpoint,
+                    "shell",
+                    "dumpsys",
+                    "connectivity",
+                )
+            )
+        except (OSError, subprocess.SubprocessError, ValueError):
+            return False
+        return bool(
+            vpn_package in processes
+            and "tun0" in interface
+            and _has_validated_tun_vpn(connectivity)
+        )
 
     def _setting(self, device: FleetDevice, field: str) -> str:
         return self._run(

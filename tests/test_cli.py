@@ -373,6 +373,42 @@ def test_cli_proxy_guard_counts_http_failures_as_failed(
     )
 
 
+def test_cli_proxy_guard_counts_device_vpn_states_as_success(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    config_path = tmp_path / "devices.yaml"
+    _write_fleet_config(config_path)
+
+    def row(device_id: str, proxy_state: str):
+        return type(
+            "Health",
+            (),
+            {
+                "device_id": device_id,
+                "adb_state": "device",
+                "proxy_state": proxy_state,
+                "http_status": None,
+                "http_state": "unknown",
+                "observed_at_ms": 123456789,
+            },
+        )()
+
+    monkeypatch.setattr(
+        cli,
+        "_run_proxy_guard",
+        lambda *_args: (
+            row("phone-01", "vpn_healthy"),
+            row("phone-02", "vpn_recovered"),
+        ),
+    )
+
+    assert main(["proxy-guard", "--devices", str(config_path), "--once"]) == 0
+
+    assert capsys.readouterr().out.endswith(
+        "devices=2 healthy=1 corrected=1 failed=0 http_200=0 http_unknown=2\n"
+    )
+
+
 def test_cli_proxy_guard_validates_inputs_before_running(tmp_path: Path) -> None:
     missing = tmp_path / "missing.yaml"
     with pytest.raises(SystemExit, match="device configuration does not exist"):

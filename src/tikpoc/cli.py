@@ -127,11 +127,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                         flush=True,
                     )
                 healthy = sum(
-                    row.proxy_state == "healthy" and row.http_state != "failed"
+                    row.proxy_state in {"healthy", "vpn_healthy"}
+                    and row.http_state != "failed"
                     for row in rows
                 )
                 corrected = sum(
-                    row.proxy_state == "corrected" and row.http_state != "failed"
+                    row.proxy_state in {"corrected", "vpn_recovered"}
+                    and row.http_state != "failed"
                     for row in rows
                 )
                 failed = len(rows) - healthy - corrected

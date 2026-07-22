@@ -150,3 +150,42 @@ Expected: the full suite and all static checks pass.
 Append the exact baseline and comparison windows, per-device rates, stage
 distributions, action evidence, acceptance decision, and durable test checkpoint
 to the design document. Commit the measurement record separately from code.
+
+### Task 4: Device-Local Proxy And Shard Readiness
+
+**Files:**
+- Modify: `src/tikpoc/proxy_guard.py`
+- Modify: `tests/test_proxy_guard.py`
+- Modify: `docs/proxy-guard-runbook.md`
+
+- [x] **Step 1: Add a failing device-local VPN health test**
+
+Require a configured VPN package, its worker process, `tun0`, and an Android
+validated VPN network. A host listener or host-side HTTP probe must not mark the
+device healthy when any required device-local signal is missing.
+
+- [x] **Step 2: Add bounded Clash recovery**
+
+When the configured Clash package is installed but its process or `tun0` is
+missing, issue the documented start action once, wait once, and recheck. Preserve
+the existing behavior for devices without device-local VPN configuration.
+
+- [ ] **Step 3: Require a visible TikTok readiness probe**
+
+Keep network health separate from business readiness. A loaded current-profile
+or target-profile surface passes; a zero-metric profile with a visible loading
+error fails. Do not clear app data, replace an account, or count this probe as a
+confirmed target visit.
+
+- [ ] **Step 4: Establish the execution-shard curve**
+
+Run identical isolated windows with two, four, and six devices on one MYT host.
+Record per-device and aggregate rates plus route, identity, metrics, video, and
+action tails. Select the largest shard size whose slowest device sustains at
+least 500 per hour for 30 minutes.
+
+- [ ] **Step 5: Verify twelve-device deployment later**
+
+When twelve devices are available, deploy independent shards according to the
+measured host limit and run a 30-minute acceptance window. Do not infer this
+result from the six-device test.

@@ -54,6 +54,14 @@ class FakeRunner:
         if command[3:] == ("get-state",):
             return subprocess.CompletedProcess(command, 0, "device\n", "")
         shell = command[3:]
+        if shell == (
+            "shell",
+            "settings",
+            "get",
+            "secure",
+            "always_on_vpn_app",
+        ):
+            return subprocess.CompletedProcess(command, 0, "null\n", "")
         if shell[:4] == ("shell", "settings", "get", "global"):
             field = shell[4]
             index = {
@@ -76,6 +84,67 @@ class FakeRunner:
             self.proxy[endpoint] = tuple(values)
             return subprocess.CompletedProcess(command, 0, "", "")
         if shell and shell[0] == "shell" and "curl" in shell:
+            return subprocess.CompletedProcess(command, 0, "200", "")
+        raise AssertionError(f"unexpected command: {command}")
+
+
+class VpnRunner(FakeRunner):
+    package = "com.github.metacubex.clash.meta"
+
+    def __init__(self, *, running: bool = True) -> None:
+        super().__init__()
+        self.connectivity = (
+            "NetworkAgentInfo{network{101} ni{VPN CONNECTED} "
+            "lp{{InterfaceName: tun0}} nc{Capabilities: INTERNET&VALIDATED}}"
+        )
+        self.running = {
+            "192.0.2.10:30000": running,
+            "192.0.2.10:30100": True,
+        }
+
+    def __call__(self, command, **kwargs):
+        command = tuple(command)
+        self.commands.append(command)
+        if command[1] == "connect":
+            return subprocess.CompletedProcess(command, 0, "connected\n", "")
+        endpoint = command[2]
+        if command[3:] == ("get-state",):
+            return subprocess.CompletedProcess(command, 0, "device\n", "")
+        shell = command[3:]
+        if shell == (
+            "shell",
+            "settings",
+            "get",
+            "secure",
+            "always_on_vpn_app",
+        ):
+            return subprocess.CompletedProcess(command, 0, self.package + "\n", "")
+        if shell == ("shell", "ps", "-A"):
+            output = (
+                f"u0_a1 123 1 {self.package}:background\n"
+                if self.running[endpoint]
+                else ""
+            )
+            return subprocess.CompletedProcess(command, 0, output, "")
+        if shell == ("shell", "ip", "link", "show", "tun0"):
+            if not self.running[endpoint]:
+                raise subprocess.CalledProcessError(1, command)
+            return subprocess.CompletedProcess(command, 0, "9: tun0: <UP>\n", "")
+        if shell == ("shell", "dumpsys", "connectivity"):
+            return subprocess.CompletedProcess(command, 0, self.connectivity, "")
+        if shell == (
+            "shell",
+            "am",
+            "start",
+            "-a",
+            "com.github.metacubex.clash.meta.action.START_CLASH",
+            "-n",
+            "com.github.metacubex.clash.meta/com.github.kr328.clash.ExternalControlActivity",
+        ):
+            self.running[endpoint] = True
+            return subprocess.CompletedProcess(command, 0, "Starting\n", "")
+        if shell and shell[0] == "shell" and "curl" in shell:
+            assert "-x" not in shell
             return subprocess.CompletedProcess(command, 0, "200", "")
         raise AssertionError(f"unexpected command: {command}")
 
@@ -119,6 +188,78 @@ def test_proxy_guard_repeated_healthy_cycles_are_idempotent() -> None:
     assert all(row.proxy_state == "healthy" for row in guard.reconcile())
     assert all(row.proxy_state == "healthy" for row in guard.reconcile())
     assert not any("put" in command for command in runner.commands)
+
+
+def test_proxy_guard_uses_device_vpn_without_rewriting_global_proxy() -> None:
+    runner = VpnRunner()
+
+    def unavailable_source(_host):
+        raise OSError("host relay is intentionally unavailable")
+
+    guard = ProxyGuard(
+        _config(),
+        adb_path=Path("/sdk/adb"),
+        source_address=unavailable_source,
+        listener_probe=lambda _host, _port: False,
+        runner=runner,
+    )
+
+    rows = guard.reconcile()
+
+    assert [row.proxy_state for row in rows] == ["vpn_healthy", "vpn_healthy"]
+    assert [row.http_state for row in rows] == ["unknown", "unknown"]
+    assert not any("put" in command for command in runner.commands)
+
+
+def test_proxy_guard_recovers_a_stopped_clash_vpn_once() -> None:
+    runner = VpnRunner(running=False)
+    sleeps = []
+    guard = ProxyGuard(
+        _config(),
+        adb_path=Path("/sdk/adb"),
+        source_address=lambda _host: "192.0.2.20",
+        listener_probe=lambda _host, _port: True,
+        runner=runner,
+        sleeper=sleeps.append,
+        recovery_wait_seconds=3,
+    )
+
+    rows = guard.reconcile()
+
+    assert rows[0].proxy_state == "vpn_recovered"
+    assert rows[0].http_state == "unknown"
+    starts = [
+        command
+        for command in runner.commands
+        if any("START_CLASH" in part for part in command)
+    ]
+    assert len(starts) == 1
+    assert sleeps == [3]
+
+
+def test_proxy_guard_does_not_borrow_validation_from_another_network() -> None:
+    runner = VpnRunner()
+    runner.connectivity = (
+        "NetworkAgentInfo{network{101} ni{VPN CONNECTED} "
+        "lp{{InterfaceName: tun0}} nc{Capabilities: INTERNET}} "
+        "NetworkAgentInfo{network{102} ni{WIFI CONNECTED} "
+        "lp{{InterfaceName: wlan0}} nc{Capabilities: INTERNET&VALIDATED}}"
+    )
+    guard = ProxyGuard(
+        _config(),
+        adb_path=Path("/sdk/adb"),
+        source_address=lambda _host: "192.0.2.20",
+        listener_probe=lambda _host, _port: True,
+        runner=runner,
+        sleeper=lambda _seconds: None,
+    )
+
+    rows = guard.reconcile()
+
+    assert [row.proxy_state for row in rows] == [
+        "vpn_unavailable",
+        "vpn_unavailable",
+    ]
 
 
 def test_proxy_guard_uses_a_device_specific_proxy_port() -> None:
@@ -243,7 +384,7 @@ def test_proxy_guard_records_source_address_outage_without_running_commands() ->
         "source_unavailable",
         "source_unavailable",
     ]
-    assert runner.commands == []
+    assert not any("put" in command or "curl" in command for command in runner.commands)
     assert "private interface detail" not in repr(rows)
 
 

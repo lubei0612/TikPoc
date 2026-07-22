@@ -77,6 +77,54 @@ Appium-server experiment.
 Any further code optimization requires a measured dominant stage, a failing
 behavioral test, one implementation variable, and a fresh six-device comparison.
 
+## Twelve-Device Scaling Boundary
+
+Device count is not treated as free concurrency. The current two-device and
+six-device measurements show that per-device latency rises when more MYT slots
+on the same host read UI hierarchies at the same time. Each ADB endpoint and
+UiAutomator2 system port is already distinct, and a previous multi-Appium-server
+experiment did not remove the tails. The shared MYT host is therefore the
+capacity boundary until a concurrency curve proves otherwise.
+
+Twelve devices must be deployed as explicit execution shards. Each shard owns a
+bounded set of device/account pairs, its ADB/Appium processes, proxy health, and
+worker supervision. The durable round remains central so every configured
+account still processes the same logical target pool and coverage remains
+account-specific. A shard failure must stop only that shard and preserve its
+assignment checkpoints.
+
+Before twelve-device promotion, measure identical 15-minute windows at two,
+four, and six devices on one MYT host. Choose the largest shard size whose
+slowest device remains at or above 500 confirmed assignments per hour in a clean
+30-minute window. Deploy twelve devices as `6+6`, `4+4+4`, or smaller shards on
+independent MYT execution hosts according to that result. Running twelve slots
+on one host is not accepted from configuration symmetry or short synthetic
+tests.
+
+The twelve-device gate requires every shard and every device to satisfy the same
+identity, visit, action, quota, uncertain, and proxy checks as the six-device
+gate. Report both per-shard and fleet totals so a fast shard cannot hide a slow
+or unhealthy one.
+
+## Current July 22 Evidence
+
+The unchanged six-device window produced 306 completions in 758.4 seconds. Slot
+3 had no completions because its device-local Clash service was not running.
+Excluding that failed slot, the mean was 290.5 assignments per device-hour.
+
+The deterministic startup-offset comparison produced 427 healthy-slot
+completions in 912.4 seconds. Excluding slot 3, the mean improved to 336.9 per
+device-hour and the slowest healthy device improved to 299.9 per hour. Identity
+and confirmed-visit integrity checks remained clean. This is a measured
+improvement, but it is below the daily-capacity promotion gate.
+
+Slot 3 now has the Clash foreground/background processes, a `tun0` interface,
+and an Android-validated VPN network. Its TikTok profile still renders zero
+metrics and `Something went wrong`, while slot 5 renders a complete target
+profile at the same time. Slot 3 therefore remains excluded from business
+acceptance until a fresh account session passes a visible profile probe; VPN
+presence alone is not sufficient evidence.
+
 ## Acceptance
 
 A candidate is ready for the later new-account run only when a clean 15-minute
