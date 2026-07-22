@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 from openpyxl import Workbook
@@ -278,6 +279,43 @@ def test_priority_import_reports_corrupt_workbook_without_traceback(
     _write_fleet_config(devices)
     source = tmp_path / "broken.xlsx"
     source.write_bytes(b"not-a-workbook")
+
+    with pytest.raises(SystemExit, match="priority workbook is invalid"):
+        main(
+            [
+                "priority-import",
+                "--db",
+                str(database),
+                "--devices",
+                str(devices),
+                "--file",
+                str(source),
+                "--source-live",
+                "live-workbook",
+            ]
+        )
+
+
+def test_priority_import_reports_corrupt_worksheet_xml_without_traceback(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "tikpoc.db"
+    _seed_active_round(database)
+    devices = tmp_path / "devices.yaml"
+    _write_fleet_config(devices)
+    valid = tmp_path / "valid.xlsx"
+    source = tmp_path / "broken-xml.xlsx"
+    workbook = Workbook()
+    workbook.active.append(("follower_handle", "follower_uid", "follower_sec_uid"))
+    workbook.active.append(("buyer.one", "", ""))
+    workbook.save(valid)
+    workbook.close()
+    with ZipFile(valid) as archive, ZipFile(source, "w", ZIP_DEFLATED) as broken:
+        for name in archive.namelist():
+            payload = archive.read(name)
+            if name == "xl/worksheets/sheet1.xml":
+                payload = b"<worksheet><broken>"
+            broken.writestr(name, payload)
 
     with pytest.raises(SystemExit, match="priority workbook is invalid"):
         main(

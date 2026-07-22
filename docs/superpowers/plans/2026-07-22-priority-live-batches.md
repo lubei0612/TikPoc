@@ -391,7 +391,7 @@ git commit -m "feat: expose live priority batch cli"
 - Modify: `docs/tikpoc-business-logic.md`
 - Test: `tests/test_priority_recovery.py`
 
-- [ ] **Step 1: Write the end-to-end recovery test**
+- [x] **Step 1: Write the end-to-end recovery test**
 
 Create a three-device ordinary round, claim one ordinary assignment, submit two
 priority batches, finish the already-claimed ordinary assignment, partially
@@ -408,7 +408,7 @@ remaining ordinary assignments
 Also assert zero duplicate confirmed visits per identity/device and preserved
 ordinary attempt counts.
 
-- [ ] **Step 2: Run RED, then implement only missing recovery glue**
+- [x] **Step 2: Run RED, then implement only missing recovery glue**
 
 ```bash
 uv run pytest tests/test_priority_recovery.py -q
@@ -417,14 +417,14 @@ uv run pytest tests/test_priority_recovery.py -q
 Expected: the test identifies any missing stale-lease or queue-state transition.
 Add the smallest repository transition needed; do not add another scheduler.
 
-- [ ] **Step 3: Document the external AI contract**
+- [x] **Step 3: Document the external AI contract**
 
 Document the JSONL schema, example commands, idempotent replay, FIFO behavior,
 status output, exit codes, and the rule that a collector writes the file fully
 before invoking the CLI. Add the priority scheduling paragraph to the business
 logic document without changing eligibility or interaction rules.
 
-- [ ] **Step 4: Run all verification and independent reviews**
+- [x] **Step 4: Run all verification and independent reviews**
 
 ```bash
 uv run pytest -q
@@ -438,7 +438,7 @@ Run an independent specification review against
 Critical/Important finding with a red-green cycle, repeat the specification
 review, then run and repeat an independent code-quality review.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 git add docs/priority-live-batch-cli.md docs/tikpoc-business-logic.md tests/test_priority_recovery.py src/tikpoc/acquisition_db.py

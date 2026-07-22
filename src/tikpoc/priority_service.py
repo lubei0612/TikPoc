@@ -1,6 +1,7 @@
 import hashlib
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from xml.etree.ElementTree import ParseError
 from zipfile import BadZipFile
 
 from openpyxl.utils.exceptions import InvalidFileException
@@ -43,7 +44,7 @@ class PriorityBatchService:
         )
         try:
             parsed = read_priority_targets(source, source_live_id=live_id)
-        except (BadZipFile, InvalidFileException) as error:
+        except (BadZipFile, InvalidFileException, ParseError) as error:
             raise ValueError("priority workbook is invalid") from error
         source_bytes = source.read_bytes()
         after = source.stat()
