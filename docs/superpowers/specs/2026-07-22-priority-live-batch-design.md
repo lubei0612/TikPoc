@@ -55,7 +55,9 @@ later is not silently inserted into an already-created batch.
 Within a priority submission, targets are deduplicated using `sec_uid`, then a
 real platform user ID, then normalized username. Rows sharing a normalized
 username are merged and the retained target is upgraded when a later row adds a
-sec UID or real user ID. The collector-local `dom-*` identifier is never
+sec UID or real user ID. A conflicting nonempty sec UID or real user ID for the
+same merged identity rejects the import with its source line instead of
+overwriting stable identity. The collector-local `dom-*` identifier is never
 preferred over a real username.
 
 If an account already has a confirmed visit for the identity in the current
