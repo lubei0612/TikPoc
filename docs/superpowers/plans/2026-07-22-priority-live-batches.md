@@ -269,7 +269,7 @@ git commit -m "feat: schedule fifo priority work"
 - Modify: `src/tikpoc/acquisition_db.py`
 - Test: `tests/test_priority_coverage.py`
 
-- [ ] **Step 1: Write failing coverage propagation tests**
+- [x] **Step 1: Write failing coverage propagation tests**
 
 ```python
 def test_priority_completion_satisfies_only_matching_parent_device(tmp_path):
@@ -295,7 +295,7 @@ Assert timestamps and phase history details. Require an audit detail such as
 case must finish a priority assignment with terminal `skipped`, then assert both
 the parent phase and visit timestamp remain unchanged.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 uv run pytest tests/test_priority_coverage.py -q
@@ -303,7 +303,7 @@ uv run pytest tests/test_priority_coverage.py -q
 
 Expected: duplicate identities remain independent and the assertions fail.
 
-- [ ] **Step 3: Implement account-scoped propagation**
+- [x] **Step 3: Implement account-scoped propagation**
 
 At priority batch creation, find confirmed visits for the same identity and
 device in the parent round and mark only those priority assignments completed
@@ -313,7 +313,7 @@ completed, copy the confirmed timestamp, and write phase history referencing the
 priority assignment. Never propagate `skipped`, missing visits, or uncertain
 action state.
 
-- [ ] **Step 4: Verify and commit Task 4**
+- [x] **Step 4: Verify and commit Task 4**
 
 ```bash
 uv run pytest tests/test_priority_coverage.py tests/test_mobile_worker.py -q

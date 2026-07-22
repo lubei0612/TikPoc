@@ -10,6 +10,7 @@ from tikpoc.acquisition_models import (
     OutcomeKind,
     RoundCompletion,
 )
+from tikpoc.acquisition_db import AcquisitionRepository
 from tikpoc.fleet import (
     DeviceWorkerLeaseLost,
     FleetConfig,
@@ -22,6 +23,8 @@ from tikpoc.fleet_runtime import (
     run_acquisition_fleet,
     run_device_worker,
 )
+from tikpoc.importer import Target
+from tikpoc.rounds import create_exposure_round
 
 from tests.test_fleet import _two_device_config
 
@@ -122,7 +125,7 @@ def test_device_worker_processes_assignments_until_stopped(tmp_path: Path) -> No
             self.path = path
             self.claims = 0
 
-        def claim_next_assignment(self, *args, **kwargs):
+        def claim_scheduled_assignment(self, *args, **kwargs):
             self.claims += 1
             return assignment
 
@@ -200,7 +203,7 @@ def test_device_worker_waits_once_before_creating_appium_session(
     assignments = iter(("assignment-1", "assignment-2"))
 
     class FakeRepository:
-        def claim_next_assignment(self, *args, **kwargs):
+        def claim_scheduled_assignment(self, *args, **kwargs):
             return next(assignments, None)
 
     class FakeDriver:
@@ -311,7 +314,7 @@ def test_device_worker_stops_cleanly_when_assignment_worker_loses_fence(
             self.path = path
             self.claimed = False
 
-        def claim_next_assignment(self, *args, **kwargs):
+        def claim_scheduled_assignment(self, *args, **kwargs):
             if self.claimed:
                 return None
             self.claimed = True
@@ -486,6 +489,109 @@ def test_fleet_runtime_stops_all_resources_after_round_completion(
     assert supervisor.stopped is True
     assert relay.entered is True
     assert relay.exited is True
+
+
+def test_fleet_runtime_keeps_running_when_parent_is_terminal_but_priority_is_pending(
+    tmp_path: Path,
+) -> None:
+    repository = AcquisitionRepository(
+        tmp_path / "priority-runtime.db", clock_ms=lambda: 500
+    )
+    repository.migrate()
+    target = Target(
+        target_id="uid-parent",
+        username="parent",
+        profile_url="https://www.tiktok.com/@parent",
+        source_video_id="",
+        sec_uid="sec-parent",
+        identity_key="sec:sec-parent",
+        source_line_numbers=(1,),
+    )
+    parent_pool = repository.import_pool("parent.csv", "a" * 64, (target,))
+    parent = create_exposure_round(
+        repository,
+        pool_id=parent_pool.pool_id,
+        device_seeds={"d1": "parent-d1"},
+        starts_at_ms=100,
+        min_inter_device_gap_ms=0,
+        min_repeat_gap_ms=0,
+    )
+    current = repository.claim_next_assignment(parent, "d1", "worker", now_ms=600)
+    assert current is not None
+    priority_target = replace(
+        target,
+        target_id="uid-priority",
+        username="priority",
+        profile_url="https://www.tiktok.com/@priority",
+        sec_uid="sec-priority",
+        identity_key="sec:sec-priority",
+    )
+    priority_pool = repository.import_pool(
+        "priority.jsonl", "b" * 64, (priority_target,)
+    )
+    batch = repository.create_priority_batch(
+        batch_id="priority-runtime",
+        parent_round_id=parent,
+        pool_id=priority_pool.pool_id,
+        source_live_id="live-runtime",
+        source_checksum="b" * 64,
+        device_seeds={"d1": "priority-d1"},
+    )
+    repository.record_visit_confirmed(current.assignment_id, "worker", now_ms=700)
+    repository.complete_assignment(
+        current.assignment_id,
+        "worker",
+        AssignmentPhase.IDENTITY_CONFIRMED,
+        now_ms=700,
+    )
+    assert _round_completed(repository.round_completion(parent)) is True
+
+    class CompletingSupervisor:
+        def __init__(self) -> None:
+            self.poll_calls = 0
+
+        def start(self):
+            return _health(FleetWorkerState.HEALTHY)
+
+        def poll(self):
+            self.poll_calls += 1
+            with repository._connect() as connection:
+                connection.execute(
+                    """
+                    UPDATE round_assignments
+                    SET phase = 'completed', completed_at_ms = 900
+                    WHERE round_id = ?
+                    """,
+                    (batch.priority_round_id,),
+                )
+                connection.execute(
+                    """
+                    UPDATE priority_batches
+                    SET state = 'completed', completed_at_ms = 900
+                    WHERE batch_id = ?
+                    """,
+                    (batch.batch_id,),
+                )
+            return _health(FleetWorkerState.HEALTHY)
+
+        def stop(self):
+            return _health(FleetWorkerState.STOPPED)
+
+    supervisor = CompletingSupervisor()
+    result = run_acquisition_fleet(
+        repository,
+        parent,
+        _two_device_config(tmp_path),
+        event_factory=FakeStopEvent,
+        relay_factory=lambda *args, **kwargs: FakeRelay(),
+        supervisor_factory=lambda *args, **kwargs: supervisor,
+        launcher_factory=lambda *args, **kwargs: object(),
+        clock_ms=lambda: 800,
+        sleeper=lambda seconds: None,
+    )
+
+    assert result == 0
+    assert supervisor.poll_calls == 1
 
 
 def test_fleet_runtime_finishes_cleanup_before_leaving_relay(tmp_path: Path) -> None:

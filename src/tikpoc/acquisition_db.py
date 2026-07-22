@@ -1365,6 +1365,13 @@ class AcquisitionRepository:
                     now_ms,
                 ),
             )
+            self._propagate_confirmed_coverage(
+                connection,
+                source_round_id=normalized_parent,
+                destination_round_id=priority_round_id,
+                reason="satisfied_by_parent",
+                now_ms=now_ms,
+            )
             row = connection.execute(
                 "SELECT * FROM priority_batches WHERE batch_id = ?",
                 (normalized_batch_id,),
@@ -1480,6 +1487,15 @@ class AcquisitionRepository:
                     (normalized_parent,),
                 ).fetchone()
                 if batch is None:
+                    self._mark_round_completed_if_terminal(
+                        connection, normalized_parent
+                    )
+                    parent_state = connection.execute(
+                        "SELECT state FROM exposure_rounds WHERE round_id = ?",
+                        (normalized_parent,),
+                    ).fetchone()
+                    if str(parent_state["state"]) == "completed":
+                        return None
                     selected_round_id = normalized_parent
                     break
 
@@ -2304,6 +2320,45 @@ class AcquisitionRepository:
                 {},
             )
             round_id = str(row["round_id"])
+            priority = connection.execute(
+                """
+                SELECT parent_round_id FROM priority_batches
+                WHERE priority_round_id = ?
+                """,
+                (round_id,),
+            ).fetchone()
+            if priority is not None:
+                parent_round_id = str(priority["parent_round_id"])
+                self._propagate_confirmed_coverage(
+                    connection,
+                    source_round_id=round_id,
+                    destination_round_id=parent_round_id,
+                    reason="satisfied_by_priority",
+                    now_ms=now_ms,
+                    source_assignment_id=assignment_id,
+                )
+                destination_reason = "satisfied_by_priority"
+            else:
+                parent_round_id = round_id
+                destination_reason = "satisfied_by_parent"
+            priority_destinations = connection.execute(
+                """
+                SELECT priority_round_id FROM priority_batches
+                WHERE parent_round_id = ? AND state <> 'completed'
+                  AND priority_round_id <> ?
+                ORDER BY queue_sequence
+                """,
+                (parent_round_id, round_id),
+            ).fetchall()
+            for destination in priority_destinations:
+                self._propagate_confirmed_coverage(
+                    connection,
+                    source_round_id=round_id,
+                    destination_round_id=str(destination["priority_round_id"]),
+                    reason=destination_reason,
+                    now_ms=now_ms,
+                    source_assignment_id=assignment_id,
+                )
             self._mark_round_completed_if_terminal(connection, round_id)
             return self._assignment_by_id(connection, assignment_id)
 
@@ -2328,6 +2383,30 @@ class AcquisitionRepository:
                 deferred=int(row["deferred"] or 0),
                 skipped=int(row["skipped"] or 0),
             )
+
+    def round_operationally_complete(self, round_id: str) -> bool:
+        normalized_round_id = str(round_id).strip()
+        if not normalized_round_id:
+            raise ValueError("round id is required")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT state FROM exposure_rounds WHERE round_id = ?",
+                (normalized_round_id,),
+            ).fetchone()
+            if existing is None:
+                raise KeyError(normalized_round_id)
+            if connection.execute(
+                "SELECT 1 FROM priority_batches WHERE priority_round_id = ?",
+                (normalized_round_id,),
+            ).fetchone():
+                raise ValueError("operational completion requires an ordinary round")
+            self._mark_round_completed_if_terminal(connection, normalized_round_id)
+            state = connection.execute(
+                "SELECT state FROM exposure_rounds WHERE round_id = ?",
+                (normalized_round_id,),
+            ).fetchone()
+            return str(state["state"]) == "completed"
 
     def round_coverage(self, round_id: str) -> dict[str, object]:
         normalized_round_id = str(round_id).strip()
@@ -4161,6 +4240,16 @@ class AcquisitionRepository:
     def _mark_round_completed_if_terminal(
         connection: sqlite3.Connection, round_id: str
     ) -> None:
+        outstanding_priority = connection.execute(
+            """
+            SELECT 1 FROM priority_batches
+            WHERE parent_round_id = ? AND state <> 'completed'
+            LIMIT 1
+            """,
+            (round_id,),
+        ).fetchone()
+        if outstanding_priority is not None:
+            return
         incomplete = connection.execute(
             """
             SELECT 1 FROM round_assignments
@@ -4174,6 +4263,152 @@ class AcquisitionRepository:
                 "UPDATE exposure_rounds SET state = 'completed' WHERE round_id = ?",
                 (round_id,),
             )
+
+    @classmethod
+    def _propagate_confirmed_coverage(
+        cls,
+        connection: sqlite3.Connection,
+        *,
+        source_round_id: str,
+        destination_round_id: str,
+        reason: str,
+        now_ms: int,
+        source_assignment_id: int | None = None,
+    ) -> None:
+        candidates = connection.execute(
+            """
+            WITH source_rows AS (
+                SELECT source.assignment_id, source.device_id,
+                       source.visit_confirmed_at_ms,
+                       target.sec_uid, target.target_id, target.username
+                FROM round_assignments AS source
+                JOIN exposure_rounds AS round
+                  ON round.round_id = source.round_id
+                JOIN pool_targets AS target
+                  ON target.pool_id = round.pool_id
+                 AND target.identity_key = source.identity_key
+                WHERE source.round_id = ?
+                  AND source.phase = 'completed'
+                  AND source.visit_confirmed_at_ms IS NOT NULL
+                  AND (? IS NULL OR source.assignment_id = ?)
+            ),
+            destination_rows AS (
+                SELECT destination.assignment_id, destination.device_id,
+                       destination.phase, target.sec_uid,
+                       target.target_id, target.username
+                FROM round_assignments AS destination
+                JOIN exposure_rounds AS round
+                  ON round.round_id = destination.round_id
+                JOIN pool_targets AS target
+                  ON target.pool_id = round.pool_id
+                 AND target.identity_key = destination.identity_key
+                WHERE destination.round_id = ?
+                  AND destination.phase = 'pending'
+                  AND destination.lease_owner IS NULL
+            ),
+            source_aliases AS (
+                SELECT *, 'sec_uid' AS alias_kind, sec_uid AS alias_value
+                FROM source_rows WHERE sec_uid <> ''
+                UNION ALL
+                SELECT *, 'target_id', target_id
+                FROM source_rows WHERE target_id <> ''
+                UNION ALL
+                SELECT *, 'username', lower(username)
+                FROM source_rows WHERE username <> ''
+            ),
+            destination_aliases AS (
+                SELECT *, 'sec_uid' AS alias_kind, sec_uid AS alias_value
+                FROM destination_rows WHERE sec_uid <> ''
+                UNION ALL
+                SELECT *, 'target_id', target_id
+                FROM destination_rows WHERE target_id <> ''
+                UNION ALL
+                SELECT *, 'username', lower(username)
+                FROM destination_rows WHERE username <> ''
+            )
+            SELECT DISTINCT
+                   source.assignment_id AS source_assignment_id,
+                   source.visit_confirmed_at_ms AS visit_confirmed_at_ms,
+                   destination.assignment_id AS destination_assignment_id,
+                   destination.phase AS destination_phase
+            FROM source_aliases AS source
+            JOIN destination_aliases AS destination
+              ON destination.device_id = source.device_id
+             AND destination.alias_kind = source.alias_kind
+             AND destination.alias_value = source.alias_value
+            WHERE NOT (
+                    source.sec_uid <> ''
+                AND destination.sec_uid <> ''
+                AND source.sec_uid <> destination.sec_uid
+            )
+              AND NOT (
+                    source.target_id <> ''
+                AND destination.target_id <> ''
+                AND source.target_id <> destination.target_id
+            )
+            """,
+            (
+                source_round_id,
+                source_assignment_id,
+                source_assignment_id,
+                destination_round_id,
+            ),
+        ).fetchall()
+        source_counts: dict[int, int] = {}
+        destination_counts: dict[int, int] = {}
+        for candidate in candidates:
+            source_id = int(candidate["source_assignment_id"])
+            destination_id = int(candidate["destination_assignment_id"])
+            source_counts[source_id] = source_counts.get(source_id, 0) + 1
+            destination_counts[destination_id] = (
+                destination_counts.get(destination_id, 0) + 1
+            )
+
+        changed = False
+        for candidate in candidates:
+            source_id = int(candidate["source_assignment_id"])
+            destination_id = int(candidate["destination_assignment_id"])
+            if source_counts[source_id] != 1 or destination_counts[destination_id] != 1:
+                continue
+            previous = AssignmentPhase(str(candidate["destination_phase"]))
+            cursor = connection.execute(
+                """
+                UPDATE round_assignments
+                SET phase = 'completed', visit_confirmed_at_ms = ?,
+                    completed_at_ms = ?, next_attempt_at_ms = 0,
+                    last_error_code = NULL, lease_owner = NULL,
+                    lease_expires_at_ms = 0
+                WHERE assignment_id = ?
+                  AND phase = 'pending'
+                  AND lease_owner IS NULL
+                """,
+                (
+                    int(candidate["visit_confirmed_at_ms"]),
+                    now_ms,
+                    destination_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                continue
+            cls._insert_phase_history(
+                connection,
+                destination_id,
+                previous,
+                AssignmentPhase.COMPLETED,
+                now_ms,
+                {"reason": reason, "source_assignment_id": source_id},
+            )
+            changed = True
+        has_priority_work = connection.execute(
+            """
+            SELECT 1 FROM priority_batches
+            WHERE parent_round_id = ? AND state <> 'completed'
+            LIMIT 1
+            """,
+            (destination_round_id,),
+        ).fetchone()
+        if changed and has_priority_work is None:
+            cls._mark_round_completed_if_terminal(connection, destination_round_id)
 
     @staticmethod
     def _insert_phase_history(

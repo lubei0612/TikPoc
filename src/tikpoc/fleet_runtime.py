@@ -105,7 +105,7 @@ def run_device_worker(
         try:
             while not stop_event.is_set():
                 fence.assert_active()
-                assignment = repository.claim_next_assignment(
+                assignment = repository.claim_scheduled_assignment(
                     round_id,
                     device.device_id,
                     fence.owner_id,
@@ -146,6 +146,13 @@ def _round_completed(completion) -> bool:
         completion.total > 0
         and completion.completed + completion.skipped == completion.total
     )
+
+
+def _repository_round_completed(repository, round_id: str) -> bool:
+    checker = getattr(repository, "round_operationally_complete", None)
+    if checker is not None:
+        return bool(checker(round_id))
+    return _round_completed(repository.round_completion(round_id))
 
 
 def _active_device_ids(health) -> set[str]:
@@ -193,8 +200,7 @@ def run_acquisition_fleet(
         raise ValueError("fleet cleanup poll interval must be nonnegative")
     if cleanup_max_attempts <= 0:
         raise ValueError("fleet cleanup attempt count must be positive")
-    completion = repository.round_completion(round_id)
-    if _round_completed(completion):
+    if _repository_round_completed(repository, round_id):
         return 0
     repository.recover_expired_assignment_leases(now_ms=clock_ms())
 
@@ -271,8 +277,7 @@ def run_acquisition_fleet(
             due_device_ids = schedule_inactive(health, now_ms=now_ms)
             if due_device_ids is not None:
                 while True:
-                    completion = repository.round_completion(round_id)
-                    if _round_completed(completion):
+                    if _repository_round_completed(repository, round_id):
                         result = 0
                         break
                     sleeper(poll_interval_seconds)
