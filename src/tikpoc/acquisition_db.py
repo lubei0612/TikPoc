@@ -1411,6 +1411,156 @@ class AcquisitionRepository:
                 is not None
             )
 
+    def claim_scheduled_assignment(
+        self,
+        parent_round_id: str,
+        device_id: str,
+        owner_id: str,
+        *,
+        now_ms: int,
+        lease_ttl_ms: int = 120_000,
+        worker_account_id: str | None = None,
+        worker_fence_token: int | None = None,
+    ) -> RoundAssignment | None:
+        normalized_parent = str(parent_round_id).strip()
+        normalized_device = str(device_id).strip()
+        if not normalized_parent or not normalized_device:
+            raise ValueError("parent round and device are required")
+        if not owner_id.strip() or lease_ttl_ms <= 0:
+            raise ValueError("assignment owner and lease TTL must be valid")
+
+        selected_round_id: str | None = None
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            effective_now_ms = (
+                self._fence_validation_now_ms(now_ms)
+                if worker_fence_token is not None
+                else now_ms
+            )
+            self._assert_device_worker_fence(
+                connection,
+                device_id=normalized_device,
+                account_id=worker_account_id,
+                owner_id=owner_id if worker_fence_token is not None else None,
+                fence_token=worker_fence_token,
+                now_ms=effective_now_ms,
+            )
+            parent = connection.execute(
+                "SELECT state FROM exposure_rounds WHERE round_id = ?",
+                (normalized_parent,),
+            ).fetchone()
+            if parent is None:
+                raise ValueError("parent round does not exist")
+            if connection.execute(
+                "SELECT 1 FROM priority_batches WHERE priority_round_id = ?",
+                (normalized_parent,),
+            ).fetchone():
+                raise ValueError("scheduled parent must be an ordinary round")
+            if str(parent["state"]) not in {"pending", "running"}:
+                return None
+            if (
+                connection.execute(
+                    """
+                SELECT 1 FROM round_device_seeds
+                WHERE round_id = ? AND device_id = ?
+                """,
+                    (normalized_parent, normalized_device),
+                ).fetchone()
+                is None
+            ):
+                raise ValueError("device is not assigned to parent round")
+
+            while True:
+                batch = connection.execute(
+                    """
+                    SELECT * FROM priority_batches
+                    WHERE parent_round_id = ? AND state <> 'completed'
+                    ORDER BY queue_sequence LIMIT 1
+                    """,
+                    (normalized_parent,),
+                ).fetchone()
+                if batch is None:
+                    selected_round_id = normalized_parent
+                    break
+
+                priority_round_id = str(batch["priority_round_id"])
+                remaining = int(
+                    connection.execute(
+                        """
+                        SELECT COUNT(*) FROM round_assignments
+                        WHERE round_id = ?
+                          AND phase NOT IN ('completed', 'skipped')
+                        """,
+                        (priority_round_id,),
+                    ).fetchone()[0]
+                )
+                if remaining == 0:
+                    connection.execute(
+                        """
+                        UPDATE priority_batches
+                        SET state = 'completed', completed_at_ms = ?
+                        WHERE batch_id = ? AND state <> 'completed'
+                        """,
+                        (effective_now_ms, str(batch["batch_id"])),
+                    )
+                    connection.execute(
+                        """
+                        UPDATE exposure_rounds SET state = 'completed'
+                        WHERE round_id = ?
+                        """,
+                        (priority_round_id,),
+                    )
+                    continue
+
+                device_remaining = int(
+                    connection.execute(
+                        """
+                        SELECT COUNT(*) FROM round_assignments
+                        WHERE round_id = ? AND device_id = ?
+                          AND phase NOT IN ('completed', 'skipped')
+                        """,
+                        (priority_round_id, normalized_device),
+                    ).fetchone()[0]
+                )
+                completed_devices = int(
+                    connection.execute(
+                        """
+                        SELECT COUNT(*) FROM round_device_seeds AS seed
+                        WHERE seed.round_id = ?
+                          AND NOT EXISTS (
+                              SELECT 1 FROM round_assignments AS assignment
+                              WHERE assignment.round_id = seed.round_id
+                                AND assignment.device_id = seed.device_id
+                                AND assignment.phase NOT IN ('completed', 'skipped')
+                          )
+                        """,
+                        (priority_round_id,),
+                    ).fetchone()[0]
+                )
+                batch_state = "barrier" if completed_devices else "running"
+                connection.execute(
+                    """
+                    UPDATE priority_batches SET state = ?
+                    WHERE batch_id = ? AND state <> 'completed'
+                    """,
+                    (batch_state, str(batch["batch_id"])),
+                )
+                if device_remaining == 0:
+                    return None
+                selected_round_id = priority_round_id
+                break
+
+            if selected_round_id is None:
+                raise RuntimeError("scheduled round selection is empty")
+            return self._claim_next_assignment_in_connection(
+                connection,
+                selected_round_id,
+                normalized_device,
+                owner_id,
+                effective_now_ms=effective_now_ms,
+                lease_ttl_ms=lease_ttl_ms,
+            )
+
     def claim_next_assignment(
         self,
         round_id: str,
@@ -1439,134 +1589,153 @@ class AcquisitionRepository:
                 fence_token=worker_fence_token,
                 now_ms=effective_now_ms,
             )
-            expired_rows = connection.execute(
-                """
-                SELECT assignment_id, phase, visit_confirmed_at_ms,
-                       next_attempt_at_ms
-                FROM round_assignments
-                WHERE round_id = ? AND device_id = ?
-                  AND lease_owner IS NOT NULL
-                  AND lease_expires_at_ms <= ?
-                  AND phase NOT IN ('completed', 'skipped')
-                """,
-                (round_id, device_id, effective_now_ms),
-            ).fetchall()
-            for expired in expired_rows:
-                assignment_id = int(expired["assignment_id"])
-                previous = AssignmentPhase(str(expired["phase"]))
-                next_phase = (
-                    AssignmentPhase.PENDING
-                    if expired["visit_confirmed_at_ms"] is None
-                    else AssignmentPhase.DEFERRED
-                )
-                next_attempt_at_ms = max(
-                    int(expired["next_attempt_at_ms"]), effective_now_ms
-                )
-                connection.execute(
-                    """
-                    UPDATE round_assignments
-                    SET phase = ?, lease_owner = NULL,
-                        lease_expires_at_ms = 0, next_attempt_at_ms = ?
-                    WHERE assignment_id = ?
-                    """,
-                    (next_phase.value, next_attempt_at_ms, assignment_id),
-                )
-                self._insert_phase_history(
-                    connection,
-                    assignment_id,
-                    previous,
-                    next_phase,
-                    effective_now_ms,
-                    {"reason": "lease_expired"},
-                )
-            row = connection.execute(
-                """
-                SELECT assignment.assignment_id, assignment.phase
-                FROM round_assignments AS assignment
-                JOIN exposure_rounds AS round
-                  ON round.round_id = assignment.round_id
-                WHERE assignment.round_id = ?
-                  AND assignment.device_id = ?
-                  AND assignment.phase IN ('pending', 'deferred')
-                  AND assignment.next_attempt_at_ms <= ?
-                  AND round.state IN ('pending', 'running')
-                  AND round.starts_at_ms <= ?
-                  AND NOT EXISTS (
-                      SELECT 1 FROM operator_control_states AS device_control
-                      WHERE device_control.scope = 'device'
-                        AND device_control.scope_id = assignment.device_id
-                        AND device_control.state IN ('paused', 'stopped')
-                  )
-                  AND NOT EXISTS (
-                      SELECT 1 FROM operator_control_states AS assignment_control
-                      WHERE assignment_control.scope = 'assignment'
-                        AND assignment_control.scope_id = CAST(
-                            assignment.assignment_id AS TEXT
-                        )
-                        AND assignment_control.state IN ('paused', 'stopped')
-                  )
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM round_assignments AS blocker
-                      WHERE blocker.identity_key = assignment.identity_key
-                        AND blocker.assignment_id <> assignment.assignment_id
-                        AND (
-                            (
-                                blocker.lease_owner IS NOT NULL
-                                AND blocker.lease_expires_at_ms > ?
-                            )
-                            OR (
-                                blocker.visit_confirmed_at_ms IS NOT NULL
-                                AND blocker.visit_confirmed_at_ms >
-                                    (? - round.min_inter_device_gap_ms)
-                            )
-                        )
-                  )
-                ORDER BY
-                    CASE assignment.phase WHEN 'pending' THEN 0 ELSE 1 END,
-                    assignment.order_key
-                LIMIT 1
-                """,
-                (
-                    round_id,
-                    device_id,
-                    effective_now_ms,
-                    effective_now_ms,
-                    effective_now_ms,
-                    effective_now_ms,
-                ),
-            ).fetchone()
-            if row is None:
-                return None
-            assignment_id = int(row["assignment_id"])
-            previous_phase = AssignmentPhase(str(row["phase"]))
+            return self._claim_next_assignment_in_connection(
+                connection,
+                round_id,
+                device_id,
+                owner_id,
+                effective_now_ms=effective_now_ms,
+                lease_ttl_ms=lease_ttl_ms,
+            )
+
+    def _claim_next_assignment_in_connection(
+        self,
+        connection: sqlite3.Connection,
+        round_id: str,
+        device_id: str,
+        owner_id: str,
+        *,
+        effective_now_ms: int,
+        lease_ttl_ms: int,
+    ) -> RoundAssignment | None:
+        expired_rows = connection.execute(
+            """
+            SELECT assignment_id, phase, visit_confirmed_at_ms,
+                   next_attempt_at_ms
+            FROM round_assignments
+            WHERE round_id = ? AND device_id = ?
+              AND lease_owner IS NOT NULL
+              AND lease_expires_at_ms <= ?
+              AND phase NOT IN ('completed', 'skipped')
+            """,
+            (round_id, device_id, effective_now_ms),
+        ).fetchall()
+        for expired in expired_rows:
+            assignment_id = int(expired["assignment_id"])
+            previous = AssignmentPhase(str(expired["phase"]))
+            next_phase = (
+                AssignmentPhase.PENDING
+                if expired["visit_confirmed_at_ms"] is None
+                else AssignmentPhase.DEFERRED
+            )
+            next_attempt_at_ms = max(
+                int(expired["next_attempt_at_ms"]), effective_now_ms
+            )
             connection.execute(
                 """
                 UPDATE round_assignments
-                SET phase = 'profile_opening',
-                    attempt_count = attempt_count + 1,
-                    lease_owner = ?,
-                    lease_expires_at_ms = ?
+                SET phase = ?, lease_owner = NULL,
+                    lease_expires_at_ms = 0, next_attempt_at_ms = ?
                 WHERE assignment_id = ?
                 """,
-                (owner_id, effective_now_ms + lease_ttl_ms, assignment_id),
+                (next_phase.value, next_attempt_at_ms, assignment_id),
             )
             self._insert_phase_history(
                 connection,
                 assignment_id,
-                previous_phase,
-                AssignmentPhase.PROFILE_OPENING,
+                previous,
+                next_phase,
                 effective_now_ms,
-                {"owner_id": owner_id},
+                {"reason": "lease_expired"},
             )
-            connection.execute(
-                """
-                UPDATE exposure_rounds SET state = 'running'
-                WHERE round_id = ? AND state = 'pending'
-                """,
-                (round_id,),
-            )
-            return self._assignment_by_id(connection, assignment_id)
+        row = connection.execute(
+            """
+            SELECT assignment.assignment_id, assignment.phase
+            FROM round_assignments AS assignment
+            JOIN exposure_rounds AS round
+              ON round.round_id = assignment.round_id
+            WHERE assignment.round_id = ?
+              AND assignment.device_id = ?
+              AND assignment.phase IN ('pending', 'deferred')
+              AND assignment.next_attempt_at_ms <= ?
+              AND round.state IN ('pending', 'running')
+              AND round.starts_at_ms <= ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM operator_control_states AS device_control
+                  WHERE device_control.scope = 'device'
+                    AND device_control.scope_id = assignment.device_id
+                    AND device_control.state IN ('paused', 'stopped')
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM operator_control_states AS assignment_control
+                  WHERE assignment_control.scope = 'assignment'
+                    AND assignment_control.scope_id = CAST(
+                        assignment.assignment_id AS TEXT
+                    )
+                    AND assignment_control.state IN ('paused', 'stopped')
+              )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM round_assignments AS blocker
+                  WHERE blocker.identity_key = assignment.identity_key
+                    AND blocker.assignment_id <> assignment.assignment_id
+                    AND (
+                        (
+                            blocker.lease_owner IS NOT NULL
+                            AND blocker.lease_expires_at_ms > ?
+                        )
+                        OR (
+                            blocker.visit_confirmed_at_ms IS NOT NULL
+                            AND blocker.visit_confirmed_at_ms >
+                                (? - round.min_inter_device_gap_ms)
+                        )
+                    )
+              )
+            ORDER BY
+                CASE assignment.phase WHEN 'pending' THEN 0 ELSE 1 END,
+                assignment.order_key
+            LIMIT 1
+            """,
+            (
+                round_id,
+                device_id,
+                effective_now_ms,
+                effective_now_ms,
+                effective_now_ms,
+                effective_now_ms,
+            ),
+        ).fetchone()
+        if row is None:
+            return None
+        assignment_id = int(row["assignment_id"])
+        previous_phase = AssignmentPhase(str(row["phase"]))
+        connection.execute(
+            """
+            UPDATE round_assignments
+            SET phase = 'profile_opening',
+                attempt_count = attempt_count + 1,
+                lease_owner = ?,
+                lease_expires_at_ms = ?
+            WHERE assignment_id = ?
+            """,
+            (owner_id, effective_now_ms + lease_ttl_ms, assignment_id),
+        )
+        self._insert_phase_history(
+            connection,
+            assignment_id,
+            previous_phase,
+            AssignmentPhase.PROFILE_OPENING,
+            effective_now_ms,
+            {"owner_id": owner_id},
+        )
+        connection.execute(
+            """
+            UPDATE exposure_rounds SET state = 'running'
+            WHERE round_id = ? AND state = 'pending'
+            """,
+            (round_id,),
+        )
+        return self._assignment_by_id(connection, assignment_id)
 
     def record_visit_confirmed(
         self,
