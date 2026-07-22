@@ -14,7 +14,6 @@
 
 **Files:**
 - Create: `src/tikpoc/priority_importer.py`
-- Modify: `src/tikpoc/acquisition_models.py`
 - Test: `tests/test_priority_importer.py`
 
 - [ ] **Step 1: Write failing JSONL and workbook tests**
@@ -39,10 +38,10 @@ def test_priority_jsonl_normalizes_and_deduplicates_live_users(tmp_path: Path):
 
     result = read_priority_targets(source, source_live_id="live-1")
 
-    assert len(result.targets) == 2
-    assert result.targets[0].identity_key == "handle:buyer.one"
-    assert result.targets[1].identity_key == "sec:sec-1"
-    assert result.skipped_duplicates == 1
+    assert len(result.targets) == 1
+    assert result.targets[0].identity_key == "sec:sec-1"
+    assert result.targets[0].source_line_numbers == (1, 2, 3)
+    assert result.skipped_duplicates == 2
 ```
 
 ```python
@@ -71,7 +70,8 @@ Expected: collection fails because `tikpoc.priority_importer` does not exist.
 
 - [ ] **Step 3: Implement the focused adapter**
 
-Add immutable import types to `acquisition_models.py`:
+Add the immutable result type to `priority_importer.py` and reuse the existing
+`importer.Target` type:
 
 ```python
 @dataclass(frozen=True)
@@ -93,10 +93,10 @@ export columns.
 
 ```bash
 uv run pytest tests/test_priority_importer.py -q
-uv tool run ruff check src/tikpoc/priority_importer.py src/tikpoc/acquisition_models.py tests/test_priority_importer.py
-uv tool run ruff format --check src/tikpoc/priority_importer.py src/tikpoc/acquisition_models.py tests/test_priority_importer.py
+uv tool run ruff check src/tikpoc/priority_importer.py tests/test_priority_importer.py
+uv tool run ruff format --check src/tikpoc/priority_importer.py tests/test_priority_importer.py
 git diff --check
-git add src/tikpoc/priority_importer.py src/tikpoc/acquisition_models.py tests/test_priority_importer.py
+git add src/tikpoc/priority_importer.py tests/test_priority_importer.py
 git commit -m "feat: parse live-interest priority targets"
 ```
 

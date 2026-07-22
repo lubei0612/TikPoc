@@ -53,8 +53,10 @@ later is not silently inserted into an already-created batch.
 ## Identity And Deduplication
 
 Within a priority submission, targets are deduplicated using `sec_uid`, then a
-real platform user ID, then normalized username. The collector-local `dom-*`
-identifier is never preferred over a real username.
+real platform user ID, then normalized username. Rows sharing a normalized
+username are merged and the retained target is upgraded when a later row adds a
+sec UID or real user ID. The collector-local `dom-*` identifier is never
+preferred over a real username.
 
 If an account already has a confirmed visit for the identity in the current
 ordinary round, the priority assignment for that account is recorded as
@@ -109,4 +111,3 @@ checkpoint. It never prints credentials, cookies, or private browser state.
 6. Existing mobile worker and coverage tests remain green, and new tests cover
    import normalization, idempotency, FIFO barriers, cross-batch deduplication,
    and crash recovery.
-
