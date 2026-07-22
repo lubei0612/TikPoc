@@ -83,6 +83,8 @@ def run_device_worker(
     route_factory: Callable[[str], object] = AdbProfileRouter,
     clock_ms: Callable[[], int] = _clock_ms,
 ) -> None:
+    if device.startup_offset_ms and stop_event.wait(device.startup_offset_ms / 1_000):
+        return
     repository = repository_factory(database_path)
     driver = fence.execute(driver_factory, device.appium_url, device.adb_endpoint)
     try:

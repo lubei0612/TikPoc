@@ -25,6 +25,19 @@ def _configured_port(value: object, default: int, label: str) -> int:
     return port
 
 
+def _configured_nonnegative_int(value: object, default: int, label: str) -> int:
+    raw_value = default if value is None else value
+    if isinstance(raw_value, bool) or not isinstance(raw_value, (int, str)):
+        raise ValueError(f"{label} must be a nonnegative integer")
+    try:
+        configured = int(raw_value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{label} must be a nonnegative integer") from error
+    if configured < 0:
+        raise ValueError(f"{label} must be a nonnegative integer")
+    return configured
+
+
 def _configured_ip(value: object, label: str, *, loopback: bool = False) -> str:
     normalized = str(value or "").strip()
     try:
@@ -73,6 +86,7 @@ class FleetDevice:
     appium_url: str
     order_seed: str
     proxy_port: int | None = None
+    startup_offset_ms: int = 0
 
 
 @dataclass(frozen=True)
@@ -128,6 +142,9 @@ class FleetConfig:
                     _configured_port(item.get("proxy_port"), 0, "device proxy port")
                     if item.get("proxy_port") is not None
                     else None
+                ),
+                startup_offset_ms=_configured_nonnegative_int(
+                    item.get("startup_offset_ms"), 0, "startup offset"
                 ),
             )
             for item in raw_devices

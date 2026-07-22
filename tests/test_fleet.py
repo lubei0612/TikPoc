@@ -183,6 +183,50 @@ def test_fleet_parses_two_myt_devices(tmp_path: Path) -> None:
     assert config.relay_allowed_sources == frozenset({"192.168.28.114"})
 
 
+def test_fleet_parses_nonnegative_device_startup_offsets(tmp_path: Path) -> None:
+    offsets = (0, 250, 500, 750, 1_000, 1_250)
+    devices = "".join(
+        f"""
+  - device_id: phone-{index:02d}
+    account_id: account-{index:02d}
+    myt_slot: {index}
+    adb_endpoint: 192.168.28.114:{29_900 + index * 100}
+    appium_url: http://127.0.0.1:4723
+    order_seed: seed-{index}
+    startup_offset_ms: {offset}
+"""
+        for index, offset in enumerate(offsets, start=1)
+    )
+    path = _write_config(tmp_path, devices)
+
+    config = FleetConfig.from_path(path)
+
+    assert tuple(device.startup_offset_ms for device in config.devices) == offsets
+
+
+@pytest.mark.parametrize("value", ("-1", "1.5", "true"))
+def test_fleet_rejects_invalid_device_startup_offset(
+    tmp_path: Path, value: str
+) -> None:
+    path = _write_config(
+        tmp_path,
+        f"""
+  - device_id: phone-01
+    account_id: account-01
+    myt_slot: 1
+    adb_endpoint: 192.168.28.114:30000
+    appium_url: http://127.0.0.1:4723
+    order_seed: seed-a
+    startup_offset_ms: {value}
+""",
+    )
+
+    with pytest.raises(
+        ValueError, match="startup offset must be a nonnegative integer"
+    ):
+        FleetConfig.from_path(path)
+
+
 def test_device_worker_lease_is_exclusive_until_expiry(tmp_path: Path) -> None:
     repository = AcquisitionRepository(tmp_path / "tikpoc.db")
     repository.migrate()

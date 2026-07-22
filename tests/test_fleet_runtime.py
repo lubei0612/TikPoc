@@ -1,4 +1,5 @@
 import threading
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -182,6 +183,92 @@ def test_device_worker_processes_assignments_until_stopped(tmp_path: Path) -> No
     assert callable(captured["device"].device.route_opener)
     assert captured["device"].device.diagnostics_dir == tmp_path / "screenshots"
     assert driver.closed is True
+
+
+def test_device_worker_waits_once_before_creating_appium_session(
+    tmp_path: Path,
+) -> None:
+    events: list[object] = []
+
+    class RecordingStopEvent(threading.Event):
+        def wait(self, timeout: float | None = None) -> bool:
+            events.append(("wait", timeout))
+            return False
+
+    stop_event = RecordingStopEvent()
+    device = replace(_two_device_config(tmp_path).devices[0], startup_offset_ms=750)
+    assignments = iter(("assignment-1", "assignment-2"))
+
+    class FakeRepository:
+        def claim_next_assignment(self, *args, **kwargs):
+            return next(assignments, None)
+
+    class FakeDriver:
+        def quit(self) -> None:
+            events.append("quit")
+
+    def create_driver(appium_url: str, adb_endpoint: str) -> FakeDriver:
+        events.append("driver")
+        return FakeDriver()
+
+    class FakeWorker:
+        def __init__(self, *args, **kwargs) -> None:
+            return
+
+        def run_assignment(self, assignment) -> None:
+            events.append(assignment)
+            if assignment == "assignment-2":
+                stop_event.set()
+
+    run_device_worker(
+        tmp_path / "acquisition.db",
+        "round-1",
+        device,
+        RecordingFence(),
+        stop_event,
+        repository_factory=lambda path: FakeRepository(),
+        driver_factory=create_driver,
+        device_factory=lambda driver: ProtocolDevice(),
+        route_factory=lambda endpoint: type("Router", (), {"open": lambda *a: None})(),
+        worker_factory=FakeWorker,
+    )
+
+    assert events == [
+        ("wait", 0.75),
+        "driver",
+        "assignment-1",
+        "assignment-2",
+        "quit",
+    ]
+
+
+def test_device_worker_stop_during_startup_offset_skips_appium_session(
+    tmp_path: Path,
+) -> None:
+    class StoppingEvent(threading.Event):
+        def wait(self, timeout: float | None = None) -> bool:
+            assert timeout == 0.75
+            return True
+
+    device = replace(_two_device_config(tmp_path).devices[0], startup_offset_ms=750)
+    driver_created = False
+
+    def create_driver(appium_url: str, adb_endpoint: str):
+        nonlocal driver_created
+        driver_created = True
+        return object()
+
+    run_device_worker(
+        tmp_path / "acquisition.db",
+        "round-1",
+        device,
+        RecordingFence(),
+        StoppingEvent(),
+        repository_factory=lambda path: object(),
+        driver_factory=create_driver,
+    )
+
+    assert driver_created is False
 
 
 def test_device_worker_checks_fence_before_creating_appium_session(
