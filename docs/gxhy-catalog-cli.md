@@ -69,3 +69,52 @@ This raw export is intentionally separate from `CatalogProduct`, which removes
 supplier and price metadata before TikTok publishing. AI workflows that need
 source-faithful catalog data should read this export; publishing workflows must
 continue using the sanitized catalog path.
+
+## Automatic Mobile Publishing
+
+The mobile pipeline creates one immutable job per product. Each job contains
+only that product's images, preserves their manifest order, and posts them
+together as one TikTok photo post. AI caption generation is best-effort; the
+deterministic English caption is used when the configured provider is
+unavailable.
+
+Prepare downloaded products without a manual approval gate:
+
+```bash
+uv run tikpoc catalog prepare \
+  --manifest var/catalog/SHOP_UID/manifest.jsonl \
+  --db var/tikpoc.db \
+  --account-id account-slot-01-user8362279234711 \
+  --output var/catalog/SHOP_UID/publishing
+```
+
+Publish one prepared job through the configured slot:
+
+```bash
+uv run tikpoc catalog publish \
+  --db var/tikpoc.db \
+  --devices config/settings.yaml \
+  --device-id myt-slot-01 \
+  --expected-username user8362279234711 \
+  --max-posts 1
+```
+
+The end-to-end command combines scrape, prepare, and publish:
+
+```bash
+uv run tikpoc catalog run \
+  --shop 'https://gxhy1688.com/Shopindex?marketCode=gz&uid=SHOP_UID' \
+  --catalog-output var/catalog/SHOP_UID \
+  --db var/tikpoc.db \
+  --devices config/settings.yaml \
+  --device-id myt-slot-01 \
+  --expected-username user8362279234711 \
+  --max-products 1 \
+  --max-posts 1
+```
+
+`published` requires a newly visible post on the expected profile. An error
+after the Post click is stored as `uncertain` and is never retried
+automatically. Identity, verification, or media-selection failures before the
+click return the job to `approved`. Inspect durable state with
+`tikpoc catalog status --db var/tikpoc.db`.

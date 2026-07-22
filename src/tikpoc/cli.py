@@ -90,6 +90,36 @@ def _parser() -> argparse.ArgumentParser:
     catalog_scrape.add_argument("--delay", type=float, default=0.5)
     catalog_scrape.add_argument("--no-images", action="store_true")
     catalog_scrape.add_argument("--max-image-mb", type=int, default=25)
+    catalog_prepare = catalog_commands.add_parser("prepare")
+    catalog_prepare.add_argument("--manifest", type=Path, required=True)
+    catalog_prepare.add_argument("--db", type=Path, required=True)
+    catalog_prepare.add_argument("--account-id", action="append", required=True)
+    catalog_prepare.add_argument("--output", type=Path, required=True)
+    catalog_prepare.add_argument("--settings", type=Path)
+    catalog_publish = catalog_commands.add_parser("publish")
+    catalog_publish.add_argument("--db", type=Path, required=True)
+    catalog_publish.add_argument("--devices", type=Path, required=True)
+    catalog_publish.add_argument("--device-id", required=True)
+    catalog_publish.add_argument("--expected-username", required=True)
+    catalog_publish.add_argument("--adb-path", type=Path)
+    catalog_publish.add_argument("--max-posts", type=int, default=1)
+    catalog_run = catalog_commands.add_parser("run")
+    catalog_run.add_argument("--shop", required=True)
+    catalog_run.add_argument("--catalog-output", type=Path, required=True)
+    catalog_run.add_argument("--db", type=Path, required=True)
+    catalog_run.add_argument("--devices", type=Path, required=True)
+    catalog_run.add_argument("--device-id", required=True)
+    catalog_run.add_argument("--expected-username", required=True)
+    catalog_run.add_argument("--settings", type=Path)
+    catalog_run.add_argument("--adb-path", type=Path)
+    catalog_run.add_argument("--max-products", type=int)
+    catalog_run.add_argument("--page-size", type=int, default=50)
+    catalog_run.add_argument("--delay", type=float, default=0.5)
+    catalog_run.add_argument("--max-image-mb", type=int, default=25)
+    catalog_run.add_argument("--max-posts", type=int, default=1)
+    catalog_status = catalog_commands.add_parser("status")
+    catalog_status.add_argument("--db", type=Path, required=True)
+    catalog_status.add_argument("--account-id", default="")
     for command_name in ("serve", "dashboard"):
         serve = commands.add_parser(command_name)
         serve.add_argument("--db", type=Path, required=True)
@@ -148,31 +178,113 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
         return 0
     if args.command == "catalog":
-        if args.max_products is not None and args.max_products <= 0:
-            raise SystemExit("max-products must be positive")
-        if not 1 <= args.page_size <= 100:
-            raise SystemExit("page-size must be between 1 and 100")
-        if args.delay < 0:
-            raise SystemExit("delay must be non-negative")
-        if args.max_image_mb <= 0:
-            raise SystemExit("max-image-mb must be positive")
+        if args.catalog_command in {"scrape", "run"}:
+            if args.max_products is not None and args.max_products <= 0:
+                raise SystemExit("max-products must be positive")
+            if not 1 <= args.page_size <= 100:
+                raise SystemExit("page-size must be between 1 and 100")
+            if args.delay < 0:
+                raise SystemExit("delay must be non-negative")
+            if args.max_image_mb <= 0:
+                raise SystemExit("max-image-mb must be positive")
+        if args.catalog_command in {"publish", "run"} and args.max_posts <= 0:
+            raise SystemExit("max-posts must be positive")
         try:
-            result = _run_catalog_scrape(
-                shop=args.shop,
-                output_dir=args.output,
-                max_products=args.max_products,
-                page_size=args.page_size,
-                delay_seconds=args.delay,
-                download_images=not args.no_images,
-                max_image_bytes=args.max_image_mb * 1024 * 1024,
-            )
+            if args.catalog_command == "scrape":
+                result = _run_catalog_scrape(
+                    shop=args.shop,
+                    output_dir=args.output,
+                    max_products=args.max_products,
+                    page_size=args.page_size,
+                    delay_seconds=args.delay,
+                    download_images=not args.no_images,
+                    max_image_bytes=args.max_image_mb * 1024 * 1024,
+                )
+                print(
+                    f"products={result.product_count} images={result.image_count} "
+                    f"failed_images={result.failed_image_count} output={args.output}"
+                )
+                return 0
+            if args.catalog_command == "prepare":
+                jobs = _run_catalog_prepare(
+                    manifest=args.manifest,
+                    database_path=args.db,
+                    account_ids=tuple(args.account_id),
+                    output_dir=args.output,
+                    settings_path=args.settings,
+                )
+                print(f"prepared={len(jobs)} database={args.db}")
+                return 0
+            if args.catalog_command == "publish":
+                jobs = _run_catalog_publish(
+                    database_path=args.db,
+                    devices_path=args.devices,
+                    device_id=args.device_id,
+                    expected_username=args.expected_username,
+                    adb_path=args.adb_path,
+                    max_posts=args.max_posts,
+                )
+                print(_catalog_publish_summary(jobs))
+                return 0 if all(job.state == "published" for job in jobs) else 1
+            if args.catalog_command == "run":
+                scraped = _run_catalog_scrape(
+                    shop=args.shop,
+                    output_dir=args.catalog_output,
+                    max_products=args.max_products,
+                    page_size=args.page_size,
+                    delay_seconds=args.delay,
+                    download_images=True,
+                    max_image_bytes=args.max_image_mb * 1024 * 1024,
+                )
+                device = _fleet_device(args.devices, args.device_id)
+                jobs = _run_catalog_prepare(
+                    manifest=args.catalog_output / "manifest.jsonl",
+                    database_path=args.db,
+                    account_ids=(device.account_id,),
+                    output_dir=args.catalog_output / "publishing",
+                    settings_path=args.settings,
+                )
+                published = _run_catalog_publish(
+                    database_path=args.db,
+                    devices_path=args.devices,
+                    device_id=args.device_id,
+                    expected_username=args.expected_username,
+                    adb_path=args.adb_path,
+                    max_posts=args.max_posts,
+                )
+                print(
+                    f"products={scraped.product_count} prepared={len(jobs)} "
+                    + _catalog_publish_summary(published)
+                )
+                return 0 if all(job.state == "published" for job in published) else 1
+            if args.catalog_command == "status":
+                from collections import Counter
+
+                from .publishing_db import PublishingRepository
+
+                jobs = PublishingRepository(args.db).list_jobs(
+                    account_id=args.account_id
+                )
+                counts = Counter(job.state for job in jobs)
+                print(
+                    "total="
+                    + str(len(jobs))
+                    + " "
+                    + " ".join(
+                        f"{state}={counts[state]}"
+                        for state in (
+                            "prepared",
+                            "approved",
+                            "publishing",
+                            "published",
+                            "uncertain",
+                            "rejected",
+                        )
+                    )
+                )
+                return 0
         except (OSError, RuntimeError, ValueError) as error:
             raise SystemExit(str(error)) from None
-        print(
-            f"products={result.product_count} images={result.image_count} "
-            f"failed_images={result.failed_image_count} output={args.output}"
-        )
-        return 0
     if args.command == "proxy-guard":
         import time
 
@@ -597,6 +709,100 @@ def _run_catalog_scrape(
         download_images=download_images,
         max_image_bytes=max_image_bytes,
     )
+
+
+def _run_catalog_prepare(
+    *,
+    manifest: Path,
+    database_path: Path,
+    account_ids: tuple[str, ...],
+    output_dir: Path,
+    settings_path: Path | None,
+):
+    import time
+
+    from .catalog_workflow import (
+        CatalogSupervisor,
+        load_catalog_manifest,
+        prepare_catalog_jobs,
+    )
+    from .publishing_db import PublishingRepository
+    from .runtime_settings import RuntimeSettingsStore
+
+    provider_path = settings_path or (
+        database_path.parent / "config" / "secrets" / "operator-settings.json"
+    )
+    provider = RuntimeSettingsStore(provider_path).provider_credentials()
+    return prepare_catalog_jobs(
+        load_catalog_manifest(manifest),
+        repository=PublishingRepository(database_path),
+        supervisor=CatalogSupervisor(provider),
+        account_ids=account_ids,
+        output_dir=output_dir,
+        now_ms=int(time.time() * 1000),
+    )
+
+
+def _fleet_device(devices_path: Path, device_id: str):
+    config = FleetConfig.from_path(devices_path)
+    matches = tuple(
+        device for device in config.devices if device.device_id == device_id.strip()
+    )
+    if len(matches) != 1:
+        raise ValueError(f"device id is not configured exactly once: {device_id}")
+    return matches[0]
+
+
+def _run_catalog_publish(
+    *,
+    database_path: Path,
+    devices_path: Path,
+    device_id: str,
+    expected_username: str,
+    adb_path: Path | None,
+    max_posts: int,
+):
+    import os
+
+    from .mobile_catalog_publisher import (
+        AdbMediaStager,
+        AppiumTikTokPhotoUi,
+        MobileCatalogPublisher,
+    )
+    from .publishing_db import PublishingRepository
+    from .runner import create_driver
+
+    device = _fleet_device(devices_path, device_id)
+    repository = PublishingRepository(database_path)
+    publisher = MobileCatalogPublisher(
+        repository,
+        stager=AdbMediaStager(device.adb_endpoint, adb_path=adb_path),
+        ui_factory=lambda: AppiumTikTokPhotoUi(
+            create_driver(device.appium_url, device.adb_endpoint, command_timeout=60),
+            timeout=30,
+        ),
+    )
+    results = []
+    owner = f"catalog-publisher-{os.getpid()}"
+    for _ in range(max_posts):
+        result = publisher.publish_one(
+            account_id=device.account_id,
+            expected_username=expected_username,
+            device_id=device.device_id,
+            owner=owner,
+        )
+        if result is None:
+            break
+        results.append(result)
+        if result.state != "published":
+            break
+    return tuple(results)
+
+
+def _catalog_publish_summary(jobs) -> str:
+    published = sum(job.state == "published" for job in jobs)
+    uncertain = sum(job.state == "uncertain" for job in jobs)
+    return f"attempted={len(jobs)} published={published} uncertain={uncertain}"
 
 
 def _load_env_file(path: Path) -> None:

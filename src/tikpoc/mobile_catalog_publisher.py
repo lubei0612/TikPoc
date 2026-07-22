@@ -1,0 +1,426 @@
+from __future__ import annotations
+
+import hashlib
+import sqlite3
+import subprocess
+import time
+from collections.abc import Callable
+from pathlib import Path
+from typing import Protocol
+
+from selenium.webdriver.common.by import By
+
+from .device import TIKTOK_PACKAGE
+from .profile_parser import parse_profile_username, parse_visible_post_keys
+from .publishing_db import PublishingJob, PublishingRepository
+
+
+class IdentityMismatch(RuntimeError):
+    pass
+
+
+class VerificationRequired(RuntimeError):
+    pass
+
+
+CREATE_XPATH = (
+    '//*[@content-desc="Create" or @text="Create" or @content-desc="创建" '
+    'or @text="创建" or @content-desc="+"]'
+)
+UPLOAD_XPATH = (
+    '//*[@content-desc="Upload" or @text="Upload" or @content-desc="上传" '
+    'or @text="上传"]'
+)
+PHOTOS_XPATH = (
+    '//*[@text="Photos" or @content-desc="Photos" or @text="照片" '
+    'or @content-desc="照片"]'
+)
+ALBUM_XPATH = (
+    '//*[@text="All" or @text="Recents" or @text="Albums" or @text="相册" '
+    'or @content-desc="All" or @content-desc="Recents"]'
+)
+MULTI_SELECT_XPATH = (
+    '//*[@text="Select multiple" or @content-desc="Select multiple" '
+    'or @text="选择多个" or @content-desc="选择多个"]'
+)
+THUMBNAIL_CHECK_XPATH = (
+    '//*[@resource-id="com.android.providers.media.module:id/icon_check" '
+    'or contains(@resource-id,"select_check") or contains(@resource-id,"checkbox")]'
+    " | //android.widget.GridView[1]/android.widget.FrameLayout/"
+    "android.widget.FrameLayout/android.widget.Button"
+)
+NEXT_XPATH = (
+    '//*[@text="Next" or @content-desc="Next" or @text="下一步" '
+    'or @content-desc="下一步"]'
+)
+CAPTION_XPATH = "//android.widget.EditText"
+POST_XPATH = (
+    '//*[@text="Post" or @content-desc="Post" or @text="发布" or @content-desc="发布"]'
+)
+VERIFICATION_MARKERS = (
+    "verify to continue",
+    "verification required",
+    "captcha",
+    "drag the puzzle",
+    "complete the puzzle",
+    "请完成验证",
+    "安全验证",
+)
+
+
+class AppiumTikTokPhotoUi:
+    def __init__(
+        self,
+        driver: object,
+        *,
+        timeout: float = 10,
+        poll_interval: float = 0.25,
+        sleeper: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self.driver = driver
+        self.timeout = max(0.0, timeout)
+        self.poll_interval = max(0.0, poll_interval)
+        self.sleeper = sleeper
+        self.expected_username = ""
+        self._submitted = False
+
+    def verify_identity(self, expected_username: str) -> None:
+        expected = expected_username.strip().removeprefix("@").lower()
+        if not expected:
+            raise ValueError("expected TikTok username is required")
+        self.driver.execute_script(
+            "mobile: deepLink",
+            {
+                "url": f"https://www.tiktok.com/@{expected}",
+                "package": TIKTOK_PACKAGE,
+            },
+        )
+        actual = self._wait_profile_username()
+        if actual != expected:
+            raise IdentityMismatch(
+                f"TikTok identity mismatch: expected @{expected}, got @{actual or 'unknown'}"
+            )
+        self.expected_username = expected
+
+    def snapshot_posts(self) -> frozenset[str]:
+        return frozenset(parse_visible_post_keys(str(self.driver.page_source)))
+
+    def prepare(self, remote_paths: tuple[str, ...], caption: str) -> None:
+        if not self.expected_username:
+            raise RuntimeError("TikTok identity must be verified before preparation")
+        if not remote_paths or len(remote_paths) > 35:
+            raise ValueError("a photo post requires between 1 and 35 images")
+        parents = {str(Path(path).parent) for path in remote_paths}
+        if len(parents) != 1:
+            raise ValueError("all publishing images must come from one isolated album")
+        album_name = Path(next(iter(parents))).name
+        if not album_name.startswith("job-"):
+            raise ValueError("publishing album must be job-scoped")
+        self._click_required(CREATE_XPATH, "Create control")
+        self._click_required(UPLOAD_XPATH, "Upload control")
+        self._click_required(PHOTOS_XPATH, "Photos control")
+        album = self._first(ALBUM_XPATH)
+        if album is not None:
+            album.click()
+        escaped_album = album_name.replace('"', "")
+        self._click_required(
+            f'//*[@text="{escaped_album}" or @content-desc="{escaped_album}"]',
+            "isolated job album",
+        )
+        multi = self._first(MULTI_SELECT_XPATH)
+        if multi is not None:
+            multi.click()
+        thumbnails = self._wait_elements(THUMBNAIL_CHECK_XPATH)
+        if len(thumbnails) < len(remote_paths):
+            raise RuntimeError(
+                f"isolated album has {len(thumbnails)} selectable images; "
+                f"expected {len(remote_paths)}"
+            )
+        for thumbnail in thumbnails[: len(remote_paths)]:
+            thumbnail.click()
+        self._click_required(NEXT_XPATH, "Next control")
+        caption_input = self._first(CAPTION_XPATH)
+        if caption_input is None:
+            raise RuntimeError("caption input is not visible")
+        caption_input.clear()
+        caption_input.send_keys(caption.strip())
+
+    def submit_once(self) -> None:
+        if self._submitted:
+            raise RuntimeError("publishing submission was already attempted")
+        if self._verification_visible():
+            raise VerificationRequired("TikTok verification challenge is visible")
+        post = self._first(POST_XPATH)
+        if post is None:
+            raise RuntimeError("Post control is not visible")
+        self._submitted = True
+        post.click()
+
+    def reconcile(self, before: frozenset[str]) -> str | None:
+        if not self._submitted:
+            raise RuntimeError("publishing submission was not attempted")
+        self.driver.execute_script(
+            "mobile: deepLink",
+            {
+                "url": f"https://www.tiktok.com/@{self.expected_username}",
+                "package": TIKTOK_PACKAGE,
+            },
+        )
+        deadline = time.monotonic() + self.timeout
+        while True:
+            source = str(self.driver.page_source)
+            if parse_profile_username(source) == self.expected_username:
+                added = set(parse_visible_post_keys(source)) - set(before)
+                if added:
+                    signature = hashlib.sha256(
+                        "\n".join(sorted(added)).encode()
+                    ).hexdigest()[:20]
+                    return f"tiktok-visible://@{self.expected_username}/{signature}"
+            if time.monotonic() >= deadline:
+                return None
+            self.sleeper(self.poll_interval)
+
+    def close(self) -> None:
+        self.driver.quit()
+
+    def _wait_profile_username(self) -> str:
+        deadline = time.monotonic() + self.timeout
+        while True:
+            try:
+                actual = parse_profile_username(str(self.driver.page_source))
+            except ValueError:
+                actual = ""
+            if actual or time.monotonic() >= deadline:
+                return actual
+            self.sleeper(self.poll_interval)
+
+    def _wait_elements(self, xpath: str) -> tuple[object, ...]:
+        deadline = time.monotonic() + self.timeout
+        while True:
+            visible = []
+            for element in self.driver.find_elements(By.XPATH, xpath):
+                try:
+                    if element.is_displayed():
+                        visible.append(element)
+                except Exception:
+                    continue
+            if visible or time.monotonic() >= deadline:
+                return tuple(visible)
+            self.sleeper(self.poll_interval)
+
+    def _first(self, xpath: str) -> object | None:
+        elements = self._wait_elements(xpath)
+        return elements[0] if elements else None
+
+    def _click_required(self, xpath: str, label: str) -> None:
+        element = self._first(xpath)
+        if element is None:
+            raise RuntimeError(f"{label} is not visible")
+        element.click()
+
+    def _verification_visible(self) -> bool:
+        source = str(self.driver.page_source).lower()
+        return any(marker in source for marker in VERIFICATION_MARKERS)
+
+
+class PhotoPublishingUi(Protocol):
+    def verify_identity(self, expected_username: str) -> None: ...
+
+    def snapshot_posts(self) -> frozenset[str]: ...
+
+    def prepare(self, remote_paths: tuple[str, ...], caption: str) -> None: ...
+
+    def submit_once(self) -> None: ...
+
+    def reconcile(self, before: frozenset[str]) -> str | None: ...
+
+    def close(self) -> None: ...
+
+
+class MediaStager(Protocol):
+    def stage(self, job: PublishingJob) -> tuple[str, ...]: ...
+
+    def cleanup(self, job_id: int) -> None: ...
+
+
+class AdbMediaStager:
+    def __init__(
+        self,
+        adb_endpoint: str,
+        *,
+        adb_path: Path | None = None,
+        runner: Callable[..., object] = subprocess.run,
+    ) -> None:
+        self.adb_endpoint = adb_endpoint.strip()
+        self.adb_path = (
+            adb_path or Path.home() / "Library/Android/sdk/platform-tools/adb"
+        )
+        self.runner = runner
+
+    def stage(self, job: PublishingJob) -> tuple[str, ...]:
+        if len(job.asset_paths) != len(job.asset_sha256s):
+            raise ValueError("publishing asset snapshot is incomplete")
+        local_paths = tuple(Path(value) for value in job.asset_paths)
+        for path, expected_hash in zip(local_paths, job.asset_sha256s, strict=True):
+            if not path.is_file():
+                raise ValueError(f"publishing asset is missing: {path}")
+            if hashlib.sha256(path.read_bytes()).hexdigest() != expected_hash:
+                raise ValueError(f"publishing asset SHA-256 mismatch: {path}")
+        remote_dir = self._remote_dir(job.job_id)
+        self._run("shell", "mkdir", "-p", remote_dir)
+        remote_paths: list[str] = []
+        for index, path in enumerate(local_paths, start=1):
+            suffix = (
+                path.suffix.lower()
+                if path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
+                else ".jpg"
+            )
+            remote_path = f"{remote_dir}/{index:03d}{suffix}"
+            self._run("push", str(path), remote_path)
+            self._run(
+                "shell",
+                "am",
+                "broadcast",
+                "-a",
+                "android.intent.action.MEDIA_SCANNER_SCAN_FILE",
+                "-d",
+                f"file://{remote_path}",
+            )
+            remote_paths.append(remote_path)
+        return tuple(remote_paths)
+
+    def cleanup(self, job_id: int) -> None:
+        self._run("shell", "rm", "-rf", self._remote_dir(job_id))
+
+    def _remote_dir(self, job_id: int) -> str:
+        if job_id <= 0:
+            raise ValueError("job id must be positive")
+        return f"/sdcard/Pictures/TikPoc/job-{job_id}"
+
+    def _run(self, *args: str) -> object:
+        return self.runner(
+            (str(self.adb_path), "-s", self.adb_endpoint, *args),
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+
+class MobileCatalogPublisher:
+    def __init__(
+        self,
+        repository: PublishingRepository,
+        *,
+        stager: MediaStager,
+        ui_factory: Callable[[], PhotoPublishingUi],
+        device_busy: Callable[[str, int], bool] | None = None,
+        clock_ms: Callable[[], int] | None = None,
+    ) -> None:
+        self.repository = repository
+        self.stager = stager
+        self.ui_factory = ui_factory
+        self.device_busy = device_busy or self._device_busy
+        self.clock_ms = clock_ms or (lambda: int(time.time() * 1000))
+
+    def publish_one(
+        self,
+        *,
+        account_id: str,
+        expected_username: str,
+        device_id: str,
+        owner: str,
+    ) -> PublishingJob | None:
+        now_ms = self.clock_ms()
+        if self.device_busy(device_id, now_ms):
+            raise RuntimeError("device has an active acquisition worker")
+        job = self.repository.claim_job(
+            account_id=account_id,
+            owner=owner,
+            now_ms=now_ms,
+            lease_ms=10 * 60 * 1000,
+        )
+        if job is None:
+            return None
+        ui: PhotoPublishingUi | None = None
+        submitted = False
+        try:
+            remote_paths = self.stager.stage(job)
+            ui = self.ui_factory()
+            ui.verify_identity(expected_username)
+            self._attempt(job, owner, "identity_verified")
+            before = ui.snapshot_posts()
+            ui.prepare(remote_paths, job.caption)
+            self._attempt(job, owner, "media_prepared")
+            try:
+                ui.submit_once()
+            except VerificationRequired:
+                raise
+            except Exception:
+                submitted = True
+                raise
+            submitted = True
+            self._attempt(job, owner, "submitted")
+            visible_result = ui.reconcile(before)
+            if visible_result:
+                self._attempt(job, owner, "reconciled", visible_result)
+                return self.repository.finish_job(
+                    job.job_id,
+                    owner=owner,
+                    result="published",
+                    visible_post_url=visible_result,
+                    now_ms=self.clock_ms(),
+                )
+            return self.repository.finish_job(
+                job.job_id,
+                owner=owner,
+                result="uncertain",
+                visible_post_url="",
+                now_ms=self.clock_ms(),
+            )
+        except Exception:
+            if submitted:
+                return self.repository.finish_job(
+                    job.job_id,
+                    owner=owner,
+                    result="uncertain",
+                    visible_post_url="",
+                    now_ms=self.clock_ms(),
+                )
+            self.repository.release_job(job.job_id, owner=owner, now_ms=self.clock_ms())
+            raise
+        finally:
+            if ui is not None:
+                try:
+                    ui.close()
+                except Exception:
+                    pass
+            try:
+                self.stager.cleanup(job.job_id)
+            except Exception:
+                pass
+
+    def _attempt(
+        self, job: PublishingJob, owner: str, stage: str, detail: str = ""
+    ) -> None:
+        self.repository.record_attempt(
+            job.job_id,
+            owner=owner,
+            stage=stage,
+            detail=detail,
+            now_ms=self.clock_ms(),
+        )
+
+    def _device_busy(self, device_id: str, now_ms: int) -> bool:
+        try:
+            with sqlite3.connect(self.repository.path) as connection:
+                row = connection.execute(
+                    """
+                    SELECT 1 FROM device_worker_leases
+                    WHERE device_id = ? AND expires_at_ms > ? LIMIT 1
+                    """,
+                    (device_id, now_ms),
+                ).fetchone()
+        except sqlite3.OperationalError:
+            return False
+        return row is not None

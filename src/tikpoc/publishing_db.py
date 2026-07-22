@@ -24,6 +24,15 @@ class PublishingJob:
     updated_at_ms: int
 
 
+@dataclass(frozen=True)
+class PublishingAttempt:
+    attempt_id: int
+    job_id: int
+    stage: str
+    detail: str
+    created_at_ms: int
+
+
 class PublishingRepository:
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
@@ -74,6 +83,14 @@ class PublishingRepository:
 
                 CREATE INDEX IF NOT EXISTS publishing_jobs_claim_idx
                 ON publishing_jobs (account_id, state, created_at_ms, job_id);
+
+                CREATE TABLE IF NOT EXISTS publishing_attempts (
+                    attempt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id INTEGER NOT NULL REFERENCES publishing_jobs(job_id),
+                    stage TEXT NOT NULL,
+                    detail TEXT NOT NULL DEFAULT '',
+                    created_at_ms INTEGER NOT NULL
+                );
                 """
             )
             columns = {
@@ -194,6 +211,15 @@ class PublishingRepository:
             raise ValueError("owner and positive lease_ms are required")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                UPDATE publishing_jobs
+                SET state = 'uncertain', lease_expires_at_ms = 0, updated_at_ms = ?
+                WHERE account_id = ? AND state = 'publishing'
+                  AND lease_expires_at_ms <= ?
+                """,
+                (now_ms, account_id, now_ms),
+            )
             busy = connection.execute(
                 """
                 SELECT 1 FROM publishing_jobs
@@ -259,6 +285,100 @@ class PublishingRepository:
                 "SELECT * FROM publishing_jobs WHERE job_id = ?", (job_id,)
             ).fetchone()
         return _job(row)
+
+    def release_job(
+        self,
+        job_id: int,
+        *,
+        owner: str,
+        now_ms: int,
+    ) -> PublishingJob:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE publishing_jobs
+                SET state = 'approved', lease_owner = '', lease_expires_at_ms = 0,
+                    updated_at_ms = ?
+                WHERE job_id = ? AND state = 'publishing' AND lease_owner = ?
+                """,
+                (now_ms, job_id, owner),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("job must be publishing under the same owner")
+            row = connection.execute(
+                "SELECT * FROM publishing_jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()
+        return _job(row)
+
+    def record_attempt(
+        self,
+        job_id: int,
+        *,
+        owner: str,
+        stage: str,
+        now_ms: int,
+        detail: str = "",
+    ) -> PublishingAttempt:
+        normalized_stage = stage.strip()
+        if not normalized_stage:
+            raise ValueError("publishing attempt stage is required")
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM publishing_jobs
+                WHERE job_id = ? AND state = 'publishing' AND lease_owner = ?
+                """,
+                (job_id, owner),
+            ).fetchone()
+            if row is None:
+                raise ValueError("job must be publishing under the same owner")
+            cursor = connection.execute(
+                """
+                INSERT INTO publishing_attempts(job_id, stage, detail, created_at_ms)
+                VALUES (?, ?, ?, ?)
+                """,
+                (job_id, normalized_stage, detail.strip()[:500], now_ms),
+            )
+            attempt_id = int(cursor.lastrowid)
+        return PublishingAttempt(
+            attempt_id=attempt_id,
+            job_id=job_id,
+            stage=normalized_stage,
+            detail=detail.strip()[:500],
+            created_at_ms=now_ms,
+        )
+
+    def attempts(self, job_id: int) -> tuple[PublishingAttempt, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT attempt_id, job_id, stage, detail, created_at_ms
+                FROM publishing_attempts WHERE job_id = ? ORDER BY attempt_id
+                """,
+                (job_id,),
+            ).fetchall()
+        return tuple(
+            PublishingAttempt(
+                attempt_id=int(row["attempt_id"]),
+                job_id=int(row["job_id"]),
+                stage=str(row["stage"]),
+                detail=str(row["detail"]),
+                created_at_ms=int(row["created_at_ms"]),
+            )
+            for row in rows
+        )
+
+    def list_jobs(self, *, account_id: str = "") -> tuple[PublishingJob, ...]:
+        query = "SELECT * FROM publishing_jobs"
+        parameters: tuple[str, ...] = ()
+        if account_id.strip():
+            query += " WHERE account_id = ?"
+            parameters = (account_id.strip(),)
+        query += " ORDER BY created_at_ms, job_id"
+        with self._connect() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return tuple(_job(row) for row in rows)
 
 
 def _job(row: sqlite3.Row | None) -> PublishingJob:

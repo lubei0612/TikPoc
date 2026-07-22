@@ -100,6 +100,29 @@ def test_unexpired_publish_lease_is_exclusive(tmp_path: Path) -> None:
     )
 
 
+def test_expired_publish_lease_is_frozen_uncertain_before_next_claim(
+    tmp_path: Path,
+) -> None:
+    repository = PublishingRepository(tmp_path / "publishing.db")
+    job = repository.prepare_job(
+        _product(),
+        account_id="account-01",
+        caption="Caption",
+        asset_paths=(tmp_path / "one.jpg",),
+        now_ms=100,
+    )
+    repository.approve_job(job.job_id, now_ms=110)
+    repository.claim_job(account_id="account-01", owner="dead", now_ms=120, lease_ms=10)
+
+    assert (
+        repository.claim_job(
+            account_id="account-01", owner="next", now_ms=131, lease_ms=10
+        )
+        is None
+    )
+    assert repository.get_job(job.job_id).state == "uncertain"
+
+
 def test_completion_records_published_result_once(tmp_path: Path) -> None:
     repository = PublishingRepository(tmp_path / "publishing.db")
     job = repository.prepare_job(
