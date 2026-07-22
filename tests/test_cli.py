@@ -250,6 +250,54 @@ def test_cli_browser_guide_prints_the_extension_directory(capsys) -> None:
     assert "Command+Shift+G" in output
 
 
+def test_cli_catalog_scrape_passes_bounded_export_options(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+        return type(
+            "Result",
+            (),
+            {"product_count": 3, "image_count": 8, "failed_image_count": 1},
+        )()
+
+    monkeypatch.setattr(cli, "_run_catalog_scrape", fake_run, raising=False)
+
+    result = main(
+        [
+            "catalog",
+            "scrape",
+            "--shop",
+            "https://gxhy1688.com/Shopindex?marketCode=gz&uid=shop-01",
+            "--output",
+            str(tmp_path),
+            "--max-products",
+            "3",
+            "--page-size",
+            "25",
+            "--delay",
+            "0.2",
+        ]
+    )
+
+    assert result == 0
+    assert captured == {
+        "shop": "https://gxhy1688.com/Shopindex?marketCode=gz&uid=shop-01",
+        "output_dir": tmp_path,
+        "max_products": 3,
+        "page_size": 25,
+        "delay_seconds": 0.2,
+        "download_images": True,
+        "max_image_bytes": 25 * 1024 * 1024,
+    }
+    assert (
+        capsys.readouterr().out
+        == "products=3 images=8 failed_images=1 output=" + str(tmp_path) + "\n"
+    )
+
+
 def test_cli_pool_import_creates_an_idempotent_acquisition_pool(
     tmp_path: Path, capsys
 ) -> None:

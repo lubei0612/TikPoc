@@ -80,6 +80,16 @@ def _parser() -> argparse.ArgumentParser:
     browser_connect.add_argument("--poll-interval", type=float, default=1.0)
     browser_guide = browser_commands.add_parser("guide")
     browser_guide.add_argument("--extension-path", type=Path)
+    catalog = commands.add_parser("catalog")
+    catalog_commands = catalog.add_subparsers(dest="catalog_command", required=True)
+    catalog_scrape = catalog_commands.add_parser("scrape")
+    catalog_scrape.add_argument("--shop", required=True)
+    catalog_scrape.add_argument("--output", type=Path, required=True)
+    catalog_scrape.add_argument("--max-products", type=int)
+    catalog_scrape.add_argument("--page-size", type=int, default=50)
+    catalog_scrape.add_argument("--delay", type=float, default=0.5)
+    catalog_scrape.add_argument("--no-images", action="store_true")
+    catalog_scrape.add_argument("--max-image-mb", type=int, default=25)
     for command_name in ("serve", "dashboard"):
         serve = commands.add_parser(command_name)
         serve.add_argument("--db", type=Path, required=True)
@@ -136,6 +146,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (KeyError, OSError, ValueError) as error:
             raise SystemExit(str(error)) from None
         print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+        return 0
+    if args.command == "catalog":
+        if args.max_products is not None and args.max_products <= 0:
+            raise SystemExit("max-products must be positive")
+        if not 1 <= args.page_size <= 100:
+            raise SystemExit("page-size must be between 1 and 100")
+        if args.delay < 0:
+            raise SystemExit("delay must be non-negative")
+        if args.max_image_mb <= 0:
+            raise SystemExit("max-image-mb must be positive")
+        try:
+            result = _run_catalog_scrape(
+                shop=args.shop,
+                output_dir=args.output,
+                max_products=args.max_products,
+                page_size=args.page_size,
+                delay_seconds=args.delay,
+                download_images=not args.no_images,
+                max_image_bytes=args.max_image_mb * 1024 * 1024,
+            )
+        except (OSError, RuntimeError, ValueError) as error:
+            raise SystemExit(str(error)) from None
+        print(
+            f"products={result.product_count} images={result.image_count} "
+            f"failed_images={result.failed_image_count} output={args.output}"
+        )
         return 0
     if args.command == "proxy-guard":
         import time
@@ -532,6 +568,35 @@ def _run_proxy_guard(config: FleetConfig, adb_path: Path | None):
     from .proxy_guard import ProxyGuard
 
     return ProxyGuard(config, adb_path=adb_path).reconcile()
+
+
+def _run_catalog_scrape(
+    *,
+    shop: str,
+    output_dir: Path,
+    max_products: int | None,
+    page_size: int,
+    delay_seconds: float,
+    download_images: bool,
+    max_image_bytes: int,
+):
+    from .catalog import GxhyCatalogClient, parse_gxhy_shop
+    from .catalog_export import CatalogExporter
+
+    shop_id, market_code = parse_gxhy_shop(shop)
+    products = GxhyCatalogClient().iter_raw_products(
+        shop_id=shop_id,
+        market_code=market_code,
+        page_size=page_size,
+        max_products=max_products,
+        delay_seconds=delay_seconds,
+    )
+    return CatalogExporter().export(
+        products,
+        output_dir=output_dir,
+        download_images=download_images,
+        max_image_bytes=max_image_bytes,
+    )
 
 
 def _load_env_file(path: Path) -> None:
