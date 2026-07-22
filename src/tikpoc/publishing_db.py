@@ -15,6 +15,7 @@ class PublishingJob:
     account_id: str
     caption: str
     asset_paths: tuple[str, ...]
+    asset_sha256s: tuple[str, ...]
     state: str
     lease_owner: str
     lease_expires_at_ms: int
@@ -57,6 +58,7 @@ class PublishingRepository:
                     account_id TEXT NOT NULL,
                     caption TEXT NOT NULL,
                     asset_paths_json TEXT NOT NULL,
+                    asset_sha256s_json TEXT NOT NULL DEFAULT '[]',
                     state TEXT NOT NULL CHECK (
                         state IN ('prepared', 'approved', 'publishing', 'published', 'uncertain', 'rejected')
                     ),
@@ -74,6 +76,15 @@ class PublishingRepository:
                 ON publishing_jobs (account_id, state, created_at_ms, job_id);
                 """
             )
+            columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(publishing_jobs)")
+            }
+            if "asset_sha256s_json" not in columns:
+                connection.execute(
+                    "ALTER TABLE publishing_jobs "
+                    "ADD COLUMN asset_sha256s_json TEXT NOT NULL DEFAULT '[]'"
+                )
 
     def prepare_job(
         self,
@@ -82,13 +93,19 @@ class PublishingRepository:
         account_id: str,
         caption: str,
         asset_paths: tuple[Path, ...],
+        asset_sha256s: tuple[str, ...] | None = None,
         now_ms: int,
     ) -> PublishingJob:
         normalized_account = account_id.strip()
         normalized_caption = caption.strip()
         paths = tuple(str(Path(path)) for path in asset_paths)
+        hashes = tuple(asset_sha256s or ("" for _ in paths))
         if not normalized_account or not normalized_caption or not paths:
             raise ValueError("account_id, caption, and asset_paths are required")
+        if len(hashes) != len(paths):
+            raise ValueError("asset paths and SHA-256 values must have equal length")
+        if any(value and (len(value) != 64 or not _is_hex(value)) for value in hashes):
+            raise ValueError("asset SHA-256 values are invalid")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
@@ -114,8 +131,9 @@ class PublishingRepository:
                 """
                 INSERT INTO publishing_jobs (
                     source_key, account_id, caption, asset_paths_json,
+                    asset_sha256s_json,
                     state, created_at_ms, updated_at_ms
-                ) VALUES (?, ?, ?, ?, 'prepared', ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, 'prepared', ?, ?)
                 ON CONFLICT(source_key, account_id) DO NOTHING
                 """,
                 (
@@ -123,6 +141,7 @@ class PublishingRepository:
                     normalized_account,
                     normalized_caption,
                     json.dumps(paths),
+                    json.dumps(hashes),
                     now_ms,
                     now_ms,
                 ),
@@ -251,6 +270,7 @@ def _job(row: sqlite3.Row | None) -> PublishingJob:
         account_id=str(row["account_id"]),
         caption=str(row["caption"]),
         asset_paths=tuple(json.loads(row["asset_paths_json"])),
+        asset_sha256s=tuple(json.loads(row["asset_sha256s_json"])),
         state=str(row["state"]),
         lease_owner=str(row["lease_owner"]),
         lease_expires_at_ms=int(row["lease_expires_at_ms"]),
@@ -258,3 +278,11 @@ def _job(row: sqlite3.Row | None) -> PublishingJob:
         created_at_ms=int(row["created_at_ms"]),
         updated_at_ms=int(row["updated_at_ms"]),
     )
+
+
+def _is_hex(value: str) -> bool:
+    try:
+        int(value, 16)
+    except ValueError:
+        return False
+    return True

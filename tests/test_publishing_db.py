@@ -161,3 +161,27 @@ def test_uncertain_result_is_not_claimed_again(tmp_path: Path) -> None:
         )
         is None
     )
+
+
+def test_job_persists_immutable_asset_hashes(tmp_path: Path) -> None:
+    repository = PublishingRepository(tmp_path / "publishing.db")
+
+    job = repository.prepare_job(
+        _product(),
+        account_id="account-01",
+        caption="Caption",
+        asset_paths=(tmp_path / "one.jpg", tmp_path / "two.jpg"),
+        asset_sha256s=("a" * 64, "b" * 64),
+        now_ms=100,
+    )
+
+    assert job.asset_sha256s == ("a" * 64, "b" * 64)
+    repeated = repository.prepare_job(
+        _product(),
+        account_id="account-01",
+        caption="Changed caption",
+        asset_paths=(tmp_path / "other.jpg",),
+        asset_sha256s=("c" * 64,),
+        now_ms=200,
+    )
+    assert repeated.asset_sha256s == job.asset_sha256s
