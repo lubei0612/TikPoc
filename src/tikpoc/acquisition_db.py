@@ -21,6 +21,8 @@ from .acquisition_models import (
     OutcomeKind,
     PoolImport,
     PoolTarget,
+    PriorityBatch,
+    PriorityBatchState,
     ProfileAccessState,
     ProfileSnapshot,
     QuotaWindow,
@@ -235,6 +237,32 @@ class AcquisitionRepository:
                 ON round_assignments(
                     identity_key, lease_expires_at_ms, visit_confirmed_at_ms
                 )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS priority_batches (
+                    batch_id TEXT PRIMARY KEY,
+                    parent_round_id TEXT NOT NULL,
+                    priority_round_id TEXT NOT NULL UNIQUE,
+                    pool_id TEXT NOT NULL,
+                    source_live_id TEXT NOT NULL,
+                    source_checksum TEXT NOT NULL,
+                    queue_sequence INTEGER NOT NULL UNIQUE,
+                    state TEXT NOT NULL
+                        CHECK(state IN ('queued','running','barrier','completed')),
+                    created_at_ms INTEGER NOT NULL,
+                    completed_at_ms INTEGER,
+                    FOREIGN KEY(parent_round_id) REFERENCES exposure_rounds(round_id),
+                    FOREIGN KEY(priority_round_id) REFERENCES exposure_rounds(round_id),
+                    FOREIGN KEY(pool_id) REFERENCES target_pools(pool_id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS priority_batch_queue_idx
+                ON priority_batches(parent_round_id, state, queue_sequence)
                 """
             )
             connection.execute(
@@ -1136,6 +1164,237 @@ class AcquisitionRepository:
                     (round_id,),
                 )
             )
+
+    def create_priority_batch(
+        self,
+        *,
+        batch_id: str,
+        parent_round_id: str,
+        pool_id: str,
+        source_live_id: str,
+        source_checksum: str,
+        device_seeds: Mapping[str, str],
+    ) -> PriorityBatch:
+        normalized_batch_id = str(batch_id).strip()
+        normalized_parent = str(parent_round_id).strip()
+        normalized_pool = str(pool_id).strip()
+        normalized_live_id = str(source_live_id).strip()
+        checksum = str(source_checksum).strip()
+        normalized_seed_items = tuple(
+            (str(device_id).strip(), str(seed).strip())
+            for device_id, seed in device_seeds.items()
+        )
+        normalized_seeds = dict(normalized_seed_items)
+        if not all(
+            (
+                normalized_batch_id,
+                normalized_parent,
+                normalized_pool,
+                normalized_live_id,
+            )
+        ):
+            raise ValueError("priority batch identifiers are required")
+        if _SHA256_PATTERN.fullmatch(checksum) is None:
+            raise ValueError("source checksum must be lowercase SHA-256")
+        if (
+            not normalized_seeds
+            or len(normalized_seeds) != len(normalized_seed_items)
+            or any(
+                not device_id or not seed for device_id, seed in normalized_seed_items
+            )
+            or len(set(normalized_seeds.values())) != len(normalized_seeds)
+        ):
+            raise ValueError("priority device ids and seeds must be distinct")
+
+        round_payload = json.dumps(
+            {
+                "batch_id": normalized_batch_id,
+                "parent_round_id": normalized_parent,
+                "pool_id": normalized_pool,
+                "source_checksum": checksum,
+                "device_seeds": sorted(normalized_seeds.items()),
+            },
+            separators=(",", ":"),
+        )
+        digest = hashlib.sha256(round_payload.encode()).hexdigest()
+        priority_round_id = f"round-priority-{digest[:16]}"
+        now_ms = int(self.clock_ms())
+
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT * FROM priority_batches WHERE batch_id = ?",
+                (normalized_batch_id,),
+            ).fetchone()
+            if existing is not None:
+                stored_seeds = {
+                    str(row["device_id"]): str(row["order_seed"])
+                    for row in connection.execute(
+                        """
+                        SELECT device_id, order_seed FROM round_device_seeds
+                        WHERE round_id = ?
+                        """,
+                        (str(existing["priority_round_id"]),),
+                    )
+                }
+                same_content = (
+                    str(existing["parent_round_id"]) == normalized_parent
+                    and str(existing["priority_round_id"]) == priority_round_id
+                    and str(existing["pool_id"]) == normalized_pool
+                    and str(existing["source_live_id"]) == normalized_live_id
+                    and str(existing["source_checksum"]) == checksum
+                    and stored_seeds == normalized_seeds
+                )
+                if not same_content:
+                    raise ValueError("batch id already has different content")
+                return self._priority_batch_from_row(existing)
+
+            parent = connection.execute(
+                "SELECT * FROM exposure_rounds WHERE round_id = ?",
+                (normalized_parent,),
+            ).fetchone()
+            if parent is None:
+                raise ValueError("parent round does not exist")
+            if str(parent["state"]) in {"completed", "stopped"}:
+                raise ValueError("parent round is terminal")
+            if connection.execute(
+                "SELECT 1 FROM priority_batches WHERE priority_round_id = ?",
+                (normalized_parent,),
+            ).fetchone():
+                raise ValueError("parent round must be an ordinary round")
+            parent_devices = {
+                str(row["device_id"])
+                for row in connection.execute(
+                    "SELECT device_id FROM round_device_seeds WHERE round_id = ?",
+                    (normalized_parent,),
+                )
+            }
+            if not parent_devices:
+                raise ValueError("parent round has no devices")
+            if set(normalized_seeds) != parent_devices:
+                raise ValueError("device seeds must match parent round")
+
+            pool = connection.execute(
+                "SELECT source_checksum FROM target_pools WHERE pool_id = ?",
+                (normalized_pool,),
+            ).fetchone()
+            if pool is None:
+                raise ValueError("priority target pool does not exist")
+            if str(pool["source_checksum"]) != checksum:
+                raise ValueError("priority pool checksum does not match source")
+            identities = tuple(
+                str(row["identity_key"])
+                for row in connection.execute(
+                    """
+                    SELECT identity_key FROM pool_targets
+                    WHERE pool_id = ? ORDER BY ordinal
+                    """,
+                    (normalized_pool,),
+                )
+            )
+            if not identities:
+                raise ValueError("priority target pool is empty")
+
+            queue_sequence = int(
+                connection.execute(
+                    "SELECT COALESCE(MAX(queue_sequence), 0) + 1 FROM priority_batches"
+                ).fetchone()[0]
+            )
+            connection.execute(
+                """
+                INSERT INTO exposure_rounds(
+                    round_id, pool_id, state, starts_at_ms,
+                    min_inter_device_gap_ms, min_repeat_gap_ms, created_at_ms
+                ) VALUES (?, ?, 'pending', ?, ?, ?, ?)
+                """,
+                (
+                    priority_round_id,
+                    normalized_pool,
+                    now_ms,
+                    int(parent["min_inter_device_gap_ms"]),
+                    int(parent["min_repeat_gap_ms"]),
+                    now_ms,
+                ),
+            )
+            connection.executemany(
+                """
+                INSERT INTO round_device_seeds(round_id, device_id, order_seed)
+                VALUES (?, ?, ?)
+                """,
+                [
+                    (priority_round_id, device_id, seed)
+                    for device_id, seed in sorted(normalized_seeds.items())
+                ],
+            )
+            assignments = [
+                (
+                    priority_round_id,
+                    identity_key,
+                    device_id,
+                    hashlib.sha256(
+                        "\0".join((priority_round_id, seed, identity_key)).encode()
+                    ).hexdigest(),
+                )
+                for identity_key in identities
+                for device_id, seed in normalized_seeds.items()
+            ]
+            connection.executemany(
+                """
+                INSERT INTO round_assignments(
+                    round_id, identity_key, device_id, order_key
+                ) VALUES (?, ?, ?, ?)
+                """,
+                assignments,
+            )
+            connection.execute(
+                """
+                INSERT INTO priority_batches(
+                    batch_id, parent_round_id, priority_round_id, pool_id,
+                    source_live_id, source_checksum, queue_sequence, state,
+                    created_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?)
+                """,
+                (
+                    normalized_batch_id,
+                    normalized_parent,
+                    priority_round_id,
+                    normalized_pool,
+                    normalized_live_id,
+                    checksum,
+                    queue_sequence,
+                    now_ms,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM priority_batches WHERE batch_id = ?",
+                (normalized_batch_id,),
+            ).fetchone()
+            return self._priority_batch_from_row(row)
+
+    def priority_batch(self, batch_id: str) -> PriorityBatch:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM priority_batches WHERE batch_id = ?",
+                (str(batch_id).strip(),),
+            ).fetchone()
+            if row is None:
+                raise KeyError(batch_id)
+            return self._priority_batch_from_row(row)
+
+    def priority_batch_device_ids(self, batch_id: str) -> tuple[str, ...]:
+        batch = self.priority_batch(batch_id)
+        return self.round_device_ids(batch.priority_round_id)
+
+    def priority_queue(self, parent_round_id: str) -> tuple[PriorityBatch, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM priority_batches
+                WHERE parent_round_id = ? ORDER BY queue_sequence
+                """,
+                (str(parent_round_id).strip(),),
+            ).fetchall()
+            return tuple(self._priority_batch_from_row(row) for row in rows)
 
     def round_exists(self, round_id: str) -> bool:
         normalized_round_id = str(round_id).strip()
@@ -3508,6 +3767,23 @@ class AcquisitionRepository:
     def action_plan_by_id(self, plan_id: int) -> ActionPlan:
         with self._connect() as connection:
             return self._action_plan_by_id(connection, plan_id)
+
+    @staticmethod
+    def _priority_batch_from_row(row: sqlite3.Row) -> PriorityBatch:
+        return PriorityBatch(
+            batch_id=str(row["batch_id"]),
+            parent_round_id=str(row["parent_round_id"]),
+            priority_round_id=str(row["priority_round_id"]),
+            pool_id=str(row["pool_id"]),
+            source_live_id=str(row["source_live_id"]),
+            source_checksum=str(row["source_checksum"]),
+            queue_sequence=int(row["queue_sequence"]),
+            state=PriorityBatchState(str(row["state"])),
+            created_at_ms=int(row["created_at_ms"]),
+            completed_at_ms=(
+                None if row["completed_at_ms"] is None else int(row["completed_at_ms"])
+            ),
+        )
 
     @staticmethod
     def _normalize_target(pool_id: str, target: Target, ordinal: int) -> PoolTarget:

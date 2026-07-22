@@ -11,6 +11,13 @@ class RoundState(StrEnum):
     COMPLETED = "completed"
 
 
+class PriorityBatchState(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    BARRIER = "barrier"
+    COMPLETED = "completed"
+
+
 class AssignmentPhase(StrEnum):
     PENDING = "pending"
     PROFILE_OPENING = "profile_opening"
@@ -92,6 +99,20 @@ class ExposureRound:
     min_inter_device_gap_ms: int
     min_repeat_gap_ms: int
     created_at_ms: int
+
+
+@dataclass(frozen=True)
+class PriorityBatch:
+    batch_id: str
+    parent_round_id: str
+    priority_round_id: str
+    pool_id: str
+    source_live_id: str
+    source_checksum: str
+    queue_sequence: int
+    state: PriorityBatchState
+    created_at_ms: int
+    completed_at_ms: int | None
 
 
 @dataclass(frozen=True)
