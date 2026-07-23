@@ -13,6 +13,6 @@ def evaluate_profile(metrics: ProfileMetrics) -> RuleDecision:
     reasons: list[str] = []
     if metrics.following <= metrics.followers:
         reasons.append("following_not_greater_than_followers")
-    if metrics.posts <= 3:
-        reasons.append("post_count_not_greater_than_three")
+    if metrics.posts < 1:
+        reasons.append("insufficient_posts")
     return RuleDecision(eligible=not reasons, reasons=tuple(reasons))

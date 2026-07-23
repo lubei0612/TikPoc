@@ -1,12 +1,19 @@
 import argparse
 import hashlib
+import json
 import os
+from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Sequence
 
+from .acquisition_db import AcquisitionRepository
+from .capacity import evaluate_round_capacity
 from .db import Database
+from .fleet import FleetConfig
 from .importer import read_targets
 from .interactions import ActionPolicy, InteractionPolicy
+from .rounds import create_exposure_round
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -18,16 +25,74 @@ def _parser() -> argparse.ArgumentParser:
     import_command.add_argument("csv", type=Path)
     import_command.add_argument("--db", type=Path, required=True)
     import_command.add_argument("--device-id", action="append", default=[])
+    pool_import = commands.add_parser("pool-import")
+    pool_import.add_argument("--db", type=Path, required=True)
+    pool_import.add_argument("--csv", type=Path, required=True)
+    priority_import = commands.add_parser("priority-import")
+    priority_import.add_argument("--db", type=Path, required=True)
+    priority_import.add_argument("--devices", type=Path, required=True)
+    priority_import.add_argument("--file", type=Path, required=True)
+    priority_import.add_argument("--source-live", required=True)
+    priority_status = commands.add_parser("priority-status")
+    priority_status.add_argument("--db", type=Path, required=True)
+    supabase_pool_import = commands.add_parser("supabase-pool-import")
+    supabase_pool_import.add_argument("--csv", type=Path, required=True)
+    supabase_pool_import.add_argument(
+        "--env-file",
+        type=Path,
+        default=Path("config/secrets/supabase.env"),
+    )
+    proxy_guard = commands.add_parser("proxy-guard")
+    proxy_guard.add_argument("--devices", type=Path, required=True)
+    proxy_guard.add_argument("--adb-path", type=Path)
+    proxy_guard.add_argument("--interval", type=float, default=30.0)
+    proxy_guard.add_argument("--once", action="store_true")
+    round_create = commands.add_parser("round-create")
+    round_create.add_argument("--db", type=Path, required=True)
+    round_create.add_argument("--pool", required=True)
+    round_create.add_argument("--devices", type=Path, required=True)
+    round_create.add_argument("--starts-at", required=True)
+    fleet_run = commands.add_parser("fleet-run")
+    fleet_run.add_argument("--db", type=Path, required=True)
+    fleet_run.add_argument("--round", required=True)
+    fleet_run.add_argument("--devices", type=Path, required=True)
+    assignment_retry = commands.add_parser("assignment-retry")
+    assignment_retry.add_argument("--db", type=Path, required=True)
+    assignment_retry.add_argument("--assignment", type=int, required=True)
+    capacity = commands.add_parser("capacity")
+    capacity.add_argument("--db", type=Path, required=True)
+    capacity.add_argument("--round", required=True)
+    capacity.add_argument("--expected-devices", type=int, default=7)
+    capacity.add_argument("--target-count", type=int, default=10_000)
+    capacity.add_argument("--effective-hours", type=float, default=20)
+    capacity.add_argument("--json", action="store_true", dest="json_output")
     status = commands.add_parser("status")
     status.add_argument("--db", type=Path, required=True)
-    dashboard = commands.add_parser("dashboard")
-    dashboard.add_argument("--db", type=Path, required=True)
-    dashboard.add_argument("--host", default="127.0.0.1")
-    dashboard.add_argument("--port", type=int, default=8765)
-    dashboard.add_argument("--web-accounts", type=Path)
-    dashboard.add_argument("--env-file", type=Path, default=Path(".env.local"))
-    dashboard.add_argument("--with-web-worker", action="store_true")
-    dashboard.add_argument("--web-worker-idle-sleep", type=float, default=1.0)
+    browser = commands.add_parser("browser")
+    browser_commands = browser.add_subparsers(dest="browser_command", required=True)
+    browser_status = browser_commands.add_parser("status")
+    browser_status.add_argument("--dashboard-url", default="http://127.0.0.1:8766")
+    browser_status.add_argument("--json", action="store_true", dest="json_output")
+    browser_connect = browser_commands.add_parser("connect")
+    browser_connect.add_argument("--web-accounts", type=Path, required=True)
+    browser_connect.add_argument("--dashboard-url", default="http://127.0.0.1:8766")
+    browser_connect.add_argument("--timeout", type=float, default=60.0)
+    browser_connect.add_argument("--poll-interval", type=float, default=1.0)
+    browser_guide = browser_commands.add_parser("guide")
+    browser_guide.add_argument("--extension-path", type=Path)
+    for command_name in ("serve", "dashboard"):
+        serve = commands.add_parser(command_name)
+        serve.add_argument("--db", type=Path, required=True)
+        serve.add_argument(
+            "--host",
+            choices=("127.0.0.1", "::1", "localhost"),
+            default="127.0.0.1",
+        )
+        serve.add_argument("--port", type=int, default=8765)
+        serve.add_argument("--web-accounts", type=Path)
+        serve.add_argument("--env-file", type=Path, default=Path(".env.local"))
+        serve.add_argument("--with-web-worker", action="store_true")
+        serve.add_argument("--web-worker-idle-sleep", type=float, default=1.0)
     web_worker = commands.add_parser("web-worker")
     web_worker.add_argument("--db", type=Path, required=True)
     web_worker.add_argument("--web-accounts", type=Path)
@@ -49,6 +114,255 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command in {"priority-import", "priority-status"}:
+        from .priority_service import PriorityBatchService, summary_json
+
+        _require_file(args.db, "database")
+        repository = AcquisitionRepository(args.db)
+        repository.migrate()
+        service = PriorityBatchService(repository)
+        try:
+            if args.command == "priority-import":
+                _require_file(args.devices, "device configuration")
+                _require_file(args.file, "priority input")
+                summary = service.import_batch(
+                    args.file,
+                    source_live_id=args.source_live,
+                    fleet_config=FleetConfig.from_path(args.devices),
+                )
+                payload = summary_json(summary)
+            else:
+                payload = service.status()
+        except (KeyError, OSError, ValueError) as error:
+            raise SystemExit(str(error)) from None
+        print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+        return 0
+    if args.command == "proxy-guard":
+        import time
+
+        _require_file(args.devices, "device configuration")
+        if args.interval < 5:
+            raise SystemExit("interval must be at least 5 seconds")
+        config = FleetConfig.from_path(args.devices)
+        try:
+            while True:
+                rows = _run_proxy_guard(config, args.adb_path)
+                for row in rows:
+                    print(
+                        f"observed_at_ms={row.observed_at_ms} "
+                        f"device_id={row.device_id} adb_state={row.adb_state} "
+                        f"proxy_state={row.proxy_state} "
+                        f"http_state={row.http_state} "
+                        f"http_status={row.http_status if row.http_status is not None else '-'}",
+                        flush=True,
+                    )
+                healthy = sum(
+                    row.proxy_state in {"healthy", "vpn_healthy"}
+                    and row.http_state != "failed"
+                    for row in rows
+                )
+                corrected = sum(
+                    row.proxy_state in {"corrected", "vpn_recovered"}
+                    and row.http_state != "failed"
+                    for row in rows
+                )
+                failed = len(rows) - healthy - corrected
+                http_200 = sum(row.http_status == 200 for row in rows)
+                http_unknown = sum(row.http_state == "unknown" for row in rows)
+                print(
+                    f"devices={len(rows)} healthy={healthy} "
+                    f"corrected={corrected} failed={failed} "
+                    f"http_200={http_200} http_unknown={http_unknown}",
+                    flush=True,
+                )
+                if args.once:
+                    return 0
+                time.sleep(args.interval)
+        except KeyboardInterrupt:
+            return 130
+    if args.command == "browser":
+        from . import browser_connect
+        from .web_accounts import WebAccountRegistry
+
+        if args.browser_command == "guide":
+            extension_path = (
+                args.extension_path or browser_connect.default_extension_path()
+            )
+            print(f"extension_path={extension_path}")
+            print("Chrome: chrome://extensions -> Load unpacked")
+            print("Folder dialog: Command+Shift+G -> paste extension_path -> Select")
+            print(
+                "Then open TikTok and run: tikpoc browser connect --web-accounts CONFIG"
+            )
+            return 0
+        try:
+            origin = browser_connect.dashboard_origin(args.dashboard_url)
+            if args.browser_command == "status":
+                rows = browser_connect.redacted_browser_status(
+                    browser_connect.fetch_json(f"{origin}/api/leads")
+                )
+                if args.json_output:
+                    print(json.dumps(rows, sort_keys=True, separators=(",", ":")))
+                else:
+                    for row in rows:
+                        age = row["heartbeat_age_ms"]
+                        print(
+                            f"account_id={row['account_id']} "
+                            f"profile={row['browser_profile_label'] or '-'} "
+                            f"role={row['page_role']} "
+                            f"expected=@{row['expected_tiktok_username'] or '-'} "
+                            f"observed=@{row['observed_username'] or '-'} "
+                            f"state={row['binding_state']} "
+                            f"heartbeat_age_ms={age if age is not None else '-'}"
+                        )
+                return 0
+            registry = WebAccountRegistry.from_path(args.web_accounts)
+            ready, total, _rows = browser_connect.wait_for_browser_health(
+                registry,
+                origin,
+                timeout_seconds=args.timeout,
+                poll_interval_seconds=args.poll_interval,
+            )
+            print(f"ready={ready}/{total}")
+            return 0 if ready == total else 1
+        except (OSError, ValueError) as error:
+            raise SystemExit(str(error)) from None
+    if args.command == "pool-import":
+        _require_file(args.csv, "CSV file")
+        result = read_targets(args.csv)
+        checksum = hashlib.sha256(args.csv.read_bytes()).hexdigest()
+        repository = AcquisitionRepository(args.db)
+        repository.migrate()
+        imported = repository.import_pool(args.csv.name, checksum, result.targets)
+        print(
+            f"pool_id={imported.pool_id} unique_targets={imported.unique_targets} "
+            f"source_rows={imported.source_rows} "
+            f"duplicates={result.skipped_duplicates} invalid={result.skipped_invalid}"
+        )
+        return 0
+    if args.command == "supabase-pool-import":
+        from .supabase_store import SupabaseBusinessStore
+
+        _require_file(args.csv, "CSV file")
+        _require_file(args.env_file, "Supabase environment file")
+        result = read_targets(args.csv)
+        checksum = hashlib.sha256(args.csv.read_bytes()).hexdigest()
+        pool_id = f"pool-{checksum[:20]}"
+        source_rows = sum(
+            max(1, len(target.source_line_numbers)) for target in result.targets
+        )
+        store = SupabaseBusinessStore.from_env_file(args.env_file)
+        store.import_pool(
+            pool_id=pool_id,
+            source_name=args.csv.name,
+            source_checksum=checksum,
+            source_rows=source_rows,
+            targets=result.targets,
+        )
+        print(
+            f"pool_id={pool_id} unique_targets={len(result.targets)} "
+            f"source_rows={source_rows} duplicates={result.skipped_duplicates} "
+            f"invalid={result.skipped_invalid}"
+        )
+        return 0
+    if args.command == "round-create":
+        _require_file(args.db, "database")
+        _require_file(args.devices, "device configuration")
+        starts_at_ms = _parse_iso8601_ms(args.starts_at)
+        config = FleetConfig.from_path(args.devices)
+        pool_id = str(args.pool).strip()
+        if not pool_id:
+            raise SystemExit("pool id is required")
+        repository = AcquisitionRepository(args.db)
+        if not repository.pool_exists(pool_id):
+            raise SystemExit(f"target pool does not exist: {pool_id}")
+        repository.migrate()
+        round_id = create_exposure_round(
+            repository,
+            pool_id=pool_id,
+            device_seeds={
+                device.device_id: device.order_seed for device in config.devices
+            },
+            starts_at_ms=starts_at_ms,
+        )
+        print(
+            f"round_id={round_id} assignments={repository.assignment_count(round_id)} "
+            f"devices={len(config.devices)}"
+        )
+        return 0
+    if args.command == "fleet-run":
+        _require_file(args.db, "database")
+        _require_file(args.devices, "device configuration")
+        round_id = str(args.round).strip()
+        if not round_id:
+            raise SystemExit("round id is required")
+        config = FleetConfig.from_path(args.devices)
+        repository = AcquisitionRepository(args.db)
+        if not repository.round_exists(round_id):
+            raise SystemExit(f"round does not exist: {round_id}") from None
+        round_device_ids = repository.round_device_ids(round_id)
+        configured_device_ids = tuple(
+            sorted(device.device_id for device in config.devices)
+        )
+        if configured_device_ids != round_device_ids:
+            raise SystemExit("device ids do not match round")
+        repository.migrate()
+        return _run_acquisition_fleet(repository, round_id, config)
+    if args.command == "assignment-retry":
+        _require_file(args.db, "database")
+        if args.assignment <= 0:
+            raise SystemExit("assignment id must be positive")
+        repository = AcquisitionRepository(args.db)
+        if not repository.assignment_exists(args.assignment):
+            raise SystemExit(f"assignment does not exist: {args.assignment}")
+        repository.migrate()
+        try:
+            assignment = repository.retry_assignment(args.assignment)
+        except ValueError as error:
+            raise SystemExit(str(error)) from None
+        print(
+            f"assignment_id={assignment.assignment_id} "
+            f"phase={assignment.phase.value} retry_ready=true"
+        )
+        return 0
+    if args.command == "capacity":
+        _require_file(args.db, "database")
+        round_id = str(args.round).strip()
+        if not round_id:
+            raise SystemExit("round id is required")
+        if args.expected_devices <= 0:
+            raise SystemExit("expected device count must be positive")
+        if args.target_count <= 0:
+            raise SystemExit("target count must be positive")
+        if args.effective_hours <= 0:
+            raise SystemExit("effective hours must be positive")
+        repository = AcquisitionRepository(args.db)
+        if not repository.round_exists(round_id):
+            raise SystemExit(f"round does not exist: {round_id}")
+        try:
+            report = evaluate_round_capacity(
+                repository,
+                round_id,
+                expected_devices=args.expected_devices,
+                target_count=args.target_count,
+                effective_hours=args.effective_hours,
+            )
+        except KeyError:
+            raise SystemExit(f"round does not exist: {round_id}") from None
+        if args.json_output:
+            print(json.dumps(asdict(report), sort_keys=True, separators=(",", ":")))
+        else:
+            print(
+                f"measured_seconds={report.measured_seconds:.3f} "
+                f"projected_unique_per_day={report.projected_unique_per_day} "
+                f"slowest_device_id={report.slowest_device_id or 'none'} "
+                f"fully_covered_targets={report.fully_covered_targets} "
+                f"uncertain_count={report.uncertain_count} "
+                f"passed={str(report.passed).lower()}"
+            )
+            if report.reasons:
+                print("reasons=" + "; ".join(report.reasons))
+        return 0 if report.passed else 1
     if args.command == "validate":
         result = read_targets(args.csv)
         print(
@@ -88,8 +402,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"invalid={result.skipped_invalid}"
         )
         return 0
-    if args.command == "dashboard":
-        from .dashboard import create_server
+    if args.command in {"serve", "dashboard"}:
+        import uvicorn
+
+        from .api import create_app
         from .web_accounts import WebAccountRegistry
 
         _load_env_file(args.env_file)
@@ -101,11 +417,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             if configured_accounts is not None
             else None
         )
-        server = create_server(
+        app = create_app(
             args.db,
-            args.host,
-            args.port,
-            web_account_registry=registry,
+            registry=registry,
             tiktok_app_secret=os.getenv("TIKPOC_TIKTOK_APP_SECRET", ""),
             webhook_max_age_seconds=int(
                 os.getenv("TIKPOC_WEBHOOK_MAX_AGE_SECONDS", "300")
@@ -114,8 +428,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.with_web_worker:
             if registry is None:
                 raise SystemExit(
-                    "--with-web-worker requires --web-accounts or "
-                    "TIKPOC_WEB_ACCOUNTS"
+                    "--with-web-worker requires --web-accounts or TIKPOC_WEB_ACCOUNTS"
                 )
             from .web_worker import start_web_worker_thread
 
@@ -124,13 +437,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 registry=registry,
                 idle_sleep_seconds=args.web_worker_idle_sleep,
             )
-        print(f"dashboard=http://{args.host}:{server.server_port}", flush=True)
+        print(f"console=http://{args.host}:{args.port}", flush=True)
         try:
-            server.serve_forever()
+            uvicorn.run(app, host=args.host, port=args.port)
         except KeyboardInterrupt:
             pass
-        finally:
-            server.server_close()
         return 0
     if args.command == "web-worker":
         from .web_accounts import WebAccountRegistry
@@ -191,6 +502,36 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _path_from_environment(name: str) -> Path | None:
     value = os.getenv(name, "").strip()
     return Path(value).expanduser() if value else None
+
+
+def _require_file(path: Path, label: str) -> None:
+    if not path.is_file():
+        raise SystemExit(f"{label} does not exist: {path}")
+
+
+def _parse_iso8601_ms(value: str) -> int:
+    normalized = str(value).strip()
+    try:
+        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError:
+        raise SystemExit("starts-at must be a valid ISO-8601 timestamp") from None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise SystemExit("starts-at must include a timezone")
+    return int(parsed.timestamp() * 1_000)
+
+
+def _run_acquisition_fleet(
+    repository: AcquisitionRepository, round_id: str, config: FleetConfig
+) -> int:
+    from .fleet_runtime import run_acquisition_fleet
+
+    return run_acquisition_fleet(repository, round_id, config)
+
+
+def _run_proxy_guard(config: FleetConfig, adb_path: Path | None):
+    from .proxy_guard import ProxyGuard
+
+    return ProxyGuard(config, adb_path=adb_path).reconcile()
 
 
 def _load_env_file(path: Path) -> None:

@@ -1,0 +1,1225 @@
+import threading
+from dataclasses import replace
+from pathlib import Path
+
+import pytest
+
+from tikpoc.acquisition_models import (
+    AssignmentPhase,
+    DeviceDiagnostics,
+    OutcomeKind,
+    RoundCompletion,
+)
+from tikpoc.acquisition_db import AcquisitionRepository
+from tikpoc.fleet import (
+    DeviceWorkerLeaseLost,
+    FleetConfig,
+    FleetWorkerHealth,
+    FleetWorkerState,
+)
+from tikpoc.fleet_runtime import (
+    FencedVerifiedDevice,
+    _round_completed,
+    run_acquisition_fleet,
+    run_device_worker,
+)
+from tikpoc.importer import Target
+from tikpoc.rounds import create_exposure_round
+
+from tests.test_fleet import _two_device_config
+
+
+def test_round_operational_completion_includes_terminal_skips() -> None:
+    assert _round_completed(RoundCompletion(2, 1, 1, 0, skipped=1)) is True
+    assert _round_completed(RoundCompletion(2, 1, 1, 0, skipped=0)) is False
+
+
+class RecordingFence:
+    owner_id = "worker-phone-01"
+    account_id = "account-01"
+    fence_token = 7
+
+    def __init__(self) -> None:
+        self.operations: list[str] = []
+        self.assertions = 0
+
+    def assert_active(self) -> None:
+        self.assertions += 1
+
+    def execute(self, operation, *args, **kwargs):
+        self.assert_active()
+        self.operations.append(operation.__name__)
+        return operation(*args, **kwargs)
+
+
+class ProtocolDevice:
+    diagnostics_dir: Path | None = None
+
+    def ensure_ready(self) -> None:
+        return None
+
+    def open_target(self, target) -> None:
+        self.target = target
+
+    def confirm_profile_identity(self, target) -> None:
+        self.identity = target
+
+    def read_profile_observation(self):
+        return "observation"
+
+    def list_video_keys(self) -> tuple[str, ...]:
+        return ("video-1",)
+
+    def open_and_confirm_video(self, video_key: str) -> None:
+        self.video_key = video_key
+
+    def execute_outcome(self, outcome: OutcomeKind):
+        return outcome
+
+    def reconcile_outcome(self, outcome: OutcomeKind):
+        return outcome
+
+    def capture_diagnostics(self) -> DeviceDiagnostics:
+        return DeviceDiagnostics(ui_summary="visible")
+
+    def recover(self, phase: AssignmentPhase) -> None:
+        self.phase = phase
+
+
+def test_fenced_device_checks_every_device_side_effect() -> None:
+    fence = RecordingFence()
+    device = FencedVerifiedDevice(ProtocolDevice(), fence)
+
+    device.ensure_ready()
+    device.open_target("target")
+    device.confirm_profile_identity("target")
+    assert device.read_profile_observation() == "observation"
+    assert device.list_video_keys() == ("video-1",)
+    device.open_and_confirm_video("video-1")
+    assert device.execute_outcome(OutcomeKind.LIKE) is OutcomeKind.LIKE
+    assert device.reconcile_outcome(OutcomeKind.LIKE) is OutcomeKind.LIKE
+    assert device.capture_diagnostics().ui_summary == "visible"
+    device.recover(AssignmentPhase.VIDEO_OPENING)
+
+    assert fence.operations == [
+        "ensure_ready",
+        "open_target",
+        "confirm_profile_identity",
+        "read_profile_observation",
+        "list_video_keys",
+        "open_and_confirm_video",
+        "execute_outcome",
+        "reconcile_outcome",
+        "capture_diagnostics",
+        "recover",
+    ]
+
+
+def test_device_worker_processes_assignments_until_stopped(tmp_path: Path) -> None:
+    stop_event = threading.Event()
+    fence = RecordingFence()
+    assignment = object()
+
+    class FakeRepository:
+        def __init__(self, path: Path) -> None:
+            self.path = path
+            self.claims = 0
+
+        def claim_scheduled_assignment(self, *args, **kwargs):
+            self.claims += 1
+            return assignment
+
+    repositories: list[FakeRepository] = []
+
+    def repository_factory(path: Path) -> FakeRepository:
+        repository = FakeRepository(path)
+        repositories.append(repository)
+        return repository
+
+    class FakeDriver:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def quit(self) -> None:
+            self.closed = True
+
+    driver = FakeDriver()
+    captured = {}
+
+    class FakeRouter:
+        def open(self, uri: str) -> None:
+            captured["route"] = uri
+
+    class FakeWorker:
+        def __init__(self, repository, device, **kwargs) -> None:
+            captured["repository"] = repository
+            captured["device"] = device
+            captured.update(kwargs)
+
+        def run_assignment(self, observed_assignment) -> None:
+            captured["assignment"] = observed_assignment
+            stop_event.set()
+
+    config = _two_device_config(tmp_path)
+    run_device_worker(
+        tmp_path / "acquisition.db",
+        "round-1",
+        config.devices[0],
+        fence,
+        stop_event,
+        idle_sleep_seconds=0.001,
+        repository_factory=repository_factory,
+        driver_factory=lambda appium_url, adb_endpoint: driver,
+        device_factory=lambda driver: ProtocolDevice(),
+        route_factory=lambda adb_endpoint: FakeRouter(),
+        worker_factory=FakeWorker,
+        clock_ms=lambda: 1_000,
+    )
+
+    assert repositories[0].claims == 1
+    assert fence.assertions == 2
+    assert captured["assignment"] is assignment
+    assert captured["owner_id"] == fence.owner_id
+    assert captured["worker_account_id"] == fence.account_id
+    assert captured["worker_fence_token"] == fence.fence_token
+    assert isinstance(captured["device"], FencedVerifiedDevice)
+    assert callable(captured["device"].device.route_opener)
+    assert captured["device"].device.diagnostics_dir == tmp_path / "screenshots"
+    assert driver.closed is True
+
+
+def test_device_worker_waits_once_before_creating_appium_session(
+    tmp_path: Path,
+) -> None:
+    events: list[object] = []
+
+    class RecordingStopEvent(threading.Event):
+        def wait(self, timeout: float | None = None) -> bool:
+            events.append(("wait", timeout))
+            return False
+
+    stop_event = RecordingStopEvent()
+    device = replace(_two_device_config(tmp_path).devices[0], startup_offset_ms=750)
+    assignments = iter(("assignment-1", "assignment-2"))
+
+    class FakeRepository:
+        def claim_scheduled_assignment(self, *args, **kwargs):
+            return next(assignments, None)
+
+    class FakeDriver:
+        def quit(self) -> None:
+            events.append("quit")
+
+    def create_driver(appium_url: str, adb_endpoint: str) -> FakeDriver:
+        events.append("driver")
+        return FakeDriver()
+
+    class FakeWorker:
+        def __init__(self, *args, **kwargs) -> None:
+            return
+
+        def run_assignment(self, assignment) -> None:
+            events.append(assignment)
+            if assignment == "assignment-2":
+                stop_event.set()
+
+    run_device_worker(
+        tmp_path / "acquisition.db",
+        "round-1",
+        device,
+        RecordingFence(),
+        stop_event,
+        repository_factory=lambda path: FakeRepository(),
+        driver_factory=create_driver,
+        device_factory=lambda driver: ProtocolDevice(),
+        route_factory=lambda endpoint: type("Router", (), {"open": lambda *a: None})(),
+        worker_factory=FakeWorker,
+    )
+
+    assert events == [
+        ("wait", 0.75),
+        "driver",
+        "assignment-1",
+        "assignment-2",
+        "quit",
+    ]
+
+
+def test_device_worker_stop_during_startup_offset_skips_appium_session(
+    tmp_path: Path,
+) -> None:
+    class StoppingEvent(threading.Event):
+        def wait(self, timeout: float | None = None) -> bool:
+            assert timeout == 0.75
+            return True
+
+    device = replace(_two_device_config(tmp_path).devices[0], startup_offset_ms=750)
+    driver_created = False
+
+    def create_driver(appium_url: str, adb_endpoint: str):
+        nonlocal driver_created
+        driver_created = True
+        return object()
+
+    run_device_worker(
+        tmp_path / "acquisition.db",
+        "round-1",
+        device,
+        RecordingFence(),
+        StoppingEvent(),
+        repository_factory=lambda path: object(),
+        driver_factory=create_driver,
+    )
+
+    assert driver_created is False
+
+
+def test_device_worker_checks_fence_before_creating_appium_session(
+    tmp_path: Path,
+) -> None:
+    class LostFence(RecordingFence):
+        def assert_active(self) -> None:
+            raise RuntimeError("worker lease lost")
+
+    driver_created = False
+
+    def create_driver(appium_url: str, adb_endpoint: str):
+        nonlocal driver_created
+        driver_created = True
+        return object()
+
+    config = _two_device_config(tmp_path)
+    with pytest.raises(RuntimeError, match="worker lease lost"):
+        run_device_worker(
+            tmp_path / "acquisition.db",
+            "round-1",
+            config.devices[0],
+            LostFence(),
+            threading.Event(),
+            repository_factory=lambda path: object(),
+            driver_factory=create_driver,
+        )
+
+    assert driver_created is False
+
+
+def test_device_worker_stops_cleanly_when_assignment_worker_loses_fence(
+    tmp_path: Path,
+) -> None:
+    stop_event = threading.Event()
+    fence = RecordingFence()
+
+    class FakeRepository:
+        def __init__(self, path: Path) -> None:
+            self.path = path
+            self.claimed = False
+
+        def claim_scheduled_assignment(self, *args, **kwargs):
+            if self.claimed:
+                return None
+            self.claimed = True
+            return object()
+
+    class FakeDriver:
+        closed = False
+
+        def quit(self) -> None:
+            self.closed = True
+
+    class LostWorker:
+        def __init__(self, *args, **kwargs) -> None:
+            return
+
+        def run_assignment(self, assignment) -> None:
+            raise DeviceWorkerLeaseLost("assignment lease expired")
+
+    driver = FakeDriver()
+    run_device_worker(
+        tmp_path / "db.sqlite",
+        "round-1",
+        _two_device_config(tmp_path).devices[0],
+        fence,
+        stop_event,
+        repository_factory=FakeRepository,
+        driver_factory=lambda *args: driver,
+        device_factory=lambda driver: ProtocolDevice(),
+        route_factory=lambda endpoint: type("Router", (), {"open": lambda *a: None})(),
+        worker_factory=LostWorker,
+        clock_ms=lambda: 1_000,
+    )
+
+    assert driver.closed is True
+
+
+class FakeStopEvent:
+    def __init__(self) -> None:
+        self.is_set_value = False
+
+    def set(self) -> None:
+        self.is_set_value = True
+
+
+class FakeRelay:
+    def __init__(self, *args, **kwargs) -> None:
+        self.entered = False
+        self.exited = False
+
+    def __enter__(self):
+        self.entered = True
+        return self
+
+    def __exit__(self, *args) -> None:
+        self.exited = True
+
+
+def _health(state: FleetWorkerState) -> tuple[FleetWorkerHealth, ...]:
+    return (
+        FleetWorkerHealth(
+            device_id="phone-01",
+            account_id="account-01",
+            state=state,
+            owner_id="worker-phone-01",
+            fence_token=1,
+            process_id=101,
+            error_code=None,
+            updated_at_ms=1_000,
+        ),
+    )
+
+
+def _fleet_health(
+    phone_01: FleetWorkerState, phone_02: FleetWorkerState
+) -> tuple[FleetWorkerHealth, ...]:
+    return tuple(
+        FleetWorkerHealth(
+            device_id=device_id,
+            account_id=account_id,
+            state=state,
+            owner_id=f"worker-{device_id}",
+            fence_token=index,
+            process_id=100 + index,
+            error_code=None if state is FleetWorkerState.HEALTHY else "child_exit_1",
+            updated_at_ms=1_000,
+        )
+        for index, (device_id, account_id, state) in enumerate(
+            (
+                ("phone-01", "account-01", phone_01),
+                ("phone-02", "account-02", phone_02),
+            ),
+            start=1,
+        )
+    )
+
+
+def _cleanup_health(
+    state: FleetWorkerState, error_code: str | None
+) -> tuple[FleetWorkerHealth, ...]:
+    return (
+        FleetWorkerHealth(
+            device_id="phone-01",
+            account_id="account-01",
+            state=state,
+            owner_id="worker-phone-01",
+            fence_token=1,
+            process_id=101,
+            error_code=error_code,
+            updated_at_ms=1_000,
+        ),
+    )
+
+
+def test_fleet_runtime_stops_all_resources_after_round_completion(
+    tmp_path: Path,
+) -> None:
+    config: FleetConfig = _two_device_config(tmp_path)
+    stop_event = FakeStopEvent()
+    relay = FakeRelay()
+
+    class FakeRepository:
+        path = tmp_path / "tikpoc.db"
+
+        def __init__(self) -> None:
+            self.completions = iter(
+                (
+                    RoundCompletion(
+                        total=2, visits_confirmed=0, completed=0, deferred=0
+                    ),
+                    RoundCompletion(
+                        total=2, visits_confirmed=2, completed=2, deferred=0
+                    ),
+                )
+            )
+
+        def round_completion(self, round_id: str) -> RoundCompletion:
+            return next(self.completions)
+
+        def recover_expired_assignment_leases(self, *, now_ms: int) -> int:
+            return 0
+
+    class FakeSupervisor:
+        def __init__(self, *args, **kwargs) -> None:
+            self.stopped = False
+
+        def start(self):
+            return _health(FleetWorkerState.HEALTHY)
+
+        def poll(self):
+            return _health(FleetWorkerState.HEALTHY)
+
+        def stop(self):
+            self.stopped = True
+            return _health(FleetWorkerState.STOPPED)
+
+    supervisor = FakeSupervisor()
+
+    result = run_acquisition_fleet(
+        FakeRepository(),
+        "round-1",
+        config,
+        event_factory=lambda: stop_event,
+        relay_factory=lambda *args, **kwargs: relay,
+        supervisor_factory=lambda *args, **kwargs: supervisor,
+        launcher_factory=lambda *args, **kwargs: object(),
+        clock_ms=lambda: 1_000,
+        sleeper=lambda seconds: None,
+    )
+
+    assert result == 0
+    assert stop_event.is_set_value is True
+    assert supervisor.stopped is True
+    assert relay.entered is True
+    assert relay.exited is True
+
+
+def test_fleet_runtime_keeps_running_when_parent_is_terminal_but_priority_is_pending(
+    tmp_path: Path,
+) -> None:
+    repository = AcquisitionRepository(
+        tmp_path / "priority-runtime.db", clock_ms=lambda: 500
+    )
+    repository.migrate()
+    target = Target(
+        target_id="uid-parent",
+        username="parent",
+        profile_url="https://www.tiktok.com/@parent",
+        source_video_id="",
+        sec_uid="sec-parent",
+        identity_key="sec:sec-parent",
+        source_line_numbers=(1,),
+    )
+    parent_pool = repository.import_pool("parent.csv", "a" * 64, (target,))
+    parent = create_exposure_round(
+        repository,
+        pool_id=parent_pool.pool_id,
+        device_seeds={"d1": "parent-d1"},
+        starts_at_ms=100,
+        min_inter_device_gap_ms=0,
+        min_repeat_gap_ms=0,
+    )
+    current = repository.claim_next_assignment(parent, "d1", "worker", now_ms=600)
+    assert current is not None
+    priority_target = replace(
+        target,
+        target_id="uid-priority",
+        username="priority",
+        profile_url="https://www.tiktok.com/@priority",
+        sec_uid="sec-priority",
+        identity_key="sec:sec-priority",
+    )
+    priority_pool = repository.import_pool(
+        "priority.jsonl", "b" * 64, (priority_target,)
+    )
+    batch = repository.create_priority_batch(
+        batch_id="priority-runtime",
+        parent_round_id=parent,
+        pool_id=priority_pool.pool_id,
+        source_live_id="live-runtime",
+        source_checksum="b" * 64,
+        device_seeds={"d1": "priority-d1"},
+    )
+    repository.record_visit_confirmed(current.assignment_id, "worker", now_ms=700)
+    repository.complete_assignment(
+        current.assignment_id,
+        "worker",
+        AssignmentPhase.IDENTITY_CONFIRMED,
+        now_ms=700,
+    )
+    assert _round_completed(repository.round_completion(parent)) is True
+
+    class CompletingSupervisor:
+        def __init__(self) -> None:
+            self.poll_calls = 0
+
+        def start(self):
+            return _health(FleetWorkerState.HEALTHY)
+
+        def poll(self):
+            self.poll_calls += 1
+            with repository._connect() as connection:
+                connection.execute(
+                    """
+                    UPDATE round_assignments
+                    SET phase = 'completed', completed_at_ms = 900
+                    WHERE round_id = ?
+                    """,
+                    (batch.priority_round_id,),
+                )
+                connection.execute(
+                    """
+                    UPDATE priority_batches
+                    SET state = 'completed', completed_at_ms = 900
+                    WHERE batch_id = ?
+                    """,
+                    (batch.batch_id,),
+                )
+            return _health(FleetWorkerState.HEALTHY)
+
+        def stop(self):
+            return _health(FleetWorkerState.STOPPED)
+
+    supervisor = CompletingSupervisor()
+    result = run_acquisition_fleet(
+        repository,
+        parent,
+        _two_device_config(tmp_path),
+        event_factory=FakeStopEvent,
+        relay_factory=lambda *args, **kwargs: FakeRelay(),
+        supervisor_factory=lambda *args, **kwargs: supervisor,
+        launcher_factory=lambda *args, **kwargs: object(),
+        clock_ms=lambda: 800,
+        sleeper=lambda seconds: None,
+    )
+
+    assert result == 0
+    assert supervisor.poll_calls == 1
+
+
+def test_fleet_runtime_finishes_cleanup_before_leaving_relay(tmp_path: Path) -> None:
+    config = _two_device_config(tmp_path)
+    stop_event = FakeStopEvent()
+    relay = FakeRelay()
+    cleanup_states: list[tuple[str, bool, bool, bool]] = []
+
+    class FakeRepository:
+        path = tmp_path / "tikpoc.db"
+
+        def __init__(self) -> None:
+            self.completions = iter(
+                (
+                    RoundCompletion(2, 0, 0, 0),
+                    RoundCompletion(2, 2, 2, 0),
+                )
+            )
+
+        def round_completion(self, round_id: str) -> RoundCompletion:
+            return next(self.completions)
+
+        def recover_expired_assignment_leases(self, *, now_ms: int) -> int:
+            return 0
+
+    class FakeSupervisor:
+        def start(self):
+            return _health(FleetWorkerState.HEALTHY)
+
+        def stop(self):
+            cleanup_states.append(
+                ("stop", relay.entered, relay.exited, stop_event.is_set_value)
+            )
+            return _cleanup_health(
+                FleetWorkerState.HEALTHY, "child_termination_timeout"
+            )
+
+        def poll(self):
+            cleanup_states.append(
+                ("poll", relay.entered, relay.exited, stop_event.is_set_value)
+            )
+            return _cleanup_health(FleetWorkerState.STOPPED, None)
+
+    result = run_acquisition_fleet(
+        FakeRepository(),
+        "round-1",
+        config,
+        event_factory=lambda: stop_event,
+        relay_factory=lambda *args, **kwargs: relay,
+        supervisor_factory=lambda *args, **kwargs: FakeSupervisor(),
+        launcher_factory=lambda *args, **kwargs: object(),
+        clock_ms=lambda: 1_000,
+        sleeper=lambda seconds: None,
+    )
+
+    assert result == 0
+    assert cleanup_states == [
+        ("stop", True, False, True),
+        ("poll", True, False, True),
+    ]
+    assert relay.exited is True
+
+
+def test_fleet_runtime_cleanup_timeout_overrides_success_exit_code(
+    tmp_path: Path,
+) -> None:
+    config = _two_device_config(tmp_path)
+    relay = FakeRelay()
+    poll_calls = 0
+
+    class FakeRepository:
+        path = tmp_path / "tikpoc.db"
+
+        def __init__(self) -> None:
+            self.completions = iter(
+                (
+                    RoundCompletion(2, 0, 0, 0),
+                    RoundCompletion(2, 2, 2, 0),
+                )
+            )
+
+        def round_completion(self, round_id: str) -> RoundCompletion:
+            return next(self.completions)
+
+        def recover_expired_assignment_leases(self, *, now_ms: int) -> int:
+            return 0
+
+    class FakeSupervisor:
+        def start(self):
+            return _health(FleetWorkerState.HEALTHY)
+
+        def stop(self):
+            return _cleanup_health(
+                FleetWorkerState.UNHEALTHY, "child_termination_timeout"
+            )
+
+        def poll(self):
+            nonlocal poll_calls
+            poll_calls += 1
+            assert relay.entered is True and relay.exited is False
+            return _cleanup_health(
+                FleetWorkerState.UNHEALTHY, "child_termination_timeout"
+            )
+
+    result = run_acquisition_fleet(
+        FakeRepository(),
+        "round-1",
+        config,
+        event_factory=FakeStopEvent,
+        relay_factory=lambda *args, **kwargs: relay,
+        supervisor_factory=lambda *args, **kwargs: FakeSupervisor(),
+        launcher_factory=lambda *args, **kwargs: object(),
+        clock_ms=lambda: 1_000,
+        sleeper=lambda seconds: None,
+    )
+
+    assert result == 1
+    assert poll_calls == 3
+    assert relay.exited is True
+
+
+def test_fleet_runtime_does_not_swallow_prior_lease_release_failure(
+    tmp_path: Path,
+) -> None:
+    config = _two_device_config(tmp_path)
+    relay = FakeRelay()
+    cleanup_events: list[tuple[str, bool, bool]] = []
+    release_failed = _cleanup_health(
+        FleetWorkerState.UNHEALTHY, "worker_lease_release_failed"
+    )
+
+    class FakeRepository:
+        path = tmp_path / "tikpoc.db"
+
+        def __init__(self) -> None:
+            self.completions = iter(
+                (
+                    RoundCompletion(2, 1, 1, 0),
+                    RoundCompletion(2, 2, 2, 0),
+                )
+            )
+
+        def round_completion(self, round_id: str) -> RoundCompletion:
+            return next(self.completions)
+
+        def recover_expired_assignment_leases(self, *, now_ms: int) -> int:
+            return 0
+
+    class FakeSupervisor:
+        def start(self):
+            return release_failed
+
+        def stop(self):
+            cleanup_events.append(("stop", relay.entered, relay.exited))
+            return release_failed
+
+        def poll(self):
+            cleanup_events.append(("poll", relay.entered, relay.exited))
+            return release_failed
+
+    result = run_acquisition_fleet(
+        FakeRepository(),
+        "round-1",
+        config,
+        event_factory=FakeStopEvent,
+        relay_factory=lambda *args, **kwargs: relay,
+        supervisor_factory=lambda *args, **kwargs: FakeSupervisor(),
+        launcher_factory=lambda *args, **kwargs: object(),
+        clock_ms=lambda: 1_000,
+        sleeper=lambda seconds: None,
+    )
+
+    assert result == 1
+    assert cleanup_events == [
+        ("stop", True, False),
+        ("poll", True, False),
+        ("poll", True, False),
+        ("poll", True, False),
+    ]
+    assert relay.exited is True
+
+
+def test_fleet_runtime_keeps_release_failure_sticky_and_skips_restart(
+    tmp_path: Path,
+) -> None:
+    config = _two_device_config(tmp_path)
+    relay = FakeRelay()
+
+    def health(
+        phone_01_state: FleetWorkerState,
+        phone_01_error: str | None,
+        phone_02_state: FleetWorkerState,
+        phone_02_error: str | None,
+    ) -> tuple[FleetWorkerHealth, ...]:
+        return tuple(
+            FleetWorkerHealth(
+                device_id=device_id,
+                account_id=account_id,
+                state=state,
+                owner_id=f"worker-{device_id}",
+                fence_token=index,
+                process_id=100 + index,
+                error_code=error_code,
+                updated_at_ms=1_000,
+            )
+            for index, (device_id, account_id, state, error_code) in enumerate(
+                (
+                    (
+                        "phone-01",
+                        "account-01",
+                        phone_01_state,
+                        phone_01_error,
+                    ),
+                    (
+                        "phone-02",
+                        "account-02",
+                        phone_02_state,
+                        phone_02_error,
+                    ),
+                ),
+                start=1,
+            )
+        )
+
+    release_failed = health(
+        FleetWorkerState.UNHEALTHY,
+        "worker_lease_release_failed",
+        FleetWorkerState.HEALTHY,
+        None,
+    )
+    lease_unavailable = health(
+        FleetWorkerState.UNHEALTHY,
+        "worker_lease_unavailable",
+        FleetWorkerState.HEALTHY,
+        None,
+    )
+    clean_stop = health(
+        FleetWorkerState.STOPPED,
+        None,
+        FleetWorkerState.STOPPED,
+        None,
+    )
+
+    class FakeRepository:
+        path = tmp_path / "tikpoc.db"
+
+        def __init__(self) -> None:
+            self.completions = iter(
+                (
+                    RoundCompletion(2, 1, 1, 0),
+                    RoundCompletion(2, 1, 1, 0),
+                    RoundCompletion(2, 2, 2, 0),
+                )
+            )
+
+        def round_completion(self, round_id: str) -> RoundCompletion:
+            return next(self.completions)
+
+        def recover_expired_assignment_leases(self, *, now_ms: int) -> int:
+            return 0
+
+    class FakeSupervisor:
+        def __init__(self) -> None:
+            self.current_health = release_failed
+            self.restarts: list[tuple[str, ...]] = []
+
+        def start(self):
+            return self.current_health
+
+        def poll(self):
+            return self.current_health
+
+        def restart_devices(self, device_ids):
+            self.restarts.append(tuple(device_ids))
+            self.current_health = lease_unavailable
+            return self.current_health
+
+        def stop(self):
+            assert relay.entered is True and relay.exited is False
+            self.current_health = clean_stop
+            return self.current_health
+
+    supervisor = FakeSupervisor()
+
+    result = run_acquisition_fleet(
+        FakeRepository(),
+        "round-1",
+        config,
+        event_factory=FakeStopEvent,
+        relay_factory=lambda *args, **kwargs: relay,
+        supervisor_factory=lambda *args, **kwargs: supervisor,
+        launcher_factory=lambda *args, **kwargs: object(),
+        clock_ms=lambda: 1_000,
+        sleeper=lambda seconds: None,
+        restart_backoff_seconds=0,
+    )
+
+    assert result == 1
+    assert supervisor.restarts == []
+    assert relay.exited is True
+
+
+def test_fleet_runtime_stops_business_loop_immediately_after_release_failure(
+    tmp_path: Path,
+) -> None:
+    config = _two_device_config(tmp_path)
+    relay = FakeRelay()
+    release_failed_and_healthy = _cleanup_health(
+        FleetWorkerState.UNHEALTHY, "worker_lease_release_failed"
+    ) + (
+        FleetWorkerHealth(
+            device_id="phone-02",
+            account_id="account-02",
+            state=FleetWorkerState.HEALTHY,
+            owner_id="worker-phone-02",
+            fence_token=2,
+            process_id=102,
+            error_code=None,
+            updated_at_ms=1_000,
+        ),
+    )
+
+    class FakeRepository:
+        path = tmp_path / "tikpoc.db"
+
+        def round_completion(self, round_id: str) -> RoundCompletion:
+            return RoundCompletion(2, 1, 1, 0)
+
+        def recover_expired_assignment_leases(self, *, now_ms: int) -> int:
+            return 0
+
+    class FakeSupervisor:
+        def __init__(self) -> None:
+            self.poll_calls = 0
+            self.restarts: list[tuple[str, ...]] = []
+            self.stopped = False
+
+        def start(self):
+            return release_failed_and_healthy
+
+        def poll(self):
+            self.poll_calls += 1
+            return release_failed_and_healthy
+
+        def restart_devices(self, device_ids):
+            self.restarts.append(tuple(device_ids))
+            return release_failed_and_healthy
+
+        def stop(self):
+            self.stopped = True
+            assert relay.entered is True and relay.exited is False
+            return _fleet_health(FleetWorkerState.STOPPED, FleetWorkerState.STOPPED)
+
+    supervisor = FakeSupervisor()
+
+    result = run_acquisition_fleet(
+        FakeRepository(),
+        "round-1",
+        config,
+        event_factory=FakeStopEvent,
+        relay_factory=lambda *args, **kwargs: relay,
+        supervisor_factory=lambda *args, **kwargs: supervisor,
+        launcher_factory=lambda *args, **kwargs: object(),
+        clock_ms=lambda: 1_000,
+        sleeper=lambda seconds: pytest.fail(
+            "business sleeper called after worker lease release failure"
+        ),
+        restart_backoff_seconds=0,
+    )
+
+    assert result == 1
+    assert supervisor.stopped is True
+    assert supervisor.poll_calls == 0
+    assert supervisor.restarts == []
+    assert relay.exited is True
+
+
+def test_fleet_runtime_fails_when_no_worker_is_healthy(tmp_path: Path) -> None:
+    config = _two_device_config(tmp_path)
+    stop_event = FakeStopEvent()
+
+    class FakeRepository:
+        path = tmp_path / "tikpoc.db"
+
+        def round_completion(self, round_id: str) -> RoundCompletion:
+            return RoundCompletion(total=2, visits_confirmed=0, completed=0, deferred=0)
+
+        def recover_expired_assignment_leases(self, *, now_ms: int) -> int:
+            return 0
+
+    class FakeSupervisor:
+        def start(self):
+            return _health(FleetWorkerState.UNHEALTHY)
+
+        def stop(self):
+            return _health(FleetWorkerState.STOPPED)
+
+    result = run_acquisition_fleet(
+        FakeRepository(),
+        "round-1",
+        config,
+        event_factory=lambda: stop_event,
+        relay_factory=lambda *args, **kwargs: FakeRelay(),
+        supervisor_factory=lambda *args, **kwargs: FakeSupervisor(),
+        launcher_factory=lambda *args, **kwargs: object(),
+        clock_ms=lambda: 1_000,
+        sleeper=lambda seconds: None,
+        max_device_restart_attempts=0,
+    )
+
+    assert result == 1
+    assert stop_event.is_set_value is True
+
+
+def test_fleet_runtime_recovers_leases_and_restarts_only_failed_device(
+    tmp_path: Path,
+) -> None:
+    config = _two_device_config(tmp_path)
+    stop_event = FakeStopEvent()
+
+    class FakeRepository:
+        path = tmp_path / "tikpoc.db"
+
+        def __init__(self) -> None:
+            self.completed = False
+            self.recovery_calls: list[int] = []
+
+        def round_completion(self, round_id: str) -> RoundCompletion:
+            completed = 2 if self.completed else 0
+            return RoundCompletion(
+                total=2,
+                visits_confirmed=completed,
+                completed=completed,
+                deferred=0,
+            )
+
+        def recover_expired_assignment_leases(self, *, now_ms: int) -> int:
+            self.recovery_calls.append(now_ms)
+            return 0
+
+    repository = FakeRepository()
+
+    class FakeSupervisor:
+        def __init__(self) -> None:
+            self.health = _fleet_health(
+                FleetWorkerState.UNHEALTHY, FleetWorkerState.HEALTHY
+            )
+            self.restarts: list[tuple[str, ...]] = []
+            self.poll_calls = 0
+
+        def start(self):
+            return self.health
+
+        def poll(self):
+            self.poll_calls += 1
+            return self.health
+
+        def restart_devices(self, device_ids):
+            self.restarts.append(tuple(device_ids))
+            self.health = _fleet_health(
+                FleetWorkerState.HEALTHY, FleetWorkerState.HEALTHY
+            )
+            repository.completed = True
+            return self.health
+
+        def stop(self):
+            return _fleet_health(FleetWorkerState.STOPPED, FleetWorkerState.STOPPED)
+
+    supervisor = FakeSupervisor()
+    observed_at_ms = 1_000
+
+    def clock_ms() -> int:
+        nonlocal observed_at_ms
+        observed_at_ms += 20
+        return observed_at_ms
+
+    result = run_acquisition_fleet(
+        repository,
+        "round-1",
+        config,
+        event_factory=lambda: stop_event,
+        relay_factory=lambda *args, **kwargs: FakeRelay(),
+        supervisor_factory=lambda *args, **kwargs: supervisor,
+        launcher_factory=lambda *args, **kwargs: object(),
+        clock_ms=clock_ms,
+        sleeper=lambda seconds: None,
+        restart_backoff_seconds=0.05,
+    )
+
+    assert result == 0
+    assert supervisor.restarts == [("phone-01",)]
+    assert supervisor.poll_calls >= 3
+    assert len(repository.recovery_calls) >= 2
+
+
+def test_fleet_runtime_stops_after_device_restart_budget_is_exhausted(
+    tmp_path: Path,
+) -> None:
+    config = _two_device_config(tmp_path)
+
+    class FakeRepository:
+        path = tmp_path / "tikpoc.db"
+
+        def round_completion(self, round_id: str) -> RoundCompletion:
+            return RoundCompletion(total=2, visits_confirmed=0, completed=0, deferred=0)
+
+        def recover_expired_assignment_leases(self, *, now_ms: int) -> int:
+            return 0
+
+    class FakeSupervisor:
+        def __init__(self) -> None:
+            self.restarts: list[tuple[str, ...]] = []
+
+        def start(self):
+            return _fleet_health(FleetWorkerState.UNHEALTHY, FleetWorkerState.HEALTHY)
+
+        def poll(self):
+            return _fleet_health(FleetWorkerState.UNHEALTHY, FleetWorkerState.HEALTHY)
+
+        def restart_devices(self, device_ids):
+            self.restarts.append(tuple(device_ids))
+            return self.poll()
+
+        def stop(self):
+            return _fleet_health(FleetWorkerState.STOPPED, FleetWorkerState.STOPPED)
+
+    supervisor = FakeSupervisor()
+    observed_at_ms = 1_000
+
+    def clock_ms() -> int:
+        nonlocal observed_at_ms
+        observed_at_ms += 100
+        return observed_at_ms
+
+    result = run_acquisition_fleet(
+        FakeRepository(),
+        "round-1",
+        config,
+        event_factory=FakeStopEvent,
+        relay_factory=lambda *args, **kwargs: FakeRelay(),
+        supervisor_factory=lambda *args, **kwargs: supervisor,
+        launcher_factory=lambda *args, **kwargs: object(),
+        clock_ms=clock_ms,
+        sleeper=lambda seconds: None,
+        restart_backoff_seconds=0.05,
+        max_device_restart_attempts=2,
+    )
+
+    assert result == 1
+    assert supervisor.restarts == [("phone-01",), ("phone-01",)]
+
+
+def test_fleet_runtime_keeps_workers_running_for_retryable_deferred_work(
+    tmp_path: Path,
+) -> None:
+    config = _two_device_config(tmp_path)
+
+    class FakeRepository:
+        path = tmp_path / "tikpoc.db"
+
+        def __init__(self) -> None:
+            self.completed = False
+
+        def round_completion(self, round_id: str) -> RoundCompletion:
+            if self.completed:
+                return RoundCompletion(
+                    total=2, visits_confirmed=2, completed=2, deferred=0
+                )
+            return RoundCompletion(total=2, visits_confirmed=1, completed=1, deferred=1)
+
+        def recover_expired_assignment_leases(self, *, now_ms: int) -> int:
+            return 0
+
+    repository = FakeRepository()
+
+    class FakeSupervisor:
+        def __init__(self) -> None:
+            self.started = False
+            self.stopped = False
+
+        def start(self):
+            self.started = True
+            repository.completed = True
+            return _fleet_health(FleetWorkerState.HEALTHY, FleetWorkerState.HEALTHY)
+
+        def stop(self):
+            self.stopped = True
+            return _fleet_health(FleetWorkerState.STOPPED, FleetWorkerState.STOPPED)
+
+    supervisor = FakeSupervisor()
+
+    result = run_acquisition_fleet(
+        repository,
+        "round-1",
+        config,
+        event_factory=FakeStopEvent,
+        relay_factory=lambda *args, **kwargs: FakeRelay(),
+        supervisor_factory=lambda *args, **kwargs: supervisor,
+        launcher_factory=lambda *args, **kwargs: object(),
+    )
+
+    assert result == 0
+    assert supervisor.started is True
+    assert supervisor.stopped is True
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    (
+        ({"restart_backoff_seconds": -0.1}, "restart backoff"),
+        ({"max_device_restart_attempts": -1}, "restart attempt count"),
+        ({"cleanup_poll_interval_seconds": -0.1}, "cleanup poll interval"),
+        ({"cleanup_max_attempts": 0}, "cleanup attempt count"),
+    ),
+)
+def test_fleet_runtime_rejects_invalid_restart_controls(
+    tmp_path: Path, overrides: dict[str, object], message: str
+) -> None:
+    class CompletedRepository:
+        path = tmp_path / "tikpoc.db"
+
+        def round_completion(self, round_id: str) -> RoundCompletion:
+            return RoundCompletion(total=1, visits_confirmed=1, completed=1, deferred=0)
+
+    with pytest.raises(ValueError, match=message):
+        run_acquisition_fleet(
+            CompletedRepository(),
+            "round-1",
+            _two_device_config(tmp_path),
+            **overrides,
+        )

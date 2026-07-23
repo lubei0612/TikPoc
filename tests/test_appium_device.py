@@ -1,21 +1,51 @@
 from tests.test_profile_parser import PROFILE_XML
 import pytest
-from tikpoc.device import AppiumTikTokDevice
+from selenium.common.exceptions import (
+    StaleElementReferenceException,
+    WebDriverException,
+)
+from tikpoc.acquisition_models import (
+    ActionResult,
+    OutcomeKind,
+    PoolTarget,
+    ProfileAccessState,
+)
+from io import BytesIO
+from pathlib import Path
+
+from PIL import Image
+from tikpoc.device import (
+    AppiumTikTokDevice,
+    ProfileIdentityMismatch,
+    _favorite_pixel_state,
+)
 from tikpoc.models import ProfileMetrics
+from tikpoc.profile_parser import parse_profile_username
 
 
 class FakeElement:
-    def __init__(self, text: str = "") -> None:
+    def __init__(self, text: str = "", *, on_click=None, attributes=None) -> None:
         self.clicked = False
         self.value = ""
         self.text = text
+        self.on_click = on_click
+        self.attributes = attributes or {}
         self.rect = {"x": 800, "y": 700, "width": 200, "height": 80}
 
     def click(self) -> None:
         self.clicked = True
+        if self.on_click is not None:
+            self.on_click()
 
     def send_keys(self, value: str) -> None:
         self.value = value
+
+    def get_attribute(self, name: str):
+        value = self.attributes.get(name)
+        return value() if callable(value) else value
+
+    def is_displayed(self) -> bool:
+        return bool(self.attributes.get("displayed", True))
 
     @property
     def screenshot_as_png(self) -> bytes:
@@ -27,11 +57,25 @@ class FakeDriver:
         self.page_source = PROFILE_XML
         self.scripts: list[tuple[str, dict[str, str]]] = []
         self.posts = [FakeElement(), FakeElement(), FakeElement(), FakeElement()]
+        self.liked = False
+        self.favorite = False
+        self.share_open = False
+        self.reposted = False
         self.action_elements = {
-            '//*[starts-with(@content-desc, "Like video.")]': FakeElement(),
-            '//*[@content-desc="Add or remove this video from Favorites."]/..': FakeElement(),
-            '//*[starts-with(@content-desc, "Share video.")]': FakeElement(),
-            '//*[@text="Repost" or @content-desc="Repost"]': FakeElement(),
+            '//*[starts-with(@content-desc, "Like video.")]': FakeElement(
+                "Like video.", on_click=lambda: setattr(self, "liked", True)
+            ),
+            '//*[@content-desc="Add or remove this video from Favorites."]': FakeElement(
+                "Add or remove this video from Favorites.",
+                on_click=lambda: setattr(self, "favorite", True),
+                attributes={"selected": lambda: "true" if self.favorite else "false"},
+            ),
+            '//*[starts-with(@content-desc, "Share video.")]': FakeElement(
+                "Share video.", on_click=lambda: setattr(self, "share_open", True)
+            ),
+            '//*[@text="Repost" or @content-desc="Repost"]': FakeElement(
+                "Repost", on_click=lambda: setattr(self, "reposted", True)
+            ),
         }
         self.back_calls = 0
 
@@ -40,12 +84,73 @@ class FakeDriver:
 
     def find_elements(self, by: str, value: str) -> list[FakeElement]:
         if by == "id":
+            if value in {
+                "com.zhiliaoapp.musically:id/s7e",
+                "com.zhiliaoapp.musically:id/rgn",
+            }:
+                return []
             assert value == "com.zhiliaoapp.musically:id/eqx"
             return self.posts
-        if value == '//*[@content-desc="Video liked"]':
-            return [FakeElement()]
-        if "You reposted" in value:
-            return [FakeElement()]
+        if by == "xpath" and all(
+            resource_id in value
+            for resource_id in (
+                "com.zhiliaoapp.musically:id/eqx",
+                "com.zhiliaoapp.musically:id/efq",
+            )
+        ):
+            return self.posts
+        if "Video liked" in value and "Like video" in value:
+            return (
+                [FakeElement("Video liked")]
+                if self.liked
+                else [
+                    self.action_elements[
+                        '//*[starts-with(@content-desc, "Like video.")]'
+                    ]
+                ]
+            )
+        if "Remove from Favorites" in value and "Add or remove" in value:
+            return (
+                [FakeElement("Added to Favorites")]
+                if self.favorite
+                else [
+                    self.action_elements[
+                        '//*[@content-desc="Add or remove this video from Favorites."]'
+                    ]
+                ]
+            )
+        if "You reposted" in value and "Share video" in value:
+            if self.reposted:
+                return [FakeElement("You reposted")]
+            if self.share_open:
+                return [
+                    self.action_elements[
+                        '//*[@text="Repost" or @content-desc="Repost"]'
+                    ]
+                ]
+            return [
+                self.action_elements['//*[starts-with(@content-desc, "Share video.")]']
+            ]
+        if "Video liked" in value or "Unlike video" in value:
+            return [FakeElement()] if self.liked else []
+        if "Like video" in value:
+            return [] if self.liked else [self.action_elements[value]]
+        if "Remove from Favorites" in value or "Added to Favorites" in value:
+            return [FakeElement()] if self.favorite else []
+        if "Favorites" in value:
+            return [
+                self.action_elements[
+                    '//*[@content-desc="Add or remove this video from Favorites."]'
+                ]
+            ]
+        if "You reposted" in value or "Remove repost" in value:
+            return [FakeElement()] if self.reposted else []
+        if "Share video" in value:
+            return [self.action_elements[value]]
+        if "Repost" in value and self.share_open:
+            return [
+                self.action_elements['//*[@text="Repost" or @content-desc="Repost"]']
+            ]
         return []
 
     def find_element(self, by: str, value: str) -> FakeElement:
@@ -99,6 +204,26 @@ class ScrollingProfileDriver(FakeDriver):
         self.page_source = self.page_source.replace('text="101"', 'text="404"')
 
 
+class LowResolutionScrollingProfileDriver(ScrollingProfileDriver):
+    def __init__(self) -> None:
+        super().__init__()
+        self.swipe_coordinates: tuple[int, int, int, int, int] | None = None
+
+    def get_window_size(self) -> dict[str, int]:
+        return {"width": 720, "height": 1600}
+
+    def swipe(
+        self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int
+    ) -> None:
+        self.swipe_coordinates = (start_x, start_y, end_x, end_y, duration)
+        super().swipe(start_x, start_y, end_x, end_y, duration)
+
+
+class UnavailableWindowSizeScrollingProfileDriver(LowResolutionScrollingProfileDriver):
+    def get_window_size(self) -> dict[str, int]:
+        raise WebDriverException("window size is temporarily unavailable")
+
+
 class DelayedProfileMarkerDriver(FakeDriver):
     def __init__(self) -> None:
         super().__init__()
@@ -110,6 +235,364 @@ class DelayedProfileMarkerDriver(FakeDriver):
             if self.profile_marker_reads < 4:
                 return []
             return [FakeElement("@sample")]
+        return super().find_elements(by, value)
+
+
+class WrongProfileMarkerDriver(FakeDriver):
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if value == "com.zhiliaoapp.musically:id/s7e":
+            return [FakeElement("@different_user")]
+        return super().find_elements(by, value)
+
+
+class CurrentProfileMarkerDriver(FakeDriver):
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if value == "com.zhiliaoapp.musically:id/rgn":
+            return [FakeElement("@sample")]
+        if value == "com.zhiliaoapp.musically:id/s7e":
+            return []
+        return super().find_elements(by, value)
+
+
+class StaleProfileMarker(FakeElement):
+    @property
+    def text(self) -> str:
+        raise RuntimeError("stale marker")
+
+    @text.setter
+    def text(self, _value: str) -> None:
+        return None
+
+
+class StaleProfileMarkerDriver(FakeDriver):
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if value == "com.zhiliaoapp.musically:id/s7e":
+            return [StaleProfileMarker()]
+        return super().find_elements(by, value)
+
+
+class CachedProfileObservationDriver(FakeDriver):
+    def __init__(self, page_source: str = PROFILE_XML) -> None:
+        super().__init__()
+        self._page_source = page_source
+        self.page_source_reads = 0
+        self.current_username = "previous"
+        self.username_queries = 0
+
+    @property
+    def page_source(self) -> str:
+        self.page_source_reads += 1
+        return self._page_source
+
+    @page_source.setter
+    def page_source(self, value: str) -> None:
+        self._page_source = value
+
+    def execute_script(self, name: str, arguments: dict[str, str]) -> None:
+        super().execute_script(name, arguments)
+        if str(arguments.get("url") or "").startswith("snssdk1233://user/profile/"):
+            self.current_username = "sample"
+
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if by == "id" and value in {
+            "com.zhiliaoapp.musically:id/s7e",
+            "com.zhiliaoapp.musically:id/rgn",
+        }:
+            self.username_queries += 1
+            return [FakeElement(f"@{self.current_username}")]
+        if by == "id" and value in {
+            "com.zhiliaoapp.musically:id/s5x",
+            "com.zhiliaoapp.musically:id/rfc",
+        }:
+            return [FakeElement("Following")]
+        return super().find_elements(by, value)
+
+
+class BoundedVideoDriver(CachedProfileObservationDriver):
+    def __init__(self) -> None:
+        bounded = PROFILE_XML.replace(
+            'resource-id="com.zhiliaoapp.musically:id/cover"',
+            'resource-id="com.zhiliaoapp.musically:id/cover" '
+            'bounds="[100,200][300,600]"',
+        )
+        super().__init__(bounded)
+        self.gestures: list[dict[str, int]] = []
+        self.post_queries = 0
+        self.posts = [FakeElement(on_click=self._open_video) for _ in range(4)]
+
+    def _open_video(self) -> None:
+        self._page_source = (
+            '<hierarchy><node content-desc="Share video. 42 shares" '
+            'bounds="[900,1000][1000,1100]" /></hierarchy>'
+        )
+
+    def execute_script(self, name: str, arguments: dict[str, str]) -> None:
+        if name == "mobile: clickGesture":
+            self.gestures.append(arguments)
+            self._page_source = (
+                '<hierarchy><node content-desc="Share video. 42 shares" '
+                'bounds="[900,1000][1000,1100]" /></hierarchy>'
+            )
+            return
+        super().execute_script(name, arguments)
+
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if (
+            by == "id"
+            and value
+            in {
+                "com.zhiliaoapp.musically:id/eqx",
+                "com.zhiliaoapp.musically:id/efq",
+            }
+        ) or (
+            by == "xpath"
+            and all(
+                resource_id in value
+                for resource_id in (
+                    "com.zhiliaoapp.musically:id/eqx",
+                    "com.zhiliaoapp.musically:id/efq",
+                )
+            )
+        ):
+            self.post_queries += 1
+        if "Share video" in value:
+            return [FakeElement()]
+        return super().find_elements(by, value)
+
+
+class SemanticOnlyVideoDriver(CachedProfileObservationDriver):
+    def __init__(self, posts: list[FakeElement] | None = None) -> None:
+        source = "\n".join(
+            line
+            for line in PROFILE_XML.splitlines()
+            if "id/cover" not in line and "id/tv_play_count" not in line
+        )
+        super().__init__(source)
+        if posts is not None:
+            self.posts = posts
+        self.post_queries = 0
+
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if (
+            by == "id"
+            and value
+            in {
+                "com.zhiliaoapp.musically:id/eqx",
+                "com.zhiliaoapp.musically:id/efq",
+            }
+        ) or (
+            by == "xpath"
+            and all(
+                resource_id in value
+                for resource_id in (
+                    "com.zhiliaoapp.musically:id/eqx",
+                    "com.zhiliaoapp.musically:id/efq",
+                )
+            )
+        ):
+            self.post_queries += 1
+            return self.posts
+        return super().find_elements(by, value)
+
+
+class CurrentSemanticOnlyVideoDriver(SemanticOnlyVideoDriver):
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if by == "id" and value == "com.zhiliaoapp.musically:id/eqx":
+            self.post_queries += 1
+            return []
+        return super().find_elements(by, value)
+
+
+class DisplayCheckFailureElement(FakeElement):
+    def is_displayed(self) -> bool:
+        raise RuntimeError("element became stale during visibility check")
+
+
+class MissingVideoControlDriver(BoundedVideoDriver):
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if "Share video" in value:
+            return []
+        return super().find_elements(by, value)
+
+
+class StaleClickElement(FakeElement):
+    def click(self) -> None:
+        raise StaleElementReferenceException("cached post became stale")
+
+
+class CurrentPostContainerDriver(FakeDriver):
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if by == "xpath" and "com.zhiliaoapp.musically:id/efq" in value:
+            return self.posts
+        if by == "id" and value == "com.zhiliaoapp.musically:id/eqx":
+            return []
+        if by == "id" and value == "com.zhiliaoapp.musically:id/efq":
+            return self.posts
+        return super().find_elements(by, value)
+
+
+class CurrentCoverPostContainerDriver(FakeDriver):
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if by == "xpath" and "com.zhiliaoapp.musically:id/cover" in value:
+            return self.posts
+        return []
+
+
+class DelayedCurrentPostGridDriver(CachedProfileObservationDriver):
+    def __init__(self) -> None:
+        empty_source = "\n".join(
+            line
+            for line in PROFILE_XML.splitlines()
+            if "id/cover" not in line and "id/tv_play_count" not in line
+        )
+        super().__init__(empty_source)
+        self.empty_source = empty_source
+
+    @property
+    def page_source(self) -> str:
+        self.page_source_reads += 1
+        return self.empty_source if self.page_source_reads == 1 else PROFILE_XML
+
+    @page_source.setter
+    def page_source(self, value: str) -> None:
+        self._page_source = value
+
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if by == "xpath" and any(
+            resource_id in value
+            for resource_id in (
+                "com.zhiliaoapp.musically:id/eqx",
+                "com.zhiliaoapp.musically:id/efq",
+                "com.zhiliaoapp.musically:id/cover",
+            )
+        ):
+            return []
+        return super().find_elements(by, value)
+
+
+class DelayedSemanticPostGridDriver(FakeDriver):
+    def __init__(self) -> None:
+        super().__init__()
+        self.post_queries = 0
+
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if by == "xpath" and "com.zhiliaoapp.musically:id/cover" in value:
+            self.post_queries += 1
+            return [] if self.post_queries == 1 else self.posts
+        return super().find_elements(by, value)
+
+
+class RenamedStableRouteDriver(FakeDriver):
+    def __init__(self, *, changes_route: bool = True) -> None:
+        super().__init__()
+        self.routed = False
+        self.changes_route = changes_route
+        self.page_source = PROFILE_XML.replace("@sample", "@previous")
+
+    def execute_script(self, name: str, arguments: dict[str, str]) -> None:
+        super().execute_script(name, arguments)
+        self.routed = True
+        username = "@renamed" if self.changes_route else "@previous"
+        self.page_source = PROFILE_XML.replace("@sample", username)
+
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if value == "com.zhiliaoapp.musically:id/s7e":
+            text = "@renamed" if self.routed and self.changes_route else "@previous"
+            return [FakeElement(text)]
+        return super().find_elements(by, value)
+
+
+class RestartDirectStableRouteDriver(FakeDriver):
+    def __init__(self, *, changes_after_restart: bool = True) -> None:
+        super().__init__()
+        self.changes_after_restart = changes_after_restart
+        self.restarted = False
+        self.terminate_calls = 0
+        self.activate_calls = 0
+        self.page_source = PROFILE_XML.replace("@sample", "@previous")
+
+    def execute_script(self, name: str, arguments: dict[str, str]) -> None:
+        super().execute_script(name, arguments)
+        url = arguments["url"]
+        if url.startswith("https://www.tiktok.com/@"):
+            self.page_source = PROFILE_XML.replace("@sample", "@old_name")
+        elif self.restarted and self.changes_after_restart:
+            self.page_source = PROFILE_XML.replace("@sample", "@renamed")
+
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if value == "com.zhiliaoapp.musically:id/s7e":
+            username = parse_profile_username(self.page_source)
+            return [FakeElement(f"@{username}")] if username else []
+        return super().find_elements(by, value)
+
+    def terminate_app(self, package: str) -> None:
+        super().terminate_app(package)
+        self.terminate_calls += 1
+        self.restarted = True
+
+    def activate_app(self, package: str) -> None:
+        super().activate_app(package)
+        self.activate_calls += 1
+
+
+class StableIdBlankUsernameFallbackDriver(FakeDriver):
+    def __init__(self) -> None:
+        super().__init__()
+        self.route_started = False
+        self.username_fallback_loaded = False
+
+    def execute_script(self, name: str, arguments: dict[str, str]) -> None:
+        super().execute_script(name, arguments)
+        url = arguments["url"]
+        if url.startswith("https://www.tiktok.com/@"):
+            self.username_fallback_loaded = True
+            self.page_source = PROFILE_XML.replace("@sample", "@old_name")
+        else:
+            self.route_started = True
+            self.page_source = "<hierarchy />"
+
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if value == "com.zhiliaoapp.musically:id/s7e":
+            if self.username_fallback_loaded:
+                return [FakeElement("@old_name")]
+            if not self.route_started:
+                return [FakeElement("@previous")]
+            return []
+        return super().find_elements(by, value)
+
+
+class IncompleteStableRouteDriver(RenamedStableRouteDriver):
+    def __init__(self) -> None:
+        super().__init__()
+        self.page_source = (
+            '<hierarchy><node text="@previous" '
+            'resource-id="com.zhiliaoapp.musically:id/s7e" /></hierarchy>'
+        )
+
+    def execute_script(self, name: str, arguments: dict[str, str]) -> None:
+        FakeDriver.execute_script(self, name, arguments)
+        url = arguments["url"]
+        username = (
+            ""
+            if url == "tiktok://inbox"
+            else ("@old_name" if url.startswith("https://") else "@renamed")
+        )
+        self.page_source = (
+            f'<hierarchy><node text="{username}" '
+            'resource-id="com.zhiliaoapp.musically:id/s7e" /></hierarchy>'
+        )
+
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if value == "com.zhiliaoapp.musically:id/s7e":
+            username = parse_profile_username(self.page_source)
+            return [FakeElement(f"@{username}")] if username else []
+        return FakeDriver.find_elements(self, by, value)
+
+
+class MissingProfileMarkerDriver(FakeDriver):
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if value == "com.zhiliaoapp.musically:id/s7e":
+            return []
         return super().find_elements(by, value)
 
 
@@ -130,6 +613,171 @@ def test_appium_device_opens_profile_with_deep_link() -> None:
     ]
 
 
+def test_appium_device_uses_stable_id_route_and_accepts_renamed_profile() -> None:
+    driver = RenamedStableRouteDriver()
+    device = AppiumTikTokDevice(driver, metric_read_attempts=1, poll_interval=0)
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="uid:123",
+        target_id="123",
+        sec_uid="sec-1",
+        username="old_name",
+        profile_url="",
+        source_video_id="",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    device.open_target(target)
+    device.confirm_profile_identity(target)
+
+    assert driver.scripts[-1][1]["url"] == "snssdk1233://user/profile/123"
+
+
+def test_appium_device_uses_injected_native_route() -> None:
+    driver = RenamedStableRouteDriver()
+    routes = []
+    device = AppiumTikTokDevice(driver, route_opener=routes.append)
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="uid:123",
+        target_id="123",
+        sec_uid="sec-1",
+        username="old_name",
+        profile_url="",
+        source_video_id="",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    device.open_target(target)
+
+    assert routes == ["snssdk1233://user/profile/123"]
+
+
+def test_appium_device_requires_loaded_profile_surface() -> None:
+    driver = IncompleteStableRouteDriver()
+    device = AppiumTikTokDevice(
+        driver, metric_read_attempts=1, poll_interval=0, action_timeout=0
+    )
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="uid:123",
+        target_id="123",
+        sec_uid="sec-1",
+        username="old_name",
+        profile_url="",
+        source_video_id="",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    device.open_target(target)
+
+    with pytest.raises(ValueError, match="profile surface did not become ready"):
+        device.confirm_profile_identity(target)
+
+
+def test_appium_device_rejects_stale_profile_after_stable_route() -> None:
+    driver = RenamedStableRouteDriver(changes_route=False)
+    device = AppiumTikTokDevice(driver, metric_read_attempts=1, poll_interval=0)
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="uid:123",
+        target_id="123",
+        sec_uid="sec-1",
+        username="old_name",
+        profile_url="",
+        source_video_id="",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    device.open_target(target)
+
+    with pytest.raises(
+        ProfileIdentityMismatch, match="expected old_name, got previous"
+    ):
+        device.confirm_profile_identity(target)
+
+
+def test_stable_route_recovery_restarts_directly_into_target_without_inbox() -> None:
+    driver = RestartDirectStableRouteDriver()
+    device = AppiumTikTokDevice(driver, metric_read_attempts=1, poll_interval=0)
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="uid:123",
+        target_id="123",
+        sec_uid="sec-1",
+        username="old_name",
+        profile_url="",
+        source_video_id="",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    device.open_target(target)
+    device.confirm_profile_identity(target)
+
+    assert driver.terminate_calls == 1
+    assert driver.activate_calls == 0
+    assert [script[1]["url"] for script in driver.scripts] == [
+        "snssdk1233://user/profile/123",
+        "snssdk1233://user/profile/123",
+    ]
+    assert device._confirmed_profile_username == "renamed"
+
+
+def test_stable_route_recovery_rejects_stale_profile_after_direct_restart() -> None:
+    driver = RestartDirectStableRouteDriver(changes_after_restart=False)
+    device = AppiumTikTokDevice(driver, metric_read_attempts=1, poll_interval=0)
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="uid:123",
+        target_id="123",
+        sec_uid="sec-1",
+        username="old_name",
+        profile_url="",
+        source_video_id="",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    device.open_target(target)
+    device.confirm_profile_identity(target)
+
+    assert driver.terminate_calls == 1
+    assert driver.activate_calls == 0
+    assert [script[1]["url"] for script in driver.scripts] == [
+        "snssdk1233://user/profile/123",
+        "snssdk1233://user/profile/123",
+        "https://www.tiktok.com/@old_name",
+    ]
+
+
+def test_appium_device_falls_back_to_exact_username_after_stable_id_stays_blank() -> (
+    None
+):
+    driver = StableIdBlankUsernameFallbackDriver()
+    device = AppiumTikTokDevice(driver, metric_read_attempts=1, poll_interval=0)
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="uid:123",
+        target_id="123",
+        sec_uid="sec-1",
+        username="old_name",
+        profile_url="https://www.tiktok.com/@old_name",
+        source_video_id="",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    device.open_target(target)
+    device.confirm_profile_identity(target)
+
+    assert driver.scripts[-1][1]["url"] == "https://www.tiktok.com/@old_name"
+
+
 def test_appium_device_reads_metrics_and_clicks_selected_post() -> None:
     driver = FakeDriver()
     device = AppiumTikTokDevice(driver)
@@ -140,6 +788,42 @@ def test_appium_device_reads_metrics_and_clicks_selected_post() -> None:
     device.open_post("2")
 
     assert driver.posts[2].clicked is True
+
+
+def test_appium_device_accepts_current_post_container_id() -> None:
+    driver = CurrentPostContainerDriver()
+    device = AppiumTikTokDevice(driver)
+
+    assert device.list_visible_posts() == ("0", "1", "2", "3")
+    device.open_post("1")
+
+    assert driver.posts[1].clicked is True
+
+
+def test_appium_device_accepts_current_cover_post_container_id() -> None:
+    driver = CurrentCoverPostContainerDriver()
+    device = AppiumTikTokDevice(driver)
+
+    assert device.list_visible_posts() == ("0", "1", "2", "3")
+
+
+def test_appium_device_waits_for_delayed_semantic_post_grid() -> None:
+    driver = DelayedSemanticPostGridDriver()
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+
+    assert device.list_visible_posts() == ("0", "1", "2", "3")
+    assert driver.post_queries == 2
+
+
+def test_favorite_pixel_state_reads_current_yellow_active_icon() -> None:
+    active = BytesIO()
+    Image.new("RGB", (2, 2), (255, 205, 0)).save(active, format="PNG")
+    inactive = BytesIO()
+    Image.new("RGB", (2, 2), (255, 255, 255)).save(inactive, format="PNG")
+
+    assert _favorite_pixel_state(active.getvalue()) is True
+    assert _favorite_pixel_state(inactive.getvalue()) is False
+    assert _favorite_pixel_state(b"not-png") is None
 
 
 def test_appium_device_waits_for_profile_metrics() -> None:
@@ -168,6 +852,364 @@ def test_appium_device_retries_deep_link_while_waiting_for_profile_marker() -> N
     ]
 
 
+def test_profile_readiness_snapshot_is_reused_for_observation() -> None:
+    driver = CachedProfileObservationDriver()
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="uid:123",
+        target_id="123",
+        sec_uid="sec-1",
+        username="sample",
+        profile_url="",
+        source_video_id="",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    device.open_target(target)
+    device.confirm_profile_identity(target)
+    observation = device.read_profile_observation()
+
+    assert observation.observed_username == "sample"
+    assert observation.metrics == ProfileMetrics(12, 10, 4)
+    assert observation.access_state is ProfileAccessState.PUBLIC
+    assert driver.page_source_reads == 1
+    assert driver.username_queries == 1
+
+
+def test_cached_profile_opens_and_verifies_video_with_semantic_elements() -> None:
+    driver = BoundedVideoDriver()
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="uid:123",
+        target_id="123",
+        sec_uid="sec-1",
+        username="sample",
+        profile_url="",
+        source_video_id="",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    device.open_target(target)
+    device.confirm_profile_identity(target)
+    device.read_profile_observation()
+    assert device.list_video_keys() == ("0", "1", "2", "3")
+    device.open_and_confirm_video("2")
+
+    assert driver.posts[2].clicked is True
+    assert driver.post_queries == 1
+    assert driver.page_source_reads == 1
+
+
+def test_zero_parsed_posts_use_visible_semantic_video_containers() -> None:
+    driver = SemanticOnlyVideoDriver()
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="uid:123",
+        target_id="123",
+        sec_uid="sec-1",
+        username="sample",
+        profile_url="",
+        source_video_id="",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    device.open_target(target)
+    device.confirm_profile_identity(target)
+    observation = device.read_profile_observation()
+
+    assert observation.metrics == ProfileMetrics(12, 10, 4)
+    assert device.list_video_keys() == ("0", "1", "2", "3")
+    assert driver.post_queries == 1
+
+
+def test_zero_parsed_posts_wait_for_delayed_current_post_grid() -> None:
+    driver = DelayedCurrentPostGridDriver()
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+
+    observation = device.read_profile_observation()
+
+    assert observation.metrics == ProfileMetrics(12, 10, 4)
+    assert driver.page_source_reads == 2
+
+
+def test_banned_profile_is_not_classified_as_public_zero_posts() -> None:
+    banned = "\n".join(
+        line
+        for line in PROFILE_XML.splitlines()
+        if "id/cover" not in line and "id/tv_play_count" not in line
+    ).replace(
+        "</hierarchy>",
+        '<node text="Account banned" />\n'
+        '<node text="The account sample is no longer available" />\n'
+        "</hierarchy>",
+    )
+    driver = CachedProfileObservationDriver(banned)
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+
+    observation = device.read_profile_observation()
+
+    assert observation.metrics is None
+    assert observation.access_state is ProfileAccessState.SUSPENDED
+
+
+def test_missing_profile_is_not_classified_as_public_zero_posts() -> None:
+    missing = "\n".join(
+        line
+        for line in PROFILE_XML.splitlines()
+        if "id/cover" not in line and "id/tv_play_count" not in line
+    ).replace(
+        "</hierarchy>",
+        '<node text="Couldn\'t find this account" />\n</hierarchy>',
+    )
+    driver = CachedProfileObservationDriver(missing)
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+
+    observation = device.read_profile_observation()
+
+    assert observation.metrics is None
+    assert observation.access_state is ProfileAccessState.MISSING
+
+
+def test_zero_parsed_posts_ignore_hidden_semantic_containers() -> None:
+    driver = SemanticOnlyVideoDriver(
+        [FakeElement(attributes={"displayed": False}) for _ in range(4)]
+    )
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+
+    observation = device.read_profile_observation()
+
+    assert observation.metrics == ProfileMetrics(12, 10, 0)
+    assert driver.post_queries == 2
+
+
+def test_zero_parsed_posts_count_only_visible_semantic_containers() -> None:
+    driver = SemanticOnlyVideoDriver(
+        [
+            FakeElement(),
+            FakeElement(attributes={"displayed": False}),
+            FakeElement(),
+        ]
+    )
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+
+    observation = device.read_profile_observation()
+
+    assert observation.metrics == ProfileMetrics(12, 10, 2)
+    assert device.list_video_keys() == ("0", "1")
+    assert driver.post_queries == 1
+
+
+def test_zero_parsed_posts_keep_zero_when_semantic_grid_is_empty() -> None:
+    driver = SemanticOnlyVideoDriver([])
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+
+    observation = device.read_profile_observation()
+
+    assert observation.metrics == ProfileMetrics(12, 10, 0)
+    assert driver.post_queries == 2
+
+
+def test_zero_parsed_posts_accept_current_semantic_container_in_one_query() -> None:
+    driver = CurrentSemanticOnlyVideoDriver()
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+
+    observation = device.read_profile_observation()
+
+    assert observation.metrics == ProfileMetrics(12, 10, 4)
+    assert driver.post_queries == 1
+
+
+def test_zero_parsed_posts_skip_semantic_query_when_following_not_greater() -> None:
+    driver = SemanticOnlyVideoDriver()
+    driver._page_source = driver._page_source.replace(
+        '<node text="12" resource-id="com.zhiliaoapp.musically:id/s5y" />',
+        '<node text="8" resource-id="com.zhiliaoapp.musically:id/s5y" />',
+    )
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+
+    observation = device.read_profile_observation()
+
+    assert observation.metrics == ProfileMetrics(8, 10, 0)
+    assert driver.post_queries == 0
+
+
+def test_zero_parsed_posts_ignore_failed_visibility_checks() -> None:
+    driver = SemanticOnlyVideoDriver([FakeElement(), DisplayCheckFailureElement()])
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+
+    observation = device.read_profile_observation()
+
+    assert observation.metrics == ProfileMetrics(12, 10, 1)
+    assert driver.post_queries == 1
+
+
+def test_cached_post_stale_click_is_an_explicit_failure() -> None:
+    driver = BoundedVideoDriver()
+    driver.posts[2] = StaleClickElement()
+    device = AppiumTikTokDevice(driver, action_timeout=0)
+
+    assert device.list_video_keys() == ("0", "1", "2", "3")
+
+    with pytest.raises(
+        StaleElementReferenceException, match="cached post became stale"
+    ):
+        device.open_and_confirm_video("2")
+
+
+def test_cached_post_requires_visible_share_control_after_click() -> None:
+    driver = MissingVideoControlDriver()
+    device = AppiumTikTokDevice(driver, action_timeout=0)
+
+    assert device.list_video_keys() == ("0", "1", "2", "3")
+
+    with pytest.raises(RuntimeError, match="video controls did not become visible"):
+        device.open_and_confirm_video("2")
+
+
+@pytest.mark.parametrize("invalidate", ["route", "back", "restart", "consume"])
+def test_semantic_post_cache_is_scoped_to_one_profile_action(invalidate: str) -> None:
+    driver = BoundedVideoDriver()
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+    original_posts = driver.posts
+
+    assert device.list_visible_posts() == ("0", "1", "2", "3")
+    replacement_posts = [FakeElement() for _ in range(4)]
+    if invalidate == "route":
+        device.open_profile("sample")
+    elif invalidate == "back":
+        device.return_to_baseline()
+    elif invalidate == "restart":
+        device.restart_app()
+    else:
+        device.open_post("0")
+    driver.posts = replacement_posts
+
+    device.open_post("0")
+
+    assert replacement_posts[0].clicked is True
+    assert original_posts[0].clicked is (invalidate == "consume")
+
+
+def test_opening_video_invalidates_reusable_profile_snapshot() -> None:
+    driver = CachedProfileObservationDriver()
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="uid:123",
+        target_id="123",
+        sec_uid="sec-1",
+        username="sample",
+        profile_url="",
+        source_video_id="",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    device.open_target(target)
+    device.confirm_profile_identity(target)
+    device.open_post("0")
+    device.read_profile_observation()
+
+    assert driver.page_source_reads == 2
+
+
+def test_confirmed_profile_with_persistently_incomplete_metrics_is_inaccessible() -> (
+    None
+):
+    incomplete = PROFILE_XML.replace(
+        '<node text="10" resource-id="com.zhiliaoapp.musically:id/s5y" />\n'
+        '  <node text="Followers" resource-id="com.zhiliaoapp.musically:id/s5x" />',
+        "",
+    )
+    driver = CachedProfileObservationDriver(incomplete)
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="uid:123",
+        target_id="123",
+        sec_uid="sec-1",
+        username="sample",
+        profile_url="",
+        source_video_id="",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    device.open_target(target)
+    device.confirm_profile_identity(target)
+    observation = device.read_profile_observation()
+
+    assert observation.observed_username == "sample"
+    assert observation.metrics is None
+    assert observation.private_account is False
+    assert observation.access_state is ProfileAccessState.INACCESSIBLE
+
+
+def test_appium_device_classifies_profile_identity_mismatch() -> None:
+    device = AppiumTikTokDevice(
+        WrongProfileMarkerDriver(), metric_read_attempts=1, poll_interval=0
+    )
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="sec:1",
+        target_id="user-1",
+        sec_uid="sec-1",
+        username="expected_user",
+        profile_url="https://www.tiktok.com/@expected_user",
+        source_video_id="video-1",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    with pytest.raises(ProfileIdentityMismatch, match="profile mismatch"):
+        device.confirm_profile_identity(target)
+
+
+def test_appium_device_accepts_current_profile_username_marker() -> None:
+    device = AppiumTikTokDevice(
+        CurrentProfileMarkerDriver(), metric_read_attempts=1, poll_interval=0
+    )
+
+    device.wait_profile_ready("sample")
+
+
+def test_profile_readiness_recovers_from_a_stale_marker_element() -> None:
+    device = AppiumTikTokDevice(
+        StaleProfileMarkerDriver(), metric_read_attempts=1, poll_interval=0
+    )
+
+    device.wait_profile_ready("sample")
+
+
+def test_appium_device_does_not_classify_a_missing_marker_as_identity_mismatch() -> (
+    None
+):
+    device = AppiumTikTokDevice(
+        MissingProfileMarkerDriver(), metric_read_attempts=1, poll_interval=0
+    )
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="sec:1",
+        target_id="user-1",
+        sec_uid="sec-1",
+        username="expected_user",
+        profile_url="https://www.tiktok.com/@expected_user",
+        source_video_id="video-1",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    with pytest.raises(ValueError, match="marker is not visible") as captured:
+        device.confirm_profile_identity(target)
+    assert not isinstance(captured.value, ProfileIdentityMismatch)
+
+
 def test_appium_device_scrolls_to_confirm_more_than_three_posts() -> None:
     driver = ScrollingProfileDriver()
     device = AppiumTikTokDevice(driver, poll_interval=0)
@@ -176,6 +1218,24 @@ def test_appium_device_scrolls_to_confirm_more_than_three_posts() -> None:
 
     assert metrics == ProfileMetrics(12, 10, 4)
     assert driver.swipes == 1
+
+
+def test_appium_device_scales_profile_grid_swipe_to_window_size() -> None:
+    driver = LowResolutionScrollingProfileDriver()
+    device = AppiumTikTokDevice(driver, poll_interval=0)
+
+    assert device.read_profile_metrics() == ProfileMetrics(12, 10, 4)
+
+    assert driver.swipe_coordinates == (360, 1440, 360, 800, 600)
+
+
+def test_appium_device_uses_legacy_grid_swipe_when_window_size_fails() -> None:
+    driver = UnavailableWindowSizeScrollingProfileDriver()
+    device = AppiumTikTokDevice(driver, poll_interval=0)
+
+    assert device.read_profile_metrics() == ProfileMetrics(12, 10, 4)
+
+    assert driver.swipe_coordinates == (540, 1900, 540, 1050, 600)
 
 
 def test_appium_device_performs_semantic_video_actions() -> None:
@@ -254,13 +1314,372 @@ def test_appium_device_greets_one_new_follower_after_follow_back() -> None:
 
 class UnverifiedLikeDriver(FakeDriver):
     def find_elements(self, by: str, value: str):
-        if value == '//*[@content-desc="Video liked"]':
+        if "Video liked" in value or "Unlike video" in value:
             return []
         return super().find_elements(by, value)
 
 
 def test_appium_device_rejects_unverified_like() -> None:
-    device = AppiumTikTokDevice(UnverifiedLikeDriver(), action_delay=0)
+    device = AppiumTikTokDevice(
+        UnverifiedLikeDriver(), action_delay=0, action_timeout=0
+    )
 
     with pytest.raises(RuntimeError, match="like action was not verified"):
         device.perform_action("like")
+
+
+class SemanticElement(FakeElement):
+    def __init__(self, label: str, callback=None, attributes=None) -> None:
+        super().__init__(label)
+        self.label = label
+        self.callback = callback
+        self.attributes = attributes or {}
+
+    def click(self) -> None:
+        super().click()
+        if self.callback is not None:
+            self.callback()
+
+    def get_attribute(self, name: str):
+        value = self.attributes.get(name)
+        return value() if callable(value) else value
+
+
+class SemanticActionDriver:
+    def __init__(self, *, delayed_like_reads: int = 0) -> None:
+        self.clicked_labels: list[str] = []
+        self.semantic_queries: list[str] = []
+        self.liked = False
+        self.favorite = False
+        self.share_open = False
+        self.reposted = False
+        self.delayed_like_reads = delayed_like_reads
+        self.like_active_reads = 0
+        self.like = SemanticElement("Like", self._click_like)
+        self.favorite_control = SemanticElement(
+            "Favorite",
+            self._click_favorite,
+            {"selected": lambda: "true" if self.favorite else "false"},
+        )
+        self.share = SemanticElement("Share", self._click_share)
+        self.repost = SemanticElement("Repost", self._click_repost, {"text": "Repost"})
+
+    @property
+    def page_source(self) -> str:
+        return "<hierarchy />"
+
+    def _click_like(self) -> None:
+        self.clicked_labels.append("Like")
+        self.liked = True
+
+    def _click_favorite(self) -> None:
+        self.clicked_labels.append("Favorite")
+        self.favorite = True
+
+    def _click_share(self) -> None:
+        self.clicked_labels.append("Share")
+        self.share_open = True
+
+    def _click_repost(self) -> None:
+        self.clicked_labels.append("Repost")
+        self.reposted = True
+
+    def find_elements(self, by: str, value: str):
+        self.semantic_queries.append(value)
+        if "Video liked" in value and "Like video" in value:
+            return [SemanticElement("Video liked")] if self.liked else [self.like]
+        if "Remove from Favorites" in value and "Add or remove" in value:
+            return (
+                [SemanticElement("Added to Favorites")]
+                if self.favorite
+                else [self.favorite_control]
+            )
+        if "You reposted" in value and "Share video" in value:
+            if self.reposted:
+                return [SemanticElement("You reposted")]
+            if self.share_open:
+                return [self.repost]
+            return [self.share]
+        if "Video liked" in value or "Unlike video" in value:
+            if self.liked:
+                self.like_active_reads += 1
+            return (
+                [SemanticElement("Video liked")]
+                if self.liked and self.like_active_reads > self.delayed_like_reads
+                else []
+            )
+        if "Like video" in value:
+            return [] if self.liked else [self.like]
+        if "Remove from Favorites" in value or "Added to Favorites" in value:
+            return [SemanticElement("Added to Favorites")] if self.favorite else []
+        if "Favorites" in value:
+            return [self.favorite_control]
+        if "You reposted" in value or "Remove repost" in value:
+            return [SemanticElement("You reposted")] if self.reposted else []
+        if "Share video" in value:
+            return [self.share]
+        if "Repost" in value and self.share_open:
+            return [self.repost]
+        return []
+
+    def find_element(self, by: str, value: str):
+        elements = self.find_elements(by, value)
+        if not elements:
+            raise LookupError(value)
+        return elements[0]
+
+
+class RepostUnavailableDriver(SemanticActionDriver):
+    def find_elements(self, by: str, value: str):
+        if "You reposted" in value and "Share video" in value:
+            if self.share_open:
+                self.semantic_queries.append(value)
+                return []
+            return super().find_elements(by, value)
+        if "Repost" in value:
+            return []
+        if self.share_open and (
+            'content-desc="Bottom sheet"' in value or "Copy link" in value
+        ):
+            return [SemanticElement("Share surface")]
+        return super().find_elements(by, value)
+
+
+class AmbiguousSemanticActionDriver(SemanticActionDriver):
+    def __init__(self, ambiguous_outcome: OutcomeKind) -> None:
+        super().__init__()
+        self.ambiguous_outcome = ambiguous_outcome
+
+    def find_elements(self, by: str, value: str):
+        elements = super().find_elements(by, value)
+        matches_outcome = {
+            OutcomeKind.LIKE: "Video liked" in value and "Like video" in value,
+            OutcomeKind.FAVORITE: (
+                "Remove from Favorites" in value and "Add or remove" in value
+            ),
+            OutcomeKind.REPOST: "You reposted" in value and "Share video" in value,
+        }
+        if matches_outcome[self.ambiguous_outcome] and elements:
+            return [elements[0], elements[0]]
+        return elements
+
+
+class DelayedInitialActionControlDriver(SemanticActionDriver):
+    def __init__(self, *, missing_reads: int) -> None:
+        super().__init__()
+        self.missing_reads = missing_reads
+        self.initial_reads = 0
+
+    def find_elements(self, by: str, value: str):
+        if "Video liked" in value and "Like video" in value and not self.liked:
+            self.semantic_queries.append(value)
+            self.initial_reads += 1
+            if self.initial_reads <= self.missing_reads:
+                return []
+            return [self.like]
+        return super().find_elements(by, value)
+
+
+class SettlingInitialActionControlDriver(SemanticActionDriver):
+    def __init__(self) -> None:
+        super().__init__()
+        self.initial_reads = 0
+        self.like.callback = self._click_like_after_settled
+
+    def _click_like_after_settled(self) -> None:
+        self.clicked_labels.append("Like")
+        if self.initial_reads >= 2:
+            self.liked = True
+
+    def find_elements(self, by: str, value: str):
+        if "Video liked" in value and "Like video" in value and not self.liked:
+            self.initial_reads += 1
+        return super().find_elements(by, value)
+
+
+class HiddenRepostUnavailableDriver(RepostUnavailableDriver):
+    def find_elements(self, by: str, value: str):
+        if self.share_open and (
+            'content-desc="Bottom sheet"' in value or "Copy link" in value
+        ):
+            return [
+                SemanticElement("Hidden share surface", attributes={"displayed": False})
+            ]
+        return super().find_elements(by, value)
+
+
+class SteppingClock:
+    def __init__(self) -> None:
+        self.value = 0.0
+
+    def __call__(self) -> float:
+        self.value += 0.1
+        return self.value
+
+
+def test_execute_like_waits_for_delayed_selected_state() -> None:
+    driver = SemanticActionDriver(delayed_like_reads=2)
+    device = AppiumTikTokDevice(
+        driver,
+        poll_interval=0,
+        action_timeout=2,
+        clock=SteppingClock(),
+        sleeper=lambda _: None,
+    )
+
+    assert device.execute_outcome(OutcomeKind.LIKE) is ActionResult.CONFIRMED
+    assert driver.clicked_labels == ["Like"]
+
+
+def test_execute_like_waits_for_delayed_initial_control() -> None:
+    driver = DelayedInitialActionControlDriver(missing_reads=2)
+    device = AppiumTikTokDevice(
+        driver,
+        poll_interval=0,
+        action_timeout=2,
+        clock=SteppingClock(),
+        sleeper=lambda _: None,
+    )
+
+    assert device.execute_outcome(OutcomeKind.LIKE) is ActionResult.CONFIRMED
+    assert driver.clicked_labels == ["Like"]
+
+
+def test_execute_like_waits_for_initial_control_to_settle_before_click() -> None:
+    driver = SettlingInitialActionControlDriver()
+    device = AppiumTikTokDevice(
+        driver,
+        poll_interval=0,
+        action_timeout=2,
+        clock=SteppingClock(),
+        sleeper=lambda _: None,
+    )
+
+    assert device.execute_outcome(OutcomeKind.LIKE) is ActionResult.CONFIRMED
+    assert driver.clicked_labels == ["Like"]
+
+
+def test_execute_like_uses_one_query_before_and_after_click() -> None:
+    driver = SemanticActionDriver()
+    device = AppiumTikTokDevice(driver, poll_interval=0, action_timeout=0)
+
+    assert device.execute_outcome(OutcomeKind.LIKE) is ActionResult.CONFIRMED
+
+    assert len(driver.semantic_queries) == 2
+
+
+def test_execute_like_keeps_duplicate_controls_uncertain() -> None:
+    driver = AmbiguousSemanticActionDriver(OutcomeKind.LIKE)
+    device = AppiumTikTokDevice(driver, poll_interval=0, action_timeout=0)
+
+    assert device.execute_outcome(OutcomeKind.LIKE) is ActionResult.UNCERTAIN
+    assert driver.clicked_labels == []
+
+
+def test_execute_favorite_requires_semantic_selected_state() -> None:
+    driver = SemanticActionDriver()
+    device = AppiumTikTokDevice(driver, poll_interval=0, action_timeout=0)
+
+    assert device.execute_outcome(OutcomeKind.FAVORITE) is ActionResult.CONFIRMED
+    assert driver.clicked_labels == ["Favorite"]
+
+
+def test_execute_favorite_uses_one_query_before_and_after_click() -> None:
+    driver = SemanticActionDriver()
+    device = AppiumTikTokDevice(driver, poll_interval=0, action_timeout=0)
+
+    assert device.execute_outcome(OutcomeKind.FAVORITE) is ActionResult.CONFIRMED
+
+    assert len(driver.semantic_queries) == 2
+
+
+def test_execute_favorite_keeps_duplicate_controls_uncertain() -> None:
+    driver = AmbiguousSemanticActionDriver(OutcomeKind.FAVORITE)
+    device = AppiumTikTokDevice(driver, poll_interval=0, action_timeout=0)
+
+    assert device.execute_outcome(OutcomeKind.FAVORITE) is ActionResult.UNCERTAIN
+    assert driver.clicked_labels == []
+
+
+def test_execute_repost_clicks_share_then_repost_and_verifies_state() -> None:
+    driver = SemanticActionDriver()
+    device = AppiumTikTokDevice(driver, poll_interval=0, action_timeout=0)
+
+    assert device.execute_outcome(OutcomeKind.REPOST) is ActionResult.CONFIRMED
+    assert driver.clicked_labels == ["Share", "Repost"]
+
+
+def test_execute_repost_consolidates_semantic_state_queries() -> None:
+    driver = SemanticActionDriver()
+    device = AppiumTikTokDevice(driver, poll_interval=0, action_timeout=0)
+
+    assert device.execute_outcome(OutcomeKind.REPOST) is ActionResult.CONFIRMED
+
+    assert len(driver.semantic_queries) == 3
+
+
+def test_execute_repost_keeps_duplicate_controls_uncertain() -> None:
+    driver = AmbiguousSemanticActionDriver(OutcomeKind.REPOST)
+    driver.share_open = True
+    device = AppiumTikTokDevice(driver, poll_interval=0, action_timeout=0)
+
+    assert device.execute_outcome(OutcomeKind.REPOST) is ActionResult.UNCERTAIN
+    assert driver.clicked_labels == []
+
+
+def test_execute_repost_reports_visible_unavailable_share_surface() -> None:
+    driver = RepostUnavailableDriver()
+    device = AppiumTikTokDevice(driver, poll_interval=0, action_timeout=0)
+
+    assert device.execute_outcome(OutcomeKind.REPOST).value == "unavailable"
+    assert driver.clicked_labels == ["Share"]
+
+
+def test_execute_repost_keeps_hidden_share_surface_uncertain() -> None:
+    driver = HiddenRepostUnavailableDriver()
+    device = AppiumTikTokDevice(driver, poll_interval=0, action_timeout=0)
+
+    assert device.execute_outcome(OutcomeKind.REPOST) is ActionResult.UNCERTAIN
+    assert driver.clicked_labels == ["Share"]
+
+
+def test_reconcile_liked_video_does_not_click_again() -> None:
+    driver = SemanticActionDriver()
+    driver.liked = True
+    device = AppiumTikTokDevice(driver, poll_interval=0, action_timeout=0)
+
+    assert device.reconcile_outcome(OutcomeKind.LIKE) is ActionResult.CONFIRMED
+    assert driver.clicked_labels == []
+
+
+def test_repost_resume_uses_already_open_share_surface() -> None:
+    driver = SemanticActionDriver()
+    driver.share_open = True
+    device = AppiumTikTokDevice(driver, poll_interval=0, action_timeout=0)
+
+    assert device.reconcile_outcome(OutcomeKind.REPOST) is ActionResult.NOT_APPLIED
+    assert device.execute_outcome(OutcomeKind.REPOST) is ActionResult.CONFIRMED
+    assert driver.clicked_labels == ["Repost"]
+
+
+def test_capture_diagnostics_records_screenshot_activity_window_and_controls(
+    tmp_path: Path,
+) -> None:
+    driver = FakeDriver()
+    driver.current_activity = "DeepLinkActivityV2"
+    driver.get_window_size = lambda: {"width": 1080, "height": 1920}
+
+    def save_screenshot(path: str) -> bool:
+        Path(path).write_bytes(b"png-evidence")
+        return True
+
+    driver.save_screenshot = save_screenshot
+    device = AppiumTikTokDevice(driver, diagnostics_dir=tmp_path)
+
+    diagnostics = device.capture_diagnostics()
+
+    assert diagnostics.screenshot_path.startswith(str(tmp_path))
+    assert Path(diagnostics.screenshot_path).is_file()
+    assert "activity=DeepLinkActivityV2" in diagnostics.ui_summary
+    assert "window=1080x1920" in diagnostics.ui_summary
+    assert "Like video." in diagnostics.ui_summary

@@ -347,7 +347,7 @@ git commit -m "feat: add lead conversation policy"
 - Modify: `src/tikpoc/messaging.py:50-109`
 - Modify: `tests/test_messaging.py`
 
-- [ ] **Step 1: Write a failing prompt-context test**
+- [x] **Step 1: Write a failing prompt-context test**
 
 ```python
 def test_lead_reply_prompt_contains_offer_stage_and_conditional_invite() -> None:
@@ -378,23 +378,23 @@ def test_lead_reply_prompt_contains_offer_stage_and_conditional_invite() -> None
     assert "WhatsApp: +1 555 0100" in system
 ```
 
-- [ ] **Step 2: Run the focused test and verify unexpected keyword failure**
+- [x] **Step 2: Run the focused test and verify unexpected keyword failure**
 
 Run: `uv run pytest tests/test_messaging.py -q`
 
 Expected: FAIL because `reply_conversation` lacks the new keyword arguments.
 
-- [ ] **Step 3: Extend `reply_conversation`**
+- [x] **Step 3: Extend `reply_conversation`**
 
 Add keyword-only `offer_context`, `faq_context`, `conversation_stage`, `should_invite`, and `fallback` parameters. Include the private channel only when `should_invite` is true. Use the per-account fallback for missing configuration or provider errors. Retain the same-language, concise, fact-bound response rules.
 
-- [ ] **Step 4: Run messaging tests**
+- [x] **Step 4: Run messaging tests**
 
 Run: `uv run pytest tests/test_messaging.py -q`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the AI prompt change**
+- [x] **Step 5: Commit the AI prompt change**
 
 ```bash
 git add src/tikpoc/messaging.py tests/test_messaging.py
@@ -408,7 +408,7 @@ git commit -m "feat: add conversion context to AI replies"
 - Create: `tests/test_browser_dm.py`
 - Modify: `src/tikpoc/db.py`
 
-- [ ] **Step 1: Write failing idempotency and result tests**
+- [x] **Step 1: Write failing idempotency and result tests**
 
 ```python
 class FakeReplyClient:
@@ -461,13 +461,13 @@ budget. Define `service_with_confirmed_history()` by appending alternating
 inbound/outbound rows through `Database.append_web_message` before constructing
 the service.
 
-- [ ] **Step 2: Run the tests and verify module import failure**
+- [x] **Step 2: Run the tests and verify module import failure**
 
 Run: `uv run pytest tests/test_browser_dm.py -q`
 
 Expected: FAIL because `tikpoc.browser_dm` does not exist.
 
-- [ ] **Step 3: Implement immutable request and response records**
+- [x] **Step 3: Implement immutable request and response records**
 
 ```python
 @dataclass(frozen=True)
@@ -490,7 +490,7 @@ class BrowserReply:
     stage: str
 ```
 
-- [ ] **Step 4: Implement `BrowserDmService`**
+- [x] **Step 4: Implement `BrowserDmService`**
 
 Use one `threading.Lock` per `account_id`. Validate the registry mapping, return
 an existing completed plan before calling AI, append the inbound message with its
@@ -501,13 +501,13 @@ complete the plan, and update stage counters atomically. `record_result` accepts
 advances reply/funnel counters. Record `invite_configuration_missing` when the
 policy requests an invitation and the account has no destination.
 
-- [ ] **Step 5: Run service, database, and messaging tests**
+- [x] **Step 5: Run service, database, and messaging tests**
 
 Run: `uv run pytest tests/test_browser_dm.py tests/test_web_events_db.py tests/test_messaging.py -q`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit the service**
+- [x] **Step 6: Commit the service**
 
 ```bash
 git add src/tikpoc/browser_dm.py src/tikpoc/db.py tests/test_browser_dm.py
@@ -520,7 +520,7 @@ git commit -m "feat: plan idempotent browser DM replies"
 - Modify: `src/tikpoc/dashboard.py:19-285`
 - Modify: `tests/test_dashboard_api.py`
 
-- [ ] **Step 1: Write failing end-to-end HTTP tests**
+- [x] **Step 1: Write failing end-to-end HTTP tests**
 
 Add a fake `BrowserDmService` and cover these exact routes:
 
@@ -551,27 +551,27 @@ Implement `post_json` in the test with `urllib.request.Request`, reuse the
 existing `_start_server` thread helper, and define `FakeBrowserDmService.plan`
 and `record_result` with the exact `BrowserReply` fields from Task 5.
 
-- [ ] **Step 2: Run the endpoint tests and verify 404 responses**
+- [x] **Step 2: Run the endpoint tests and verify 404 responses**
 
 Run: `uv run pytest tests/test_dashboard_api.py -q`
 
 Expected: FAIL because the new routes return 404.
 
-- [ ] **Step 3: Inject the browser DM service**
+- [x] **Step 3: Inject the browser DM service**
 
 Add `browser_dm_service: BrowserDmService | None` to `DashboardServer` and `create_server`. When a registry exists and no service is injected, construct `BrowserDmService(database, registry, AiReplyClient.from_environment())`.
 
-- [ ] **Step 4: Add strict JSON handlers**
+- [x] **Step 4: Add strict JSON handlers**
 
 Implement private handlers for reply plan/result, lease claim/result, and health. Reuse `_required_text`, validate account/device mapping once, enforce integer plan IDs and timestamps, and return JSON objects with stable keys. Extend `OPTIONS` handling to every browser POST path.
 
-- [ ] **Step 5: Run endpoint and full Python tests**
+- [x] **Step 5: Run endpoint and full Python tests**
 
 Run: `uv run pytest tests/test_dashboard_api.py -q && uv run pytest -q`
 
 Expected: all tests PASS.
 
-- [ ] **Step 6: Commit the endpoints**
+- [x] **Step 6: Commit the endpoints**
 
 ```bash
 git add src/tikpoc/dashboard.py tests/test_dashboard_api.py
@@ -584,7 +584,7 @@ git commit -m "feat: expose browser DM conversion endpoints"
 - Create: `chrome-event-bridge/dm-core.js`
 - Create: `chrome-event-bridge/dm-core.test.js`
 
-- [ ] **Step 1: Write failing Node tests**
+- [x] **Step 1: Write failing Node tests**
 
 ```javascript
 const test = require("node:test");
@@ -617,23 +617,23 @@ test("reconciles an exact outbound bubble", () => {
 });
 ```
 
-- [ ] **Step 2: Run Node tests and verify module-not-found failure**
+- [x] **Step 2: Run Node tests and verify module-not-found failure**
 
 Run: `node --test chrome-event-bridge/dm-core.test.js`
 
 Expected: FAIL because `dm-core.js` does not exist.
 
-- [ ] **Step 3: Implement the UMD-style core module**
+- [x] **Step 3: Implement the UMD-style core module**
 
 Export `normalizeText`, `conversationKey`, `isActionableInbound`, `fingerprintMessage`, `sameInbound`, `findSemanticButton`, and `hasMatchingOutbound`. Use `globalThis.crypto.subtle.digest("SHA-256", ...)` in Chrome and `require("node:crypto").webcrypto` in Node. Accept only `tiktok.com` Messages URLs or a normalized username fallback.
 
-- [ ] **Step 4: Run all extension core tests**
+- [x] **Step 4: Run all extension core tests**
 
 Run: `node --test chrome-event-bridge/core.test.js chrome-event-bridge/dm-core.test.js`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the core**
+- [x] **Step 5: Commit the core**
 
 ```bash
 git add chrome-event-bridge/dm-core.js chrome-event-bridge/dm-core.test.js
@@ -647,33 +647,33 @@ git commit -m "feat: add browser DM identity core"
 - Modify: `chrome-event-bridge/background.js:1-62`
 - Modify: `chrome-event-bridge/manifest.json`
 
-- [ ] **Step 1: Add localhost transport messages**
+- [x] **Step 1: Add localhost transport messages**
 
 Define these message types in `background.js`: `TIKPOC_DM_PLAN`, `TIKPOC_DM_RESULT`, `TIKPOC_ACTION_CLAIM`, `TIKPOC_ACTION_RESULT`, and `TIKPOC_BROWSER_HEALTH`. Route each through a shared `postLocal(dashboardUrl, path, body)` that retains the existing localhost origin validation.
 
-- [ ] **Step 2: Add DM scripts and permissions to the manifest**
+- [x] **Step 2: Add DM scripts and permissions to the manifest**
 
 Load scripts in this order: `core.js`, `dm-core.js`, `content.js`, `dm-content.js`. Add `alarms` and `tabs` permissions while retaining `storage` and localhost host permissions.
 
-- [ ] **Step 3: Implement the page adapter in `dm-content.js`**
+- [x] **Step 3: Implement the page adapter in `dm-content.js`**
 
 Create focused functions `pageRole`, `visible`, `elementLabel`, `conversationRows`, `openConversation`, `readActiveConversation`, `findComposer`, `setComposerText`, `findSendButton`, and `waitForOutbound`. Prefer accessible roles, labels, links, and `data-e2e` attributes; treat hashed class names as diagnostics only.
 
-- [ ] **Step 4: Implement the serialized observer**
+- [x] **Step 4: Implement the serialized observer**
 
 On `/messages`, establish a per-account baseline in `chrome.storage.local`, observe `document.documentElement`, debounce for 250 ms, and process one changed/unread row at a time. Build the inbound fingerprint, request a plan, re-read the active thread, claim `dm_send:<plan_id>`, fill the composer, click Send, reconcile the outbound bubble, post the result, and release the lease.
 
-- [ ] **Step 5: Add browser health reporting**
+- [x] **Step 5: Add browser health reporting**
 
 Report account, device, `messages` page role, URL path, signed-in signal, and current timestamp on load and every extension alarm. Exclude message text from health payloads.
 
-- [ ] **Step 6: Run JS syntax and core tests**
+- [x] **Step 6: Run JS syntax and core tests**
 
 Run: `node --check chrome-event-bridge/background.js && node --check chrome-event-bridge/dm-content.js && node --test chrome-event-bridge/core.test.js chrome-event-bridge/dm-core.test.js`
 
 Expected: syntax checks and tests PASS.
 
-- [ ] **Step 7: Commit the DM content bridge**
+- [x] **Step 7: Commit the DM content bridge**
 
 ```bash
 git add chrome-event-bridge/background.js chrome-event-bridge/dm-content.js chrome-event-bridge/manifest.json

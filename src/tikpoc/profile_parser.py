@@ -18,14 +18,40 @@ def parse_visible_post_keys(page_source: str) -> tuple[str, ...]:
     return tuple(
         node.attrib.get("text", "").strip()
         for node in root.iter()
-        if node.attrib.get("resource-id", "").endswith(":id/tv_play_count")
+        if node.attrib.get("resource-id", "").endswith((":id/tv_play_count", ":id/z9h"))
         and node.attrib.get("text", "").strip()
     )
 
 
+def parse_profile_username(page_source: str) -> str:
+    root = ElementTree.fromstring(page_source)
+    for node in root.iter():
+        resource_id = node.attrib.get("resource-id", "")
+        if resource_id.endswith((":id/s7e", ":id/rgn")):
+            return node.attrib.get("text", "").strip().removeprefix("@").lower()
+    return ""
+
+
+def profile_surface_visible(page_source: str) -> bool:
+    root = ElementTree.fromstring(page_source)
+    for node in root.iter():
+        text = node.attrib.get("text", "").strip()
+        description = node.attrib.get("content-desc", "").strip()
+        resource_id = node.attrib.get("resource-id", "")
+        if (
+            "this account is private" in text.lower()
+            or "this account is private" in description.lower()
+            or "此帐户为私密帐户" in text
+            or "此帐户为私密帐户" in description
+            or resource_id.endswith((":id/s5x", ":id/rfc"))
+        ):
+            return True
+    return False
+
+
 def parse_profile_page(page_source: str) -> ProfilePage:
     root = ElementTree.fromstring(page_source)
-    username = ""
+    username = parse_profile_username(page_source)
     stats: dict[str, int] = {}
     pending_value: str | None = None
     visible_post_count = 0
@@ -34,11 +60,9 @@ def parse_profile_page(page_source: str) -> ProfilePage:
     for node in root.iter():
         resource_id = node.attrib.get("resource-id", "")
         text = node.attrib.get("text", "").strip()
-        if resource_id.endswith(":id/s7e"):
-            username = text.removeprefix("@").lower()
-        elif resource_id.endswith(":id/s5y"):
+        if resource_id.endswith((":id/s5y", ":id/rfd")):
             pending_value = text
-        elif resource_id.endswith(":id/s5x") and pending_value is not None:
+        elif resource_id.endswith((":id/s5x", ":id/rfc")) and pending_value is not None:
             label = text.lower()
             if label == "follower":
                 label = "followers"

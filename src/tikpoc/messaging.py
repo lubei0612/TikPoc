@@ -1,7 +1,163 @@
 import json
 import os
+import time
 from collections.abc import Callable
 from urllib.request import Request, urlopen
+
+from .runtime_settings import ProviderCredentials
+
+
+_PROMPT_CONTEXT_LIMIT = 3_000
+_PROMPT_DESTINATION_LIMIT = 500
+_PROMPT_STAGE_LIMIT = 32
+_SYSTEM_PROMPT_LIMIT = 8_000
+_DEFAULT_FALLBACK = (
+    "Thank you for contacting us. I'm the AI customer-service assistant. "
+    "Which product details would you like to know first?"
+)
+
+
+def probe_openai_provider(
+    provider: ProviderCredentials,
+    *,
+    opener: Callable = urlopen,
+    clock: Callable[[], float] = time.perf_counter,
+) -> tuple[bool, int]:
+    started = clock()
+    if not (provider.base_url and provider.api_key and provider.model):
+        return False, max(0, int((clock() - started) * 1_000))
+    payload = {
+        "model": provider.model,
+        "temperature": 0,
+        "max_tokens": 8,
+        "messages": [{"role": "user", "content": "Reply with OK."}],
+    }
+    try:
+        request = Request(
+            f"{provider.base_url.rstrip('/')}/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {provider.api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with opener(request, timeout=30) as response:
+            data = json.loads(response.read())
+        content = data["choices"][0]["message"]["content"]
+        ok = isinstance(content, str) and bool(content.strip())
+    except (OSError, KeyError, IndexError, TypeError, ValueError):
+        ok = False
+    return ok, max(0, int((clock() - started) * 1_000))
+
+
+def _bounded_prompt_fragment(value: str, limit: int) -> str:
+    return " ".join(str(value or "").split())[:limit]
+
+
+def _normalize_fallback(per_call: str | None, client: str) -> str:
+    for candidate in (per_call, client):
+        normalized = str(candidate or "").strip()
+        if normalized:
+            return normalized
+    return _DEFAULT_FALLBACK
+
+
+def _build_system_prompt(
+    *,
+    offer_context: str,
+    faq_context: str,
+    conversation_stage: str,
+    should_invite: bool,
+    private_channel_hint: str,
+    ask_private_channel_preference: bool,
+    reply_tone: str,
+    brand_name: str,
+    introduce_ai: bool,
+    response_mode: str,
+    welcome_language: str,
+    profile_contact_due: bool,
+    profile_contact_reason: str,
+) -> str:
+    if response_mode not in {"conversation", "new_follower_welcome"}:
+        raise ValueError("invalid AI response mode")
+    parts = [
+        (
+            "Reply to the TikTok sender in the same language they use."
+            if response_mode == "conversation"
+            else "Write the welcome in "
+            + _bounded_prompt_fragment(welcome_language, 50)
+            + "."
+        ),
+        "Act as a warm, professional brand customer-service assistant. Write one "
+        "to three short sentences and ask at most one question.",
+        "Use this service flow naturally, without headings: Acknowledge the "
+        "customer's specific intent; Assist with the most useful confirmed answer; "
+        "Advance with one low-effort question only when needed; Assure them of the "
+        "next step and close warmly.",
+        "Answer the sender's actual question before qualifying. Avoid generic "
+        "openers, repeated thanks, empty offers to help, multiple questions, and "
+        "aggressive sales language.",
+        "Conversation stage: "
+        + _bounded_prompt_fragment(conversation_stage, _PROMPT_STAGE_LIMIT),
+        "Account offer facts: "
+        + _bounded_prompt_fragment(offer_context, _PROMPT_CONTEXT_LIMIT),
+        "FAQ facts: " + _bounded_prompt_fragment(faq_context, _PROMPT_CONTEXT_LIMIT),
+        "Use only the supplied account offer and FAQ facts. Do not invent prices, "
+        "inventory, delivery promises, discounts, payment instructions, refund "
+        "decisions, links, or contact details.",
+    ]
+    brand = _bounded_prompt_fragment(brand_name, 200)
+    if introduce_ai:
+        identity = (
+            f"{brand}'s AI customer-service assistant"
+            if brand
+            else "an AI customer-service assistant"
+        )
+        parts.append(
+            f"On the first reply only, briefly introduce yourself as {identity}. "
+            "Keep the disclosure to one clause and still answer or advance the "
+            "customer's request."
+        )
+    else:
+        parts.append("Do not repeat an AI or brand introduction in this reply.")
+    if response_mode == "new_follower_welcome":
+        parts.append(
+            "Thank the person for following, introduce the AI service role, and ask "
+            "one direct product-interest question grounded in the supplied offer "
+            "facts. When the offer facts describe mirror-quality bags, ask whether "
+            "the person is interested in those bags. Do not include WhatsApp, "
+            "Telegram, or any private-channel destination."
+        )
+    tone = _bounded_prompt_fragment(reply_tone, 500)
+    if tone:
+        parts.append(f"Account reply tone: {tone}")
+    if ask_private_channel_preference:
+        parts.append(
+            "Ask whether the sender prefers WhatsApp or Telegram. Do not include "
+            "either destination until the sender chooses one."
+        )
+    if should_invite:
+        destination = _bounded_prompt_fragment(
+            private_channel_hint, _PROMPT_DESTINATION_LIMIT
+        )
+        if destination:
+            parts.append(
+                "Include one private-channel invitation using exactly this "
+                f"destination: {destination}. Do not repeat it if it already appears "
+                "in the conversation, answer the sender's question first, and end "
+                "with one short natural sentence inviting interested buyers to "
+                "contact that destination for details or purchasing."
+            )
+    if profile_contact_due:
+        reason = _bounded_prompt_fragment(profile_contact_reason, 100)
+        parts.append(
+            "Direct the customer to the link on the TikTok account profile or the "
+            "contact details in pinned profile posts. Do not include a stored direct "
+            "destination, promise a live transfer, or claim a person is currently "
+            f"available. Contact-route reason: {reason or 'customer interest'}."
+        )
+    return "\n".join(parts)[:_SYSTEM_PROMPT_LIMIT]
 
 
 class AiReplyClient:
@@ -12,7 +168,7 @@ class AiReplyClient:
         api_key: str,
         model: str,
         opener: Callable = urlopen,
-        fallback: str = "Thanks for your message. How can I help?",
+        fallback: str = _DEFAULT_FALLBACK,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -52,11 +208,28 @@ class AiReplyClient:
         history: list[dict[str, object]],
         *,
         private_channel_hint: str = "",
+        offer_context: str = "",
+        faq_context: str = "",
+        conversation_stage: str = "",
+        should_invite: bool = False,
+        ask_private_channel_preference: bool = False,
+        reply_tone: str = "",
+        brand_name: str = "",
+        introduce_ai: bool = False,
+        response_mode: str = "conversation",
+        welcome_language: str = "English",
+        profile_contact_due: bool = False,
+        profile_contact_reason: str = "",
+        fallback: str | None = None,
         max_history_messages: int = 12,
         max_characters: int = 300,
     ) -> str:
-        if not self.base_url or not self.api_key or not self.model:
-            return self.fallback
+        effective_fallback = _normalize_fallback(fallback, self.fallback)
+        reply_limit = max(1, int(max_characters))
+        bounded_fallback = effective_fallback[:reply_limit]
+        if not (self.base_url and self.api_key and self.model):
+            return bounded_fallback
+
         selected = history[-max(1, int(max_history_messages)) :]
         conversation: list[dict[str, str]] = []
         for item in selected:
@@ -65,15 +238,6 @@ class AiReplyClient:
                 continue
             role = "assistant" if item.get("direction") == "outbound" else "user"
             conversation.append({"role": role, "content": text[:1000]})
-        handoff = private_channel_hint.strip()
-        handoff_instruction = (
-            " When it is contextually useful, invite the sender to continue through "
-            f"this private channel: {handoff}. Do not repeat the handoff if it already "
-            "appears in the conversation, and never force it before answering the "
-            "sender's question."
-            if handoff
-            else ""
-        )
         payload = {
             "model": self.model,
             "temperature": 0.4,
@@ -81,29 +245,87 @@ class AiReplyClient:
             "messages": [
                 {
                     "role": "system",
-                    "content": (
-                        "Reply to a TikTok direct message in the same language as "
-                        "the sender. Be natural, concise, answer the actual question, "
-                        "and do not invent prices, promises, links, or contact details."
-                        + handoff_instruction
+                    "content": _build_system_prompt(
+                        offer_context=offer_context,
+                        faq_context=faq_context,
+                        conversation_stage=conversation_stage,
+                        should_invite=should_invite,
+                        private_channel_hint=private_channel_hint,
+                        ask_private_channel_preference=ask_private_channel_preference,
+                        reply_tone=reply_tone,
+                        brand_name=brand_name,
+                        introduce_ai=introduce_ai,
+                        response_mode=response_mode,
+                        welcome_language=welcome_language,
+                        profile_contact_due=profile_contact_due,
+                        profile_contact_reason=profile_contact_reason,
                     ),
                 },
                 *conversation,
             ],
         }
-        request = Request(
-            f"{self.base_url}/chat/completions",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
         try:
-            with self.opener(request, timeout=30) as response:
-                data = json.loads(response.read())
-            content = str(data["choices"][0]["message"]["content"]).strip()
-            return content[: max(1, int(max_characters))] or self.fallback
-        except (KeyError, IndexError, TypeError, ValueError, OSError):
-            return self.fallback
+            request = Request(
+                f"{self.base_url}/chat/completions",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+        except (TypeError, ValueError):
+            return bounded_fallback
+
+        try:
+            response_context = self.opener(request, timeout=30)
+        except OSError:
+            return bounded_fallback
+
+        try:
+            with response_context as response:
+                body = response.read()
+        except OSError:
+            return bounded_fallback
+
+        try:
+            data = json.loads(body)
+            content = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError, ValueError):
+            return bounded_fallback
+        if isinstance(content, str) and content.strip():
+            return content.strip()[:reply_limit]
+        return bounded_fallback
+
+
+class RuntimeAiReplyClient:
+    def __init__(
+        self,
+        credentials_loader: Callable[[], ProviderCredentials],
+        *,
+        opener: Callable = urlopen,
+        fallback: str = _DEFAULT_FALLBACK,
+    ) -> None:
+        self.credentials_loader = credentials_loader
+        self.opener = opener
+        self.fallback = fallback
+
+    def _client(self) -> AiReplyClient:
+        provider = self.credentials_loader()
+        return AiReplyClient(
+            base_url=provider.base_url,
+            api_key=provider.api_key,
+            model=provider.model,
+            opener=self.opener,
+            fallback=self.fallback,
+        )
+
+    def reply(self, message: str) -> str:
+        return self._client().reply(message)
+
+    def reply_conversation(
+        self,
+        history: list[dict[str, object]],
+        **kwargs: object,
+    ) -> str:
+        return self._client().reply_conversation(history, **kwargs)

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.tikpoc.proxy-guard</string>
+    <key>ProgramArguments</key>
+    <array>
+      <string>/usr/bin/env</string>
+      <string>UV_CACHE_DIR=/Users/chenyuqi/Desktop/tik/.uv-cache</string>
+      <string>/Users/chenyuqi/.local/bin/uv</string>
+      <string>run</string>
+      <string>--project</string>
+      <string>/Users/chenyuqi/Desktop/tik</string>
+      <string>tikpoc</string>
+      <string>proxy-guard</string>
+      <string>--devices</string>
+      <string>/Users/chenyuqi/Desktop/tik/config/settings.yaml</string>
+      <string>--interval</string>
+      <string>30</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/chenyuqi/Library/Logs/TikPoc/proxy-guard.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/chenyuqi/Library/Logs/TikPoc/proxy-guard.err.log</string>
+  </dict>
+</plist>

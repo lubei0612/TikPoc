@@ -3,7 +3,7 @@
   "name": "TikPoc Event Bridge",
   "version": "0.1.0",
   "description": "Relays TikTok follower events to the local TikPoc dashboard.",
-  "permissions": ["storage"],
+  "permissions": ["storage", "alarms", "tabs", "debugger"],
   "host_permissions": [
     "http://127.0.0.1/*",
     "http://localhost/*"
@@ -14,8 +14,21 @@
   "content_scripts": [
     {
       "matches": ["https://www.tiktok.com/*"],
-      "js": ["core.js", "content.js"],
+      "exclude_matches": [
+        "https://www.tiktok.com/messages*",
+        "https://www.tiktok.com/business-suite/*"
+      ],
+      "js": ["core.js", "binding-core.js", "options-core.js", "auto-connect-core.js", "auto-connect.js", "content.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.tiktok.com/messages*",
+        "https://www.tiktok.com/business-suite/messages*"
+      ],
+      "js": ["dm-core.js", "binding-core.js", "options-core.js", "dm-content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ],
   "action": {

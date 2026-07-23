@@ -1,0 +1,63 @@
+import { Check, Clock3, RotateCcw, TriangleAlert } from "lucide-react";
+
+import type { CoverageAssignment, CoverageSnapshot } from "../api";
+import { localizeValue } from "../localization";
+
+interface CoverageTableProps {
+  coverage: CoverageSnapshot;
+  pendingKeys: ReadonlySet<string>;
+  rowErrors: Record<number, string>;
+  onRetry: (assignmentId: number) => void;
+}
+
+function statusIcon(assignment: CoverageAssignment) {
+  if (assignment.completed) return <Check size={14} aria-hidden="true" />;
+  if (assignment.phase === "deferred") return <TriangleAlert size={14} aria-hidden="true" />;
+  return <Clock3 size={14} aria-hidden="true" />;
+}
+
+export function CoverageTable({ coverage, pendingKeys, rowErrors, onRetry }: CoverageTableProps) {
+  const deviceIds = Array.from(new Set(coverage.items.flatMap((item) => item.devices.map((item) => item.device_id))));
+  return (
+    <div className="coverage-scroll" data-testid="coverage-scroller">
+      <table className="operations-table coverage-table" data-testid="coverage-matrix">
+        <thead><tr><th className="sticky-target" data-testid="coverage-target-header">目标</th>{deviceIds.map((id) => <th key={id}>{id}</th>)}</tr></thead>
+        <tbody>
+          {coverage.items.map((target) => (
+            <tr key={target.identity_key}>
+              <td className="sticky-target"><strong>{target.username}</strong><small>{target.identity_key}</small></td>
+              {deviceIds.map((deviceId) => {
+                const assignment = target.devices.find((item) => item.device_id === deviceId);
+                if (!assignment) return <td key={deviceId}><span className="muted">缺失</span></td>;
+                const retryable = assignment.phase === "deferred";
+                const pending = pendingKeys.has(`retry:${assignment.assignment_id}`);
+                return (
+                  <td key={deviceId}>
+                    <div className={`coverage-state coverage-${assignment.phase}`}>
+                      <span>{statusIcon(assignment)}{localizeValue(assignment.phase)}</span>
+                      {assignment.last_error_code && <small>{assignment.last_error_code}</small>}
+                      {retryable && (
+                        <button
+                          aria-label={`重试 ${deviceId} 对 ${target.username} 的任务`}
+                          className="retry-button"
+                          disabled={pending}
+                          onClick={() => onRetry(assignment.assignment_id)}
+                          title={`重试 ${deviceId} 对 ${target.username} 的任务`}
+                          type="button"
+                        >
+                          <RotateCcw size={14} aria-hidden="true" />
+                          {pending ? "重试中" : "重试"}
+                        </button>
+                      )}
+                      {rowErrors[assignment.assignment_id] && <small className="cell-error" role="alert">{rowErrors[assignment.assignment_id]}</small>}
+                    </div>
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}

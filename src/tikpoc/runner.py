@@ -16,23 +16,41 @@ def should_wait_when_idle(*, event_driven: bool, control: str) -> bool:
     return event_driven and control == "running"
 
 
+def _myt_slot_offset(udid: str) -> int | None:
+    try:
+        port = int(str(udid).rsplit(":", 1)[1])
+    except (IndexError, ValueError):
+        return None
+    offset, remainder = divmod(port - 30_000, 100)
+    return offset if 0 <= offset < 100 and remainder == 0 else None
+
+
 def create_driver(appium_url: str, udid: str, *, command_timeout: int = 30):
-    options = UiAutomator2Options().load_capabilities(
-        {
-            "platformName": "Android",
-            "appium:automationName": "UiAutomator2",
-            "appium:udid": udid,
-            "appium:deviceName": udid,
-            "appium:appPackage": TIKTOK_PACKAGE,
-            "appium:noReset": True,
-            "appium:newCommandTimeout": 3600,
-        }
-    )
-    return webdriver.Remote(
+    capabilities = {
+        "platformName": "Android",
+        "appium:automationName": "UiAutomator2",
+        "appium:udid": udid,
+        "appium:deviceName": udid,
+        "appium:appPackage": TIKTOK_PACKAGE,
+        "appium:noReset": True,
+        "appium:newCommandTimeout": 3600,
+    }
+    slot_offset = _myt_slot_offset(udid)
+    if slot_offset is not None:
+        capabilities.update(
+            {
+                "appium:systemPort": 8200 + slot_offset,
+                "appium:mjpegServerPort": 9100 + slot_offset,
+            }
+        )
+    options = UiAutomator2Options().load_capabilities(capabilities)
+    driver = webdriver.Remote(
         appium_url,
         options=options,
         client_config=AppiumClientConfig(appium_url, timeout=command_timeout),
     )
+    driver.update_settings({"ignoreUnimportantViews": True, "waitForIdleTimeout": 0})
+    return driver
 
 
 def run_queue(

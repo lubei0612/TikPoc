@@ -1,4 +1,6 @@
 .venv/
+.DS_Store
+.ruff_cache/
 node_modules/
 TKAuto/
 *.egg-info/
@@ -12,9 +14,15 @@ __pycache__/
 logs/
 screenshots/
 config/settings.yaml
+config/devices.yaml
 config/web-accounts.yaml
 config/secrets/
+var/
 .env.local
 tiktok_comments_*.csv
 android-event-bridge/build/
 android-event-bridge/debug.keystore
+dist/
+operator-console/dist/
+playwright-report/
+test-results/

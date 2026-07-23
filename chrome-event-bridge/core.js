@@ -86,8 +86,128 @@
     return "other";
   }
 
-  function buildFollowerDedupKey(accountId, username) {
-    return `follower:${normalizeText(accountId).toLowerCase()}:${normalizeText(username).toLowerCase()}`;
+  function buildFollowerDedupKey(accountId, username, eventId = "") {
+    const base = `follower:${normalizeText(accountId).toLowerCase()}:${normalizeText(username).toLowerCase()}`;
+    const normalizedEventId = normalizeText(eventId).toLowerCase();
+    return normalizedEventId ? `${base}:${normalizedEventId}` : base;
+  }
+
+  function extractFollowerEventId(row) {
+    const stableAttributes = [
+      "data-event-id",
+      "data-notification-id",
+      "data-activity-id",
+      "data-id",
+    ];
+    for (const name of stableAttributes) {
+      const value = row && typeof row.getAttribute === "function"
+        ? normalizeText(row.getAttribute(name))
+        : "";
+      if (value) {
+        return value;
+      }
+    }
+    const nestedIdentity = row && typeof row.querySelector === "function"
+      ? row.querySelector(stableAttributes.map((name) => `[${name}]`).join(", "))
+      : null;
+    for (const name of stableAttributes) {
+      const value = nestedIdentity && typeof nestedIdentity.getAttribute === "function"
+        ? normalizeText(nestedIdentity.getAttribute(name))
+        : "";
+      if (value) {
+        return value;
+      }
+    }
+    const timestamp = row && typeof row.querySelector === "function"
+      ? row.querySelector("time, [data-timestamp], [data-time]")
+      : null;
+    for (const name of ["datetime", "data-timestamp", "data-time"]) {
+      const value = timestamp && typeof timestamp.getAttribute === "function"
+        ? normalizeText(timestamp.getAttribute(name))
+        : "";
+      if (value) {
+        return value;
+      }
+    }
+    return normalizeText(timestamp && timestamp.textContent);
+  }
+
+  function browserFeatureEnabled(settings, featureKey) {
+    return Boolean(settings && settings.enabled && settings[featureKey] !== false);
+  }
+
+  function createCoalescingRunner(run) {
+    let active = null;
+    let requested = false;
+
+    async function drain() {
+      do {
+        requested = false;
+        await run();
+      } while (requested);
+    }
+
+    return function request() {
+      requested = true;
+      if (!active) {
+        active = drain().finally(() => {
+          active = null;
+        });
+      }
+      return active;
+    };
+  }
+
+  function installContinuousTriggers(documentValue, windowValue, schedule) {
+    if (documentValue && typeof documentValue.addEventListener === "function") {
+      documentValue.addEventListener("visibilitychange", schedule);
+    }
+    if (windowValue && typeof windowValue.addEventListener === "function") {
+      for (const eventName of ["pageshow", "popstate", "hashchange"]) {
+        windowValue.addEventListener(eventName, schedule);
+      }
+    }
+  }
+
+  function installWatchdog(setIntervalValue, schedule) {
+    return setIntervalValue(schedule, 15_000);
+  }
+
+  function shouldOpenActivity(
+    autoOpen,
+    panelVisible,
+    lastOpenedAt,
+    now = Date.now(),
+  ) {
+    return Boolean(
+      autoOpen &&
+      !panelVisible &&
+      Number(now) - Number(lastOpenedAt || 0) >= 15_000
+    );
+  }
+
+  function followerBaselineReady(value) {
+    return Boolean(value && typeof value === "object" && value.version === 2);
+  }
+
+  function followerScanPhase({ baselineReady, followbackEnabled }) {
+    if (!baselineReady) {
+      return "baseline";
+    }
+    return followbackEnabled ? "action" : "observe";
+  }
+
+  function shouldEstablishFollowerBaseline({
+    candidateCount,
+    activityOpenedAt,
+    now = Date.now(),
+    emptyWaitMs = 30_000,
+  }) {
+    if (Number(candidateCount || 0) > 0) {
+      return true;
+    }
+    const openedAt = Number(activityOpenedAt || 0);
+    return openedAt > 0 && Number(now) - openedAt >= Number(emptyWaitMs);
   }
 
   function shouldAttemptRecord(
@@ -138,12 +258,21 @@
   }
 
   return {
+    browserFeatureEnabled,
     buildFollowerDedupKey,
     classifyCandidate,
+    createCoalescingRunner,
+    extractFollowerEventId,
+    followerBaselineReady,
+    followerScanPhase,
     followButtonState,
     isFollowerNotification,
+    installContinuousTriggers,
+    installWatchdog,
     normalizeText,
     parseTikTokProfileUrl,
     shouldAttemptRecord,
+    shouldEstablishFollowerBaseline,
+    shouldOpenActivity,
   };
 });

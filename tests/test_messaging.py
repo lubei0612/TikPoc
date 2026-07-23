@@ -1,9 +1,15 @@
 import json
 
-from tikpoc.messaging import AiReplyClient
+import pytest
+
+from tikpoc.messaging import AiReplyClient, RuntimeAiReplyClient
+from tikpoc.runtime_settings import RuntimeSettingsStore
 
 
 class FakeResponse:
+    def __init__(self, content: object = "Thanks, how can I help?") -> None:
+        self.content = content
+
     def __enter__(self):
         return self
 
@@ -12,8 +18,33 @@ class FakeResponse:
 
     def read(self) -> bytes:
         return json.dumps(
-            {"choices": [{"message": {"content": "Thanks, how can I help?"}}]}
+            {"choices": [{"message": {"content": self.content}}]}
         ).encode()
+
+
+class RawResponse:
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self.body
+
+
+class ReadErrorResponse:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args) -> None:
+        return None
+
+    def read(self) -> bytes:
+        raise OSError("response interrupted")
 
 
 def test_ai_reply_uses_openai_compatible_chat_endpoint() -> None:
@@ -42,7 +73,436 @@ def test_ai_reply_uses_openai_compatible_chat_endpoint() -> None:
 def test_ai_reply_falls_back_when_not_configured() -> None:
     client = AiReplyClient(base_url="", api_key="", model="")
 
-    assert client.reply("Hello") == "Thanks for your message. How can I help?"
+    assert (
+        client.reply("Hello")
+        == (
+            "Thank you for contacting us. I'm the AI customer-service assistant. "
+            "Which product details would you like to know first?"
+        )[:160]
+    )
+
+
+def test_runtime_ai_client_loads_latest_provider_for_each_request(
+    tmp_path, monkeypatch
+) -> None:
+    for name in (
+        "TKAUTO_LLM_BASE_URL",
+        "TKAUTO_LLM_API_KEY",
+        "TKAUTO_LLM_MODEL",
+        "MODEL_MONITOR_LLM_BASE_URL",
+        "MODEL_MONITOR_LLM_API_KEY",
+        "MODEL_MONITOR_LLM_MODEL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    requests = []
+
+    def opener(request, timeout):
+        requests.append(request)
+        return FakeResponse()
+
+    store = RuntimeSettingsStore(tmp_path / "operator-settings.json")
+    client = RuntimeAiReplyClient(store.provider_credentials, opener=opener)
+    assert client.reply("Hello").startswith("Thank you for contacting us.")
+
+    store.save_provider(
+        base_url="https://provider.example/v1",
+        api_key="synthetic-secret",
+        model="model-b",
+    )
+
+    assert client.reply("Hello") == "Thanks, how can I help?"
+    assert requests[0].full_url == "https://provider.example/v1/chat/completions"
+
+
+def test_lead_reply_prompt_contains_offer_faq_stage_and_invite() -> None:
+    requests = []
+
+    def opener(request, timeout):
+        requests.append(request)
+        return FakeResponse("Happy to help. WhatsApp: +1 555 0100")
+
+    client = AiReplyClient(
+        base_url="https://llm.example/v1",
+        api_key="secret",
+        model="reply-model",
+        opener=opener,
+    )
+
+    client.reply_conversation(
+        [{"direction": "inbound", "text": "Do you have black bags?"}],
+        private_channel_hint="WhatsApp: +1 555 0100",
+        offer_context="Black bags are available in the current catalog.",
+        faq_context="Shipping usually takes 5-7 days.",
+        conversation_stage="qualified",
+        should_invite=True,
+    )
+
+    system = json.loads(requests[0].data)["messages"][0]["content"]
+    assert "Conversation stage: qualified" in system
+    assert "Black bags are available in the current catalog." in system
+    assert "Shipping usually takes 5-7 days." in system
+    assert "WhatsApp: +1 555 0100" in system
+
+
+def test_customer_service_prompt_uses_service_rubric_and_first_turn_disclosure() -> (
+    None
+):
+    requests = []
+
+    def opener(request, timeout):
+        requests.append(request)
+        return FakeResponse("A helpful answer")
+
+    client = AiReplyClient(
+        base_url="https://llm.example/v1",
+        api_key="secret",
+        model="reply-model",
+        opener=opener,
+    )
+
+    client.reply_conversation(
+        [{"direction": "inbound", "text": "Can I order one?"}],
+        brand_name="Sample Brand",
+        introduce_ai=True,
+    )
+
+    system = json.loads(requests[0].data)["messages"][0]["content"]
+    lowered = system.lower()
+    assert all(
+        word in lowered for word in ("acknowledge", "assist", "advance", "assure")
+    )
+    assert "one to three short sentences" in lowered
+    assert "at most one question" in lowered
+    assert "answer" in lowered and "before" in lowered
+    assert "Sample Brand's AI customer-service assistant" in system
+
+
+def test_customer_service_prompt_does_not_repeat_ai_disclosure() -> None:
+    requests = []
+
+    def opener(request, timeout):
+        requests.append(request)
+        return FakeResponse("A helpful answer")
+
+    client = AiReplyClient(
+        base_url="https://llm.example/v1",
+        api_key="secret",
+        model="reply-model",
+        opener=opener,
+    )
+
+    client.reply_conversation(
+        [
+            {"direction": "inbound", "text": "Hello"},
+            {"direction": "outbound", "text": "Welcome"},
+            {"direction": "inbound", "text": "Can I order one?"},
+        ],
+        brand_name="Sample Brand",
+        introduce_ai=False,
+    )
+
+    system = json.loads(requests[0].data)["messages"][0]["content"]
+    assert "Sample Brand's AI customer-service assistant" not in system
+    assert "Do not repeat an AI or brand introduction" in system
+
+
+def test_new_follower_welcome_uses_default_language_without_private_channels() -> None:
+    requests = []
+
+    def opener(request, timeout):
+        requests.append(request)
+        return FakeResponse("A welcome")
+
+    client = AiReplyClient(
+        base_url="https://llm.example/v1",
+        api_key="secret",
+        model="reply-model",
+        opener=opener,
+    )
+
+    client.reply_conversation(
+        [],
+        offer_context="Mirror-quality bags from the current catalog.",
+        brand_name="Sample Brand",
+        introduce_ai=True,
+        response_mode="new_follower_welcome",
+        welcome_language="English",
+    )
+
+    system = json.loads(requests[0].data)["messages"][0]["content"]
+    assert "Write the welcome in English" in system
+    assert "Sample Brand's AI customer-service assistant" in system
+    assert "Thank the person for following" in system
+    assert "Mirror-quality bags from the current catalog." in system
+    assert "one direct product-interest question" in system
+    assert "Do not include WhatsApp, Telegram" in system
+
+
+def test_profile_contact_prompt_excludes_stored_direct_destinations() -> None:
+    requests = []
+
+    def opener(request, timeout):
+        requests.append(request)
+        return FakeResponse("Please use the link on our TikTok profile.")
+
+    client = AiReplyClient(
+        base_url="https://llm.example/v1",
+        api_key="secret",
+        model="reply-model",
+        opener=opener,
+    )
+
+    client.reply_conversation(
+        [{"direction": "inbound", "text": "I need a refund"}],
+        private_channel_hint="SECRET_DESTINATION",
+        profile_contact_due=True,
+        profile_contact_reason="refund",
+    )
+
+    system = json.loads(requests[0].data)["messages"][0]["content"]
+    assert "link on the TikTok account profile" in system
+    assert "pinned profile posts" in system
+    assert "live transfer" in system
+    assert "SECRET_DESTINATION" not in system
+
+
+def test_lead_reply_prompt_bounds_context_and_excludes_private_values() -> None:
+    requests = []
+
+    def opener(request, timeout):
+        requests.append(request)
+        return FakeResponse()
+
+    api_key = "PRIVATE_API_KEY"
+    fallback = "PRIVATE_ACCOUNT_FALLBACK"
+    client = AiReplyClient(
+        base_url="https://llm.example/v1",
+        api_key=api_key,
+        model="reply-model",
+        opener=opener,
+    )
+
+    client.reply_conversation(
+        [{"direction": "inbound", "text": "What is available?"}],
+        private_channel_hint="SECRET_DESTINATION",
+        offer_context="Catalog offer " + "O" * 10_000,
+        faq_context="Shipping FAQ " + "F" * 10_000,
+        conversation_stage="qualified" + "S" * 1_000,
+        should_invite=False,
+        fallback=fallback,
+    )
+
+    system = json.loads(requests[0].data)["messages"][0]["content"]
+    assert "Catalog offer" in system
+    assert "Shipping FAQ" in system
+    assert len(system) <= 8_000
+    assert "SECRET_DESTINATION" not in system
+    assert api_key not in system
+    assert fallback not in system
+
+
+def test_reply_conversation_uses_per_call_fallback_when_not_configured() -> None:
+    client = AiReplyClient(
+        base_url="",
+        api_key="",
+        model="",
+        fallback="Client fallback",
+    )
+
+    reply = client.reply_conversation(
+        [{"direction": "inbound", "text": "Hello"}],
+        fallback="Account fallback",
+        max_characters=7,
+    )
+
+    assert reply == "Account"
+
+
+@pytest.mark.parametrize("fallback", ["", "   "])
+def test_reply_conversation_uses_client_fallback_for_blank_per_call_value_when_not_configured(
+    fallback: str,
+) -> None:
+    client = AiReplyClient(
+        base_url="",
+        api_key="",
+        model="",
+        fallback="Client fallback",
+    )
+
+    reply = client.reply_conversation(
+        [{"direction": "inbound", "text": "Hello"}],
+        fallback=fallback,
+        max_characters=6,
+    )
+
+    assert reply == "Client"
+
+
+def test_reply_conversation_uses_per_call_fallback_for_provider_error() -> None:
+    def opener(request, timeout):
+        raise OSError("provider unavailable")
+
+    client = AiReplyClient(
+        base_url="https://llm.example/v1",
+        api_key="secret",
+        model="reply-model",
+        opener=opener,
+        fallback="Client fallback",
+    )
+
+    reply = client.reply_conversation(
+        [{"direction": "inbound", "text": "Hello"}],
+        fallback="Account fallback",
+        max_characters=7,
+    )
+
+    assert reply == "Account"
+
+
+@pytest.mark.parametrize("fallback", ["", "   "])
+def test_reply_conversation_uses_client_fallback_for_blank_per_call_value_after_provider_error(
+    fallback: str,
+) -> None:
+    def opener(request, timeout):
+        raise OSError("provider unavailable")
+
+    client = AiReplyClient(
+        base_url="https://llm.example/v1",
+        api_key="secret",
+        model="reply-model",
+        opener=opener,
+        fallback="Client fallback",
+    )
+
+    reply = client.reply_conversation(
+        [{"direction": "inbound", "text": "Hello"}],
+        fallback=fallback,
+        max_characters=6,
+    )
+
+    assert reply == "Client"
+
+
+def test_reply_conversation_uses_builtin_fallback_for_blank_values() -> None:
+    client = AiReplyClient(
+        base_url="",
+        api_key="",
+        model="",
+        fallback="   ",
+    )
+
+    reply = client.reply_conversation(
+        [{"direction": "inbound", "text": "Hello"}],
+        fallback="",
+        max_characters=10,
+    )
+
+    assert reply == "Thank you "
+
+
+@pytest.mark.parametrize("exception_type", [TypeError, ValueError])
+def test_reply_conversation_propagates_opener_programming_errors(
+    exception_type: type[Exception],
+) -> None:
+    def opener(request, timeout):
+        raise exception_type("broken opener")
+
+    client = AiReplyClient(
+        base_url="https://llm.example/v1",
+        api_key="secret",
+        model="reply-model",
+        opener=opener,
+    )
+
+    with pytest.raises(exception_type, match="broken opener"):
+        client.reply_conversation(
+            [{"direction": "inbound", "text": "Hello"}],
+        )
+
+
+def test_reply_conversation_uses_fallback_for_response_read_error() -> None:
+    client = AiReplyClient(
+        base_url="https://llm.example/v1",
+        api_key="secret",
+        model="reply-model",
+        opener=lambda request, timeout: ReadErrorResponse(),
+    )
+
+    reply = client.reply_conversation(
+        [{"direction": "inbound", "text": "Hello"}],
+        fallback="Account fallback",
+        max_characters=7,
+    )
+
+    assert reply == "Account"
+
+
+@pytest.mark.parametrize("content", ["", "   ", None, {"text": "unexpected"}])
+def test_reply_conversation_uses_per_call_fallback_for_invalid_content(
+    content: object,
+) -> None:
+    client = AiReplyClient(
+        base_url="https://llm.example/v1",
+        api_key="secret",
+        model="reply-model",
+        opener=lambda request, timeout: FakeResponse(content),
+        fallback="Client fallback",
+    )
+
+    reply = client.reply_conversation(
+        [{"direction": "inbound", "text": "Hello"}],
+        fallback="Account fallback",
+        max_characters=7,
+    )
+
+    assert reply == "Account"
+
+
+def test_reply_conversation_uses_fallback_for_malformed_provider_url() -> None:
+    client = AiReplyClient(
+        base_url="not-a-url",
+        api_key="secret",
+        model="reply-model",
+        fallback="Client fallback",
+    )
+
+    reply = client.reply_conversation(
+        [{"direction": "inbound", "text": "Hello"}],
+        fallback="Account fallback",
+        max_characters=7,
+    )
+
+    assert reply == "Account"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"{malformed-json",
+        b"\xff",
+        json.dumps({}).encode(),
+        json.dumps({"choices": [{}]}).encode(),
+        json.dumps({"choices": [{"message": {}}]}).encode(),
+    ],
+)
+def test_reply_conversation_uses_fallback_for_malformed_provider_response(
+    body: bytes,
+) -> None:
+    client = AiReplyClient(
+        base_url="https://llm.example/v1",
+        api_key="secret",
+        model="reply-model",
+        opener=lambda request, timeout: RawResponse(body),
+        fallback="Client fallback",
+    )
+
+    reply = client.reply_conversation(
+        [{"direction": "inbound", "text": "Hello"}],
+        fallback="Account fallback",
+        max_characters=7,
+    )
+
+    assert reply == "Account"
 
 
 def test_ai_reply_uses_bounded_conversation_history_and_handoff_hint() -> None:
@@ -69,6 +529,7 @@ def test_ai_reply_uses_bounded_conversation_history_and_handoff_hint() -> None:
     client.reply_conversation(
         history,
         private_channel_hint="Continue on WhatsApp: example",
+        should_invite=True,
         max_history_messages=6,
     )
 
@@ -91,3 +552,47 @@ def test_ai_reply_uses_bounded_conversation_history_and_handoff_hint() -> None:
         "user",
         "assistant",
     ]
+
+
+def test_ai_reply_asks_channel_preference_without_disclosing_destinations() -> None:
+    requests = []
+
+    def opener(request, timeout):
+        requests.append(request)
+        return FakeResponse("Which channel do you prefer?")
+
+    client = AiReplyClient(
+        base_url="https://llm.example/v1",
+        api_key="secret",
+        model="reply-model",
+        opener=opener,
+    )
+
+    client.reply_conversation(
+        [{"direction": "inbound", "text": "I want to order"}],
+        private_channel_hint="CONTACT_A CHANNEL_A",
+        ask_private_channel_preference=True,
+        reply_tone="Brief and practical",
+    )
+
+    system = json.loads(requests[0].data)["messages"][0]["content"]
+    assert "Ask whether the sender prefers WhatsApp or Telegram" in system
+    assert "Brief and practical" in system
+    assert "CONTACT_A" not in system
+    assert "CHANNEL_A" not in system
+
+
+def test_reply_conversation_preserves_max_character_limit() -> None:
+    client = AiReplyClient(
+        base_url="https://llm.example/v1",
+        api_key="secret",
+        model="reply-model",
+        opener=lambda request, timeout: FakeResponse("A reply that is too long"),
+    )
+
+    reply = client.reply_conversation(
+        [{"direction": "inbound", "text": "Hello"}],
+        max_characters=7,
+    )
+
+    assert reply == "A reply"

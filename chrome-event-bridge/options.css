@@ -61,9 +61,15 @@ section {
 }
 
 h2 {
-  grid-row: 1 / span 3;
+  grid-column: 1;
+  grid-row: 1 / -1;
   margin: 5px 0 0;
   font-size: 15px;
+}
+
+section > label,
+section > button {
+  grid-column: 2;
 }
 
 label:not(.switch-row) {
@@ -75,7 +81,8 @@ label:not(.switch-row) {
 
 input[type="text"],
 input[type="url"],
-input:not([type]) {
+input:not([type]),
+select {
   width: 100%;
   min-height: 42px;
   border: 1px solid #b9c0c8;
@@ -86,7 +93,19 @@ input:not([type]) {
   font: inherit;
 }
 
+select:disabled {
+  background: var(--surface);
+  color: var(--muted);
+}
+
+label:not(.switch-row) small {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 input:focus-visible,
+select:focus-visible,
 button:focus-visible {
   outline: 3px solid rgba(232, 42, 79, 0.22);
   outline-offset: 2px;
@@ -175,6 +194,12 @@ footer {
   }
 
   h2 {
+    grid-column: auto;
     grid-row: auto;
+  }
+
+  section > label,
+  section > button {
+    grid-column: auto;
   }
 }

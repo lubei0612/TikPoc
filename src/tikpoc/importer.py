@@ -1,5 +1,5 @@
 import csv
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -12,6 +12,16 @@ _REQUIRED_COLUMNS = {
     "commenter_handle",
     "commenter_profile_url",
     "video_id",
+}
+
+_REQUIRED_USER_EXPORT_COLUMNS = {
+    "username",
+    "user_id",
+    "sec_uid",
+    "private",
+    "follower_count",
+    "following_count",
+    "video_count",
 }
 
 _REQUIRED_WORKBOOK_COLUMNS = {
@@ -35,6 +45,8 @@ class Target:
     sec_uid: str
     profile_metrics: ProfileMetrics | None = None
     private_account: bool | None = None
+    identity_key: str = ""
+    source_line_numbers: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -44,10 +56,86 @@ class ImportResult:
     skipped_invalid: int = 0
 
 
+def target_identity_key(*, sec_uid: str, target_id: str, username: str) -> str:
+    if normalized := sec_uid.strip():
+        return f"sec:{normalized}"
+    if normalized := target_id.strip():
+        return f"uid:{normalized}"
+    if normalized := username.strip().removeprefix("@").lower():
+        return f"handle:{normalized}"
+    raise ValueError("target identity is empty")
+
+
 def read_targets(path: Path) -> ImportResult:
     if path.suffix.lower() in {".xlsx", ".xlsm"}:
         return _read_follower_workbook(path)
+    with path.open("r", encoding="utf-8-sig", newline="") as source:
+        columns = set(next(csv.reader(source), ()))
+    if _REQUIRED_USER_EXPORT_COLUMNS <= columns:
+        return _read_deduplicated_user_export(path)
     return _read_comment_export(path)
+
+
+def _read_deduplicated_user_export(path: Path) -> ImportResult:
+    with path.open("r", encoding="utf-8-sig", newline="") as source:
+        reader = csv.DictReader(source)
+        targets: list[Target] = []
+        target_indexes: dict[str, int] = {}
+        skipped_duplicates = 0
+        skipped_invalid = 0
+        for line_number, row in enumerate(reader, start=2):
+            target_id = str(row.get("user_id") or "").strip()
+            username = str(row.get("username") or "").strip().removeprefix("@").lower()
+            sec_uid = str(row.get("sec_uid") or "").strip()
+            if not target_id or not username:
+                skipped_invalid += 1
+                continue
+            identity_key = target_identity_key(
+                sec_uid=sec_uid,
+                target_id=target_id,
+                username=username,
+            )
+            if identity_key in target_indexes:
+                index = target_indexes[identity_key]
+                existing = targets[index]
+                targets[index] = replace(
+                    existing,
+                    source_line_numbers=existing.source_line_numbers + (line_number,),
+                )
+                skipped_duplicates += 1
+                continue
+            target_indexes[identity_key] = len(targets)
+            targets.append(
+                Target(
+                    target_id=target_id,
+                    username=username,
+                    profile_url=f"https://www.tiktok.com/@{username}",
+                    source_video_id="",
+                    sec_uid=sec_uid,
+                    profile_metrics=ProfileMetrics(
+                        following=_csv_int(row, "following_count"),
+                        followers=_csv_int(row, "follower_count"),
+                        posts=_csv_int(row, "video_count"),
+                    ),
+                    private_account=str(row.get("private") or "").strip().lower()
+                    in {"1", "true", "yes", "是"},
+                    identity_key=identity_key,
+                    source_line_numbers=(line_number,),
+                )
+            )
+    return ImportResult(
+        targets=tuple(targets),
+        skipped_duplicates=skipped_duplicates,
+        skipped_invalid=skipped_invalid,
+    )
+
+
+def _csv_int(row: dict[str, str], field: str) -> int:
+    raw = str(row.get(field) or "").strip().replace(",", "")
+    try:
+        return max(0, int(float(raw))) if raw else 0
+    except ValueError:
+        return 0
 
 
 def _read_comment_export(path: Path) -> ImportResult:
@@ -59,24 +147,38 @@ def _read_comment_export(path: Path) -> ImportResult:
             raise ValueError(f"missing required CSV columns: {', '.join(missing)}")
 
         targets: list[Target] = []
-        seen_ids: set[str] = set()
+        target_indexes: dict[str, int] = {}
         skipped_duplicates = 0
         for line_number, row in enumerate(reader, start=2):
             target_id = (row["commenter_user_id"] or "").strip()
             username = (row["commenter_handle"] or "").strip().removeprefix("@").lower()
             if not target_id or not username:
                 raise ValueError(f"missing target identity on CSV line {line_number}")
-            if target_id in seen_ids:
+            sec_uid = (row.get("commenter_sec_uid") or "").strip()
+            identity_key = target_identity_key(
+                sec_uid=sec_uid,
+                target_id=target_id,
+                username=username,
+            )
+            if identity_key in target_indexes:
+                index = target_indexes[identity_key]
+                existing = targets[index]
+                targets[index] = replace(
+                    existing,
+                    source_line_numbers=existing.source_line_numbers + (line_number,),
+                )
                 skipped_duplicates += 1
                 continue
-            seen_ids.add(target_id)
+            target_indexes[identity_key] = len(targets)
             targets.append(
                 Target(
                     target_id=target_id,
                     username=username,
                     profile_url=(row["commenter_profile_url"] or "").strip(),
                     source_video_id=(row["video_id"] or "").strip(),
-                    sec_uid=(row.get("commenter_sec_uid") or "").strip(),
+                    sec_uid=sec_uid,
+                    identity_key=identity_key,
+                    source_line_numbers=(line_number,),
                 )
             )
 

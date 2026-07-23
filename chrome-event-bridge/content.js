@@ -1,20 +1,28 @@
 (function startFollowerBridge() {
   const core = globalThis.TikPocFollowerCore;
-  if (!core) {
+  const binding = globalThis.TikPocBindingCore;
+  const optionsCore = globalThis.TikPocOptionsCore;
+  if (!core || !binding || !optionsCore) {
     return;
   }
 
   const SETTINGS_KEY = "tikpocSettings";
   const PROCESSED_KEY = "tikpocProcessedFollowers";
   const BASELINE_KEY = "tikpocFollowerBaselines";
+  const HEALTH_TICK = "TIKPOC_HEALTH_TICK";
   const MAX_PROCESSED = 1000;
   const RETRY_AFTER_MS = 30 * 60 * 1000;
   const MAX_ATTEMPTS = 2;
   const ACTIVITY_LABELS = new Set(["activity", "活动", "活動"]);
   let scanTimer = null;
   let scanning = false;
-  let activityOpenedByBridge = false;
   let activityOpenedAt = 0;
+  let lastScanAtMs = 0;
+  let lastSuccessAtMs = 0;
+  let scanState = "not_started";
+  const ownerId = globalThis.crypto && typeof globalThis.crypto.randomUUID === "function"
+    ? globalThis.crypto.randomUUID()
+    : `tab-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const inFlight = new Set();
 
   function storageGet(keys) {
@@ -91,6 +99,7 @@
     }
     return {
       ...candidate,
+      eventId: core.extractFollowerEventId(row),
       row,
       button: candidate.buttonIndex >= 0 ? buttons[candidate.buttonIndex] : null,
     };
@@ -103,6 +112,8 @@
       event: {
         account_id: settings.accountId,
         device_id: settings.deviceId,
+        observed_username: settings.observedUsername,
+        binding_state: settings.bindingState,
         event_type: eventType,
         dedup_key: dedupKey,
         payload,
@@ -118,8 +129,55 @@
     await storageSet({ [PROCESSED_KEY]: Object.fromEntries(entries) });
   }
 
+  async function reportHealth() {
+    const stored = await storageGet([SETTINGS_KEY]);
+    const settings = stored[SETTINGS_KEY] || {};
+    if (
+      !settings.enabled ||
+      !optionsCore.canObserveBinding(settings) ||
+      !settings.deviceId ||
+      !settings.dashboardUrl
+    ) {
+      return;
+    }
+    const bindingResult = binding.evaluateBinding(
+      document,
+      settings.expectedTikTokUsername,
+    );
+    await storageSet({
+      tikpocBindingStatus: optionsCore.bindingObservation(
+        settings.accountId,
+        bindingResult,
+      ),
+    });
+    const signedIn = Boolean(document.querySelector(
+      "[data-e2e*='avatar'], [data-e2e*='profile-icon'], nav a[href^='/@']",
+    ));
+    await sendMessage({
+      type: "TIKPOC_BROWSER_HEALTH",
+      dashboardUrl: settings.dashboardUrl,
+      body: {
+        account_id: settings.accountId,
+        device_id: settings.deviceId,
+        page_role: "activity",
+        path: String(globalThis.location && globalThis.location.pathname || ""),
+        signed_in: signedIn,
+        observed_username: bindingResult.observedUsername,
+        binding_state: bindingResult.state,
+        timestamp_ms: Date.now(),
+        last_scan_at_ms: lastScanAtMs,
+        last_success_at_ms: lastSuccessAtMs,
+        scan_state: scanState,
+      },
+    });
+  }
+
   async function handleCandidate(candidate, settings, processed) {
-    const key = core.buildFollowerDedupKey(settings.accountId, candidate.username);
+    const key = core.buildFollowerDedupKey(
+      settings.accountId,
+      candidate.username,
+      candidate.eventId,
+    );
     if (
       inFlight.has(key) ||
       !core.shouldAttemptRecord(
@@ -135,7 +193,11 @@
     const payload = {
       username: candidate.username,
       profile_url: candidate.profileUrl,
+      event_id: candidate.eventId || "",
     };
+    let actionIdentity = null;
+    let actionState = null;
+    let actionReason = "";
     try {
       if (candidate.state === "completed") {
         await report(settings, "followback_completed", key, {
@@ -160,6 +222,28 @@
       }
 
       await report(settings, "new_follower", key, payload);
+      const claimIdentity = {
+        account_id: settings.accountId,
+        device_id: settings.deviceId,
+        observed_username: settings.observedUsername,
+        binding_state: settings.bindingState,
+        action_type: "followback",
+        action_key: key,
+        owner_id: ownerId,
+      };
+      const claim = await sendMessage({
+        type: "TIKPOC_ACTION_CLAIM",
+        dashboardUrl: settings.dashboardUrl,
+        body: {
+          ...claimIdentity,
+          timestamp_ms: Date.now(),
+          lease_seconds: 30,
+        },
+      });
+      if (!claim.claimed) {
+        return;
+      }
+      actionIdentity = claimIdentity;
       const attempts = Number(processed[key]?.attempts || 0) + 1;
       await saveProcessed(processed, key, {
         status: "attempted",
@@ -172,6 +256,8 @@
         ? core.followButtonState(elementLabel(candidate.button))
         : "completed";
       const completed = state === "completed";
+      actionState = completed ? "completed" : "uncertain";
+      actionReason = completed ? "" : "followback_unresolved";
       await report(
         settings,
         completed ? "followback_completed" : "followback_unresolved",
@@ -184,6 +270,8 @@
         updatedAt: Date.now(),
       });
     } catch (_error) {
+      actionState = actionIdentity ? "uncertain" : null;
+      actionReason = actionIdentity ? "followback_unresolved" : "";
       const attempts = Number(processed[key]?.attempts || 0) + 1;
       await saveProcessed(processed, key, {
         status: "unresolved",
@@ -191,12 +279,38 @@
         updatedAt: Date.now(),
       });
     } finally {
+      if (actionIdentity && actionState) {
+        try {
+          await sendMessage({
+            type: "TIKPOC_ACTION_RESULT",
+            dashboardUrl: settings.dashboardUrl,
+            body: {
+              ...actionIdentity,
+              state: actionState,
+              reason: actionReason,
+            },
+          });
+        } catch (_error) {
+          // The server lease remains busy until expiry when result delivery fails.
+        }
+      }
       inFlight.delete(key);
     }
   }
 
   function maybeOpenActivity(settings) {
-    if (!settings.autoOpenActivity || activityOpenedByBridge) {
+    const panelVisible = activityPanelVisible();
+    if (panelVisible) {
+      if (!activityOpenedAt) {
+        activityOpenedAt = Date.now();
+      }
+      return;
+    }
+    if (!core.shouldOpenActivity(
+      settings.autoOpenActivity,
+      panelVisible,
+      activityOpenedAt,
+    )) {
       return;
     }
     const controls = Array.from(
@@ -212,12 +326,10 @@
       return visible(element) && ACTIVITY_LABELS.has(firstToken);
     });
     if (activity && activity.getAttribute("aria-expanded") === "true") {
-      activityOpenedByBridge = true;
       activityOpenedAt = Date.now();
       return;
     }
     if (activity) {
-      activityOpenedByBridge = true;
       activityOpenedAt = Date.now();
       activity.click();
       setTimeout(scheduleScan, 2200);
@@ -254,14 +366,18 @@
   async function establishBaseline(settings, candidates, processed, baselines) {
     const now = Date.now();
     for (const candidate of candidates) {
-      const key = core.buildFollowerDedupKey(settings.accountId, candidate.username);
+      const key = core.buildFollowerDedupKey(
+        settings.accountId,
+        candidate.username,
+        candidate.eventId,
+      );
       processed[key] = {
         status: "baseline",
         attempts: 0,
         updatedAt: now,
       };
     }
-    baselines[settings.accountId] = now;
+    baselines[settings.accountId] = { version: 2, establishedAt: now };
     await storageSet({
       [PROCESSED_KEY]: trimProcessed(processed),
       [BASELINE_KEY]: baselines,
@@ -276,40 +392,79 @@
     try {
       const stored = await storageGet([SETTINGS_KEY, PROCESSED_KEY, BASELINE_KEY]);
       const settings = stored[SETTINGS_KEY] || {};
-      if (
-        !settings.enabled ||
-        !settings.accountId ||
-        !settings.deviceId ||
-        !settings.dashboardUrl
-      ) {
+      if (!optionsCore.canObserveBinding(settings)) {
         return;
       }
-      maybeOpenActivity(settings);
+      lastScanAtMs = Date.now();
+      scanState = "scanning";
+      const bindingResult = binding.evaluateBinding(
+        document,
+        settings.expectedTikTokUsername,
+      );
+      await storageSet({
+        tikpocBindingStatus: optionsCore.bindingObservation(
+          settings.accountId,
+          bindingResult,
+        ),
+      });
+      if (!settings.deviceId || !settings.dashboardUrl) {
+        return;
+      }
+      if (bindingResult.state !== "ready") {
+        return;
+      }
+      const boundSettings = {
+        ...settings,
+        bindingState: bindingResult.state,
+        observedUsername: bindingResult.observedUsername,
+      };
+      maybeOpenActivity(boundSettings);
       const processed = stored[PROCESSED_KEY] || {};
       const baselines = stored[BASELINE_KEY] || {};
       const links = Array.from(document.querySelectorAll("a[href*='/@']"))
         .filter(visible)
         .slice(-600);
       const candidates = links.map(candidateFromLink).filter(Boolean);
-      if (!baselines[settings.accountId]) {
-        const activitySettled =
-          activityOpenedAt > 0 && Date.now() - activityOpenedAt >= 2000;
-        if (candidates.length > 0 || activityPanelVisible() || activitySettled) {
-          await establishBaseline(settings, candidates, processed, baselines);
+      const scanPhase = core.followerScanPhase({
+        baselineReady: core.followerBaselineReady(baselines[settings.accountId]),
+        followbackEnabled: core.browserFeatureEnabled(
+          settings,
+          "browserFollowbackEnabled",
+        ),
+      });
+      if (scanPhase === "baseline") {
+        if (core.shouldEstablishFollowerBaseline({
+          candidateCount: candidates.length,
+          activityOpenedAt,
+          now: Date.now(),
+        })) {
+          await establishBaseline(boundSettings, candidates, processed, baselines);
         }
         return;
       }
-      for (const candidate of candidates) {
-        await handleCandidate(candidate, settings, processed);
+      if (scanPhase !== "action") {
+        return;
       }
+      for (const candidate of candidates) {
+        await handleCandidate(candidate, boundSettings, processed);
+      }
+    } catch (error) {
+      scanState = "error";
+      throw error;
     } finally {
+      if (scanState === "scanning") {
+        lastSuccessAtMs = Date.now();
+        scanState = "idle";
+      }
       scanning = false;
     }
   }
 
+  const requestScan = core.createCoalescingRunner(scan);
+
   function scheduleScan() {
     clearTimeout(scanTimer);
-    scanTimer = setTimeout(scan, 250);
+    scanTimer = setTimeout(() => requestScan().catch(() => {}), 250);
   }
 
   const observer = new MutationObserver(scheduleScan);
@@ -318,6 +473,19 @@
     subtree: true,
     characterData: true,
   });
-  chrome.storage.onChanged.addListener(scheduleScan);
+  chrome.storage.onChanged.addListener((changes) => {
+    if (optionsCore.shouldScheduleForStorageChanges(changes)) {
+      scheduleScan();
+    }
+  });
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message && message.type === HEALTH_TICK) {
+      reportHealth().then(scheduleScan, scheduleScan);
+    }
+    return false;
+  });
+  core.installContinuousTriggers(document, globalThis, scheduleScan);
+  core.installWatchdog(setInterval, scheduleScan);
+  reportHealth().catch(() => {});
   scheduleScan();
 })();
