@@ -113,7 +113,7 @@ following > followers AND video_count >= 1
 
 普通慢页面会在本地执行有界恢复，包括重新检查、返回基线、重启 TikTok 或重建 Appium 会话。动作结果不确定时只读取当前状态进行一次 reconciliation，禁止再次点击可能会切换状态的控件；仍不明确时保留 action plan 和 quota 的 uncertain 状态并终结该 assignment 的自动重试。容量与推广审计必须继续把它列为未确认互动。
 
-首次 assignment claim 仍停留在 `profile_opening`、没有 confirmed visit，并且 `open_target` 或 `confirm_profile_identity` 抛出精确的普通 `ValueError` 时，立即记录该设备 assignment 为 `profile_unreachable/skipped`。该结果不跨设备传播，其他启用设备仍保留并执行自己的 assignment。已确认访问后来无法重开未完成目标时保留访问证据、记录明确失败并终结自动处理，不伪造互动成功；其他 `ProfileIdentityMismatch` 和视频/动作失败继续 deferred。可见且类型明确的 private/inaccessible 主页按身份确认后的 trace 处理，不归入 skipped。skipped 不计 N/N 覆盖；运营耗尽可用 `completed + skipped` 判断 worker 是否还有可处理任务。
+首次 assignment claim 仍停留在 `profile_opening`、没有 confirmed visit，并且身份确认失败后可见页面明确报告账号 `missing` 或 `suspended`、可见用户名也与当前目标一致时，记录该设备 assignment 为 `profile_unreachable/skipped`。空用户名、上一目标残留、普通路由失败、`Something went wrong`、加载不完整、观察读取异常和指标读取产生的 `inaccessible` 都继续 deferred，并保留实际异常类别，因为它们可能是设备或网络故障，不能当成目标账号失效。该结果不跨设备传播，其他启用设备仍保留并执行自己的 assignment。已确认访问后来无法重开未完成目标时保留访问证据、记录明确失败并终结自动处理，不伪造互动成功；其他 `ProfileIdentityMismatch` 和视频/动作失败继续 deferred。可见且类型明确的 private 主页按身份确认后的 trace 处理，不归入 skipped。skipped 不计 N/N 覆盖；运营耗尽可用 `completed + skipped` 判断 worker 是否还有可处理任务。
 
 ### 4.1 批次策略
 

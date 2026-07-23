@@ -88,9 +88,13 @@ user-approved document and update this guide in the same change.
   weakening eligibility, turning an eligible due interaction into trace-only,
   skipping a selected action, reducing visible action verification, or changing
   durable multi-device coverage accounting.
-- A profile-opening route that cannot be reached is attempted once on that
-  device and then recorded as skipped. Do not suppress the target globally from
-  one device observation; every other configured device retains its assignment.
+- A profile-opening identity failure is recorded as skipped only when the
+  visible page explicitly reports a missing/deleted or suspended account and
+  the visible username matches the current target.
+  Generic route failures, loading errors, and incomplete surfaces remain
+  deferred because they may be device or network faults. Do not suppress the
+  target globally from one device observation; every other configured device
+  retains its assignment.
 - Keep throughput fixes minimal and local. Do not add Inbox navigation, target
   classification, or new workflow branches unless required by approved business
   logic and separately verified against visible live state.

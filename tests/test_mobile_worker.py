@@ -450,6 +450,12 @@ def test_confirmed_visit_profile_unreachable_completes_as_explicit_failure(
             raise ValueError("profile route stayed blank")
 
     device = UnreachableAfterConfirmedVisitDevice(metrics=ProfileMetrics(20, 10, 5))
+    device.read_profile_observation = lambda: ProfileObservation(
+        observed_username="buyer",
+        metrics=None,
+        private_account=False,
+        access_state=ProfileAccessState.MISSING,
+    )
     worker = MobileAssignmentWorker(
         repository,
         device,
@@ -671,7 +677,7 @@ def test_identity_mismatch_is_durable_and_blocks_capacity(tmp_path: Path) -> Non
     assert device.diagnostic_calls == 1
 
 
-def test_profile_opening_value_error_skips_after_first_claim(
+def test_profile_route_value_error_without_unavailable_page_is_deferred(
     tmp_path: Path,
 ) -> None:
     repository, assignment = _claimed_assignment(tmp_path)
@@ -692,15 +698,131 @@ def test_profile_opening_value_error_skips_after_first_claim(
     worker.run_assignment(assignment)
 
     stored = repository.assignment(assignment.assignment_id)
-    assert stored.phase is AssignmentPhase.SKIPPED
+    assert stored.phase is AssignmentPhase.DEFERRED
     assert stored.attempt_count == 1
     assert stored.visit_confirmed_at_ms is None
-    assert stored.last_error_code == "profile_unreachable"
-    assert repository.round_completion(assignment.round_id).skipped == 1
+    assert stored.last_error_code == "ValueError"
+    assert repository.round_completion(assignment.round_id).skipped == 0
     assert device.diagnostic_calls == 1
+
+
+def test_explicit_missing_profile_skips_after_first_identity_failure(
+    tmp_path: Path,
+) -> None:
+    repository, assignment = _claimed_assignment(tmp_path)
+    device = ScriptedVerifiedDevice(metrics=ProfileMetrics(0, 0, 0))
+
+    def missing_identity(target) -> None:
+        raise ValueError("stable and username profile routes did not load")
+
+    device.confirm_profile_identity = missing_identity
+    device.read_profile_observation = lambda: ProfileObservation(
+        observed_username="buyer",
+        metrics=None,
+        private_account=False,
+        access_state=ProfileAccessState.MISSING,
+    )
+    worker = MobileAssignmentWorker(
+        repository,
+        device,
+        device_id="phone-01",
+        owner_id="worker-1",
+        clock_ms=lambda: 1_000,
+    )
+
+    worker.run_assignment(assignment)
+
+    stored = repository.assignment(assignment.assignment_id)
+    assert stored.phase is AssignmentPhase.SKIPPED
+    assert stored.last_error_code == "profile_unreachable"
     transition = repository.assignment_phase_history(assignment.assignment_id)[-1]
     assert transition.details["original_error_code"] == "ValueError"
-    assert transition.details["failure_stage"] == "route"
+    assert transition.details["failure_stage"] == "identity"
+
+
+def test_transient_inaccessible_identity_failure_is_deferred(tmp_path: Path) -> None:
+    repository, assignment = _claimed_assignment(tmp_path)
+    device = ScriptedVerifiedDevice(metrics=ProfileMetrics(0, 0, 0))
+
+    def incomplete_identity(target) -> None:
+        raise ValueError("profile surface did not become ready")
+
+    device.confirm_profile_identity = incomplete_identity
+    device.read_profile_observation = lambda: ProfileObservation(
+        observed_username="buyer",
+        metrics=None,
+        private_account=False,
+        access_state=ProfileAccessState.INACCESSIBLE,
+    )
+    worker = MobileAssignmentWorker(
+        repository,
+        device,
+        device_id="phone-01",
+        owner_id="worker-1",
+        clock_ms=lambda: 1_000,
+    )
+
+    worker.run_assignment(assignment)
+
+    stored = repository.assignment(assignment.assignment_id)
+    assert stored.phase is AssignmentPhase.DEFERRED
+    assert stored.last_error_code == "ValueError"
+
+
+@pytest.mark.parametrize("observed_username", ["", "previous_target"])
+def test_unavailable_page_without_current_target_identity_is_deferred(
+    tmp_path: Path, observed_username: str
+) -> None:
+    repository, assignment = _claimed_assignment(tmp_path)
+    device = ScriptedVerifiedDevice(metrics=ProfileMetrics(0, 0, 0))
+    device.confirm_profile_identity = lambda target: (_ for _ in ()).throw(
+        ValueError("profile did not load")
+    )
+    device.read_profile_observation = lambda: ProfileObservation(
+        observed_username=observed_username,
+        metrics=None,
+        private_account=False,
+        access_state=ProfileAccessState.MISSING,
+    )
+    worker = MobileAssignmentWorker(
+        repository,
+        device,
+        device_id="phone-01",
+        owner_id="worker-1",
+        clock_ms=lambda: 1_000,
+    )
+
+    worker.run_assignment(assignment)
+
+    stored = repository.assignment(assignment.assignment_id)
+    assert stored.phase is AssignmentPhase.DEFERRED
+    assert stored.last_error_code == "ValueError"
+
+
+def test_identity_classification_read_failure_preserves_actual_error(
+    tmp_path: Path,
+) -> None:
+    repository, assignment = _claimed_assignment(tmp_path)
+    device = ScriptedVerifiedDevice(metrics=ProfileMetrics(0, 0, 0))
+    device.confirm_profile_identity = lambda target: (_ for _ in ()).throw(
+        ValueError("profile did not load")
+    )
+    device.read_profile_observation = lambda: (_ for _ in ()).throw(
+        ConnectionError("appium transport lost")
+    )
+    worker = MobileAssignmentWorker(
+        repository,
+        device,
+        device_id="phone-01",
+        owner_id="worker-1",
+        clock_ms=lambda: 1_000,
+    )
+
+    worker.run_assignment(assignment)
+
+    stored = repository.assignment(assignment.assignment_id)
+    assert stored.phase is AssignmentPhase.DEFERRED
+    assert stored.last_error_code == "ConnectionError"
 
 
 def test_third_identity_mismatch_remains_deferred(tmp_path: Path) -> None:

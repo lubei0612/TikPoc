@@ -201,12 +201,17 @@ device adapter's bounded route and direct restart recovery. Mobile acquisition
 does not use Inbox as a baseline. Retrying these
 assignments forever consumes a device slot without producing useful exposure.
 
-After the first assignment claim, a plain profile-opening `ValueError` becomes
-a terminal per-device `skipped` assignment only when the durable assignment is
-still in `profile_opening` and has no confirmed visit. The transition records
-`profile_unreachable`, the original error category, diagnostics, attempt count,
-and terminal timestamp, then releases the assignment lease. The observation
-does not suppress the same target on other configured devices.
+After identity confirmation fails, inspect the visible profile observation. A
+plain `ValueError` becomes a terminal per-device `skipped` assignment only when
+that observation explicitly reports `missing` or `suspended`, its normalized
+visible username matches the current target, the durable assignment remains in
+`profile_opening`, and it has no confirmed visit. Empty or stale usernames,
+observation transport errors, generic
+route failures, `inaccessible` metric fallbacks, loading errors, and incomplete
+surfaces remain deferred with their real error category because they may be device/network faults. The terminal
+transition records `profile_unreachable`, the original error category,
+diagnostics, attempt count, and timestamp, then releases the lease. The
+observation does not suppress the same target on other configured devices.
 
 `ProfileIdentityMismatch` and ordinary video/action failures remain deferred.
 An action still uncertain after its one reconciliation becomes operationally

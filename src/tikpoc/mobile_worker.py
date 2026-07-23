@@ -201,12 +201,7 @@ class MobileAssignmentWorker:
         )
         route_started_at_ms = self.clock_ms()
         self.device.ensure_ready()
-        try:
-            self.device.open_target(target)
-        except ValueError as error:
-            if type(error) is ValueError:
-                raise ProfileUnreachable("route", str(error)) from error
-            raise
+        self.device.open_target(target)
         self._record_stage(
             assignment.assignment_id, AssignmentStage.ROUTE, route_started_at_ms
         )
@@ -215,7 +210,24 @@ class MobileAssignmentWorker:
             self.device.confirm_profile_identity(target)
         except ValueError as error:
             if type(error) is ValueError:
-                raise ProfileUnreachable("identity", str(error)) from error
+                try:
+                    failed_observation = self.device.read_profile_observation()
+                except Exception as observation_error:
+                    raise observation_error from error
+                expected_username = target.username.strip().removeprefix("@").casefold()
+                observed_username = (
+                    failed_observation.observed_username.strip()
+                    .removeprefix("@")
+                    .casefold()
+                )
+                if observed_username == expected_username and (
+                    failed_observation.access_state
+                    in {
+                        ProfileAccessState.MISSING,
+                        ProfileAccessState.SUSPENDED,
+                    }
+                ):
+                    raise ProfileUnreachable("identity", str(error)) from error
             raise
         self._record_stage(
             assignment.assignment_id, AssignmentStage.IDENTITY, identity_started_at_ms
