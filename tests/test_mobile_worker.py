@@ -399,7 +399,7 @@ def test_assignment_stage_timing_replaces_the_previous_attempt(
         )
 
 
-def test_persistent_uncertain_action_is_deferred_without_reclick(
+def test_persistent_uncertain_action_completes_after_one_reconciliation_without_reclick(
     tmp_path: Path,
 ) -> None:
     repository, assignment = _claimed_assignment(tmp_path)
@@ -423,17 +423,18 @@ def test_persistent_uncertain_action_is_deferred_without_reclick(
     plan = repository.action_plan(
         assignment.round_id, assignment.identity_key, "phone-01"
     )
-    assert stored.phase is AssignmentPhase.DEFERRED
-    assert stored.next_attempt_at_ms == MANUAL_RETRY_AT_MS
-    assert stored.completed_at_ms is None
-    assert repository.round_completion(assignment.round_id).completed == 0
+    assert stored.phase is AssignmentPhase.COMPLETED
+    assert stored.next_attempt_at_ms == 0
+    assert stored.completed_at_ms == 1_000
+    assert stored.last_error_code == "action_uncertain_terminal"
+    assert repository.round_completion(assignment.round_id).completed == 1
     assert plan is not None and plan.state is ActionPlanState.UNCERTAIN
     assert device.action_calls == [OutcomeKind.REPOST]
     assert device.reconcile_calls == [OutcomeKind.REPOST]
-    assert device.diagnostic_calls == 1
+    assert device.diagnostic_calls == 0
 
 
-def test_confirmed_visit_profile_unreachable_is_held_for_manual_retry(
+def test_confirmed_visit_profile_unreachable_completes_as_explicit_failure(
     tmp_path: Path,
 ) -> None:
     repository, assignment = _claimed_assignment(tmp_path)
@@ -460,13 +461,16 @@ def test_confirmed_visit_profile_unreachable_is_held_for_manual_retry(
     worker.run_assignment(assignment)
 
     stored = repository.assignment(assignment.assignment_id)
-    assert stored.phase is AssignmentPhase.DEFERRED
+    assert stored.phase is AssignmentPhase.COMPLETED
     assert stored.visit_confirmed_at_ms == 900
-    assert stored.next_attempt_at_ms == MANUAL_RETRY_AT_MS
-    assert stored.last_error_code == "ProfileUnreachable"
+    assert stored.completed_at_ms == 1_000
+    assert stored.next_attempt_at_ms == 0
+    assert stored.last_error_code == "confirmed_visit_profile_unreachable"
 
 
-def test_reconciled_not_applied_action_is_not_clicked_again(tmp_path: Path) -> None:
+def test_uncertain_action_never_returns_to_execution_after_reconciliation(
+    tmp_path: Path,
+) -> None:
     repository, assignment = _claimed_assignment(tmp_path)
     first_device = ScriptedVerifiedDevice(
         metrics=ProfileMetrics(20, 10, 5),
@@ -490,53 +494,30 @@ def test_reconciled_not_applied_action_is_not_clicked_again(tmp_path: Path) -> N
     assert first_device.reconcile_calls == [OutcomeKind.REPOST]
     assert first_quota is not None and first_quota.uncertain_count == 1
 
-    repository.retry_assignment(assignment.assignment_id)
-    retry = repository.claim_next_assignment(
-        assignment.round_id,
-        "phone-01",
-        "worker-2",
-        now_ms=301_000,
-    )
-    assert retry is not None
-    second_device = ScriptedVerifiedDevice(
-        metrics=ProfileMetrics(20, 10, 5),
-        action_results=[ActionResult.NOT_APPLIED] * 3,
-    )
-    second_worker = MobileAssignmentWorker(
-        repository,
-        second_device,
-        device_id="phone-01",
-        owner_id="worker-2",
-        clock_ms=lambda: 301_000,
-        plan_provider=_forced_plan(OutcomeKind.REPOST),
-        max_action_attempts=3,
-    )
-
-    second_worker.run_assignment(retry)
-
     stored = repository.assignment(assignment.assignment_id)
     final_plan = repository.action_plan(
         assignment.round_id, assignment.identity_key, "phone-01"
     )
     final_quota = repository.quota_window("phone-01", OutcomeKind.REPOST, 0)
-    assert stored.phase is AssignmentPhase.DEFERRED
+    assert stored.phase is AssignmentPhase.COMPLETED
+    assert stored.last_error_code == "action_uncertain_terminal"
     assert final_plan is not None and final_plan.state is ActionPlanState.UNCERTAIN
-    assert second_device.action_calls == []
-    assert second_device.reconcile_calls == [OutcomeKind.REPOST]
-    assert second_device.diagnostic_calls == 1
+    assert first_device.action_calls == [OutcomeKind.REPOST]
+    assert first_device.reconcile_calls == [OutcomeKind.REPOST]
+    assert first_device.diagnostic_calls == 0
     assert final_quota is not None
     assert final_quota.reserved_count == 1
     assert final_quota.confirmed_count == 0
     assert final_quota.uncertain_count == 1
 
 
-def test_reconciled_unavailable_like_never_returns_to_execution(
+def test_reconciled_unavailable_like_completes_as_explicit_uncertain(
     tmp_path: Path,
 ) -> None:
     repository, assignment = _claimed_assignment(tmp_path)
     first_device = ScriptedVerifiedDevice(
         metrics=ProfileMetrics(20, 10, 5),
-        action_results=[ActionResult.UNCERTAIN, ActionResult.UNCERTAIN],
+        action_results=[ActionResult.UNCERTAIN, ActionResult.UNAVAILABLE],
     )
     first_worker = MobileAssignmentWorker(
         repository,
@@ -549,67 +530,20 @@ def test_reconciled_unavailable_like_never_returns_to_execution(
     )
     first_worker.run_assignment(assignment)
 
-    repository.retry_assignment(assignment.assignment_id)
-    retry = repository.claim_next_assignment(
-        assignment.round_id,
-        "phone-01",
-        "worker-2",
-        now_ms=301_000,
-    )
-    assert retry is not None
-    second_device = ScriptedVerifiedDevice(
-        metrics=ProfileMetrics(20, 10, 5),
-        action_results=[ActionResult.UNAVAILABLE],
-    )
-    second_worker = MobileAssignmentWorker(
-        repository,
-        second_device,
-        device_id="phone-01",
-        owner_id="worker-2",
-        clock_ms=lambda: 301_000,
-        plan_provider=_forced_plan(OutcomeKind.LIKE),
-    )
-    second_worker.run_assignment(retry)
-    middle_plan = repository.action_plan(
-        assignment.round_id, assignment.identity_key, "phone-01"
-    )
-    assert middle_plan is not None and middle_plan.state is ActionPlanState.UNCERTAIN
-    assert second_device.action_calls == []
-    assert second_device.reconcile_calls == [OutcomeKind.LIKE]
-
-    repository.retry_assignment(assignment.assignment_id)
-    final_retry = repository.claim_next_assignment(
-        assignment.round_id,
-        "phone-01",
-        "worker-3",
-        now_ms=601_000,
-    )
-    assert final_retry is not None
-    third_device = ScriptedVerifiedDevice(
-        metrics=ProfileMetrics(20, 10, 5),
-        action_results=[ActionResult.CONFIRMED],
-    )
-    third_worker = MobileAssignmentWorker(
-        repository,
-        third_device,
-        device_id="phone-01",
-        owner_id="worker-3",
-        clock_ms=lambda: 601_000,
-        plan_provider=_forced_plan(OutcomeKind.LIKE),
-    )
-    third_worker.run_assignment(final_retry)
-
     final_plan = repository.action_plan(
         assignment.round_id, assignment.identity_key, "phone-01"
     )
+    stored = repository.assignment(assignment.assignment_id)
     quota = repository.quota_window("phone-01", OutcomeKind.LIKE, 0)
-    assert final_plan is not None and final_plan.state is ActionPlanState.CONFIRMED
-    assert third_device.action_calls == []
-    assert third_device.reconcile_calls == [OutcomeKind.LIKE]
+    assert stored.phase is AssignmentPhase.COMPLETED
+    assert stored.last_error_code == "action_uncertain_terminal"
+    assert final_plan is not None and final_plan.state is ActionPlanState.UNCERTAIN
+    assert first_device.action_calls == [OutcomeKind.LIKE]
+    assert first_device.reconcile_calls == [OutcomeKind.LIKE]
     assert quota is not None
     assert quota.reserved_count == 1
-    assert quota.confirmed_count == 1
-    assert quota.uncertain_count == 0
+    assert quota.confirmed_count == 0
+    assert quota.uncertain_count == 1
 
 
 def test_video_verification_failure_is_durably_deferred(tmp_path: Path) -> None:
@@ -1009,13 +943,122 @@ def test_shared_eligible_snapshot_waits_for_second_device_video_grid(
     assert device.driver.post_queries == 2
 
 
+@pytest.mark.parametrize(
+    ("local_access_state", "expected_phase", "expected_error"),
+    [
+        (
+            ProfileAccessState.MISSING,
+            AssignmentPhase.COMPLETED,
+            "profile_missing_after_snapshot",
+        ),
+        (
+            ProfileAccessState.SUSPENDED,
+            AssignmentPhase.COMPLETED,
+            "profile_suspended_after_snapshot",
+        ),
+        (
+            ProfileAccessState.INACCESSIBLE,
+            AssignmentPhase.DEFERRED,
+            "RuntimeError",
+        ),
+    ],
+)
+def test_shared_eligible_snapshot_only_finishes_for_explicitly_unavailable_profile(
+    tmp_path: Path,
+    local_access_state: ProfileAccessState,
+    expected_phase: AssignmentPhase,
+    expected_error: str,
+) -> None:
+    repository = AcquisitionRepository(tmp_path / "tikpoc.db", clock_ms=lambda: 1_000)
+    repository.migrate()
+    target = Target(
+        target_id="user-1",
+        username="buyer",
+        profile_url="https://www.tiktok.com/@buyer",
+        source_video_id="video-source",
+        sec_uid="sec-1",
+        identity_key="sec:sec-1",
+        source_line_numbers=(2,),
+    )
+    pool = repository.import_pool("comments.csv", "3" * 64, (target,))
+    round_id = create_exposure_round(
+        repository,
+        pool_id=pool.pool_id,
+        device_seeds={"phone-01": "seed-a", "phone-02": "seed-b"},
+        starts_at_ms=1_000,
+        min_inter_device_gap_ms=0,
+    )
+    first = repository.claim_next_assignment(
+        round_id, "phone-01", "worker-1", now_ms=1_000
+    )
+    assert first is not None
+    repository.record_visit_confirmed(first.assignment_id, "worker-1", now_ms=1_000)
+    assert repository.claim_snapshot_lease(
+        round_id,
+        first.identity_key,
+        "phone-01",
+        now_ms=1_000,
+        ttl_ms=10_000,
+    )
+    repository.publish_profile_snapshot(
+        round_id,
+        first.identity_key,
+        device_id="phone-01",
+        observed_username="buyer",
+        metrics=ProfileMetrics(20, 10, 5),
+        private_account=False,
+        observed_at_ms=1_001,
+    )
+    repository.complete_assignment(
+        first.assignment_id,
+        "worker-1",
+        AssignmentPhase.IDENTITY_CONFIRMED,
+        now_ms=1_002,
+    )
+    second = repository.claim_next_assignment(
+        round_id, "phone-02", "worker-2", now_ms=2_000
+    )
+    assert second is not None
+    device = ScriptedVerifiedDevice(metrics=ProfileMetrics(0, 0, 0), video_keys=())
+    device.read_profile_observation = lambda: ProfileObservation(
+        observed_username="buyer",
+        metrics=None,
+        private_account=False,
+        access_state=local_access_state,
+    )
+
+    worker = MobileAssignmentWorker(
+        repository,
+        device,
+        device_id="phone-02",
+        owner_id="worker-2",
+        clock_ms=lambda: 2_000,
+        plan_provider=lambda *args, **kwargs: pytest.fail(
+            "missing local profile must not reserve an interaction"
+        ),
+    )
+
+    worker.run_assignment(second)
+
+    stored = repository.assignment(second.assignment_id)
+    assert stored.phase is expected_phase
+    assert stored.last_error_code == expected_error
+    assert repository.action_plan(round_id, second.identity_key, "phone-02") is None
+
+
 def test_restart_reconciles_uncertain_plan_without_second_click_or_reservation(
     tmp_path: Path,
 ) -> None:
     repository, assignment = _claimed_assignment(tmp_path)
-    first_device = ScriptedVerifiedDevice(
+
+    class InterruptedReconciliationDevice(ScriptedVerifiedDevice):
+        def reconcile_outcome(self, outcome: OutcomeKind) -> ActionResult:
+            self.reconcile_calls.append(outcome)
+            raise RuntimeError("reconciliation interrupted")
+
+    first_device = InterruptedReconciliationDevice(
         metrics=ProfileMetrics(20, 10, 5),
-        action_results=[ActionResult.UNCERTAIN, ActionResult.UNCERTAIN],
+        action_results=[ActionResult.UNCERTAIN],
     )
     first_worker = MobileAssignmentWorker(
         repository,
@@ -1033,7 +1076,6 @@ def test_restart_reconciles_uncertain_plan_without_second_click_or_reservation(
     assert first_plan is not None and first_plan.state is ActionPlanState.UNCERTAIN
     assert first_device.reconcile_calls == [OutcomeKind.LIKE]
 
-    repository.retry_assignment(assignment.assignment_id)
     retry = repository.claim_next_assignment(
         assignment.round_id,
         "phone-01",

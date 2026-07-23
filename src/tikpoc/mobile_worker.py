@@ -13,6 +13,7 @@ from .acquisition_models import (
     DeviceDiagnostics,
     OutcomeKind,
     PoolTarget,
+    ProfileAccessState,
     ProfileObservation,
     RoundAssignment,
 )
@@ -147,6 +148,35 @@ class MobileAssignmentWorker:
                 and stored.attempt_count >= MAX_PROFILE_OPEN_ATTEMPTS
             ):
                 self._skip_unreachable(current.assignment_id, error)
+            elif (
+                type(error) is ProfileUnreachable
+                and stored.phase is AssignmentPhase.PROFILE_OPENING
+                and stored.visit_confirmed_at_ms is not None
+            ):
+                self.repository.transition_assignment(
+                    current.assignment_id,
+                    self.owner_id,
+                    AssignmentPhase.PROFILE_OPENING,
+                    AssignmentPhase.IDENTITY_CONFIRMED,
+                    now_ms=self.clock_ms(),
+                    details={
+                        "reason": "confirmed_visit_profile_unreachable",
+                        "failure_stage": error.stage,
+                    },
+                    **self._assignment_fence_kwargs(),
+                )
+                self.repository.complete_assignment(
+                    current.assignment_id,
+                    self.owner_id,
+                    AssignmentPhase.IDENTITY_CONFIRMED,
+                    now_ms=self.clock_ms(),
+                    terminal_error_code="confirmed_visit_profile_unreachable",
+                    completion_details={
+                        "reason": "confirmed_visit_profile_unreachable",
+                        "failure_stage": error.stage,
+                    },
+                    **self._assignment_fence_kwargs(),
+                )
             else:
                 self._defer(
                     current.assignment_id,
@@ -239,6 +269,39 @@ class MobileAssignmentWorker:
             assignment.assignment_id, AssignmentStage.METRICS, metrics_started_at_ms
         )
 
+        visible_video_keys: tuple[str, ...] = ()
+        existing_plan = self.repository.action_plan(
+            assignment.round_id, assignment.identity_key, self.device_id
+        )
+        if snapshot.eligible and (
+            existing_plan is None or existing_plan.video_key is None
+        ):
+            visible_video_keys = self.device.list_video_keys()
+            if not visible_video_keys:
+                current_observation = self.device.read_profile_observation()
+                if current_observation.access_state in {
+                    ProfileAccessState.MISSING,
+                    ProfileAccessState.SUSPENDED,
+                }:
+                    terminal_code = f"profile_{current_observation.access_state.value}_after_snapshot"
+                    self.repository.complete_assignment(
+                        assignment.assignment_id,
+                        self.owner_id,
+                        AssignmentPhase.IDENTITY_CONFIRMED,
+                        now_ms=self.clock_ms(),
+                        terminal_error_code=terminal_code,
+                        completion_details={
+                            "reason": terminal_code,
+                            "snapshot_access_state": snapshot.access_state.value,
+                            "local_access_state": (
+                                current_observation.access_state.value
+                            ),
+                        },
+                        **self._assignment_fence_kwargs(),
+                    )
+                    return
+                raise RuntimeError("eligible profile has no visible video")
+
         plan_args = (
             self.repository,
             assignment.round_id,
@@ -276,12 +339,9 @@ class MobileAssignmentWorker:
 
         video_started_at_ms = self.clock_ms()
         if plan.video_key is None:
-            video_keys = self.device.list_video_keys()
-            if not video_keys:
-                raise RuntimeError("eligible profile has no visible video")
             plan = self.repository.set_plan_video(
                 plan.plan_id,
-                self._select_video(plan.seed, video_keys),
+                self._select_video(plan.seed, visible_video_keys),
                 now_ms=self.clock_ms(),
                 **self._action_fence_kwargs(),
             )
@@ -422,10 +482,16 @@ class MobileAssignmentWorker:
                     self._record_stage(
                         assignment_id, AssignmentStage.ACTION, started_at_ms
                     )
-                    self._defer(
+                    self.repository.complete_assignment(
                         assignment_id,
-                        f"action_{result.value}",
-                        manual_retry_only=True,
+                        self.owner_id,
+                        phase,
+                        now_ms=self.clock_ms(),
+                        terminal_error_code="action_uncertain_terminal",
+                        completion_details={
+                            "reason": "action_uncertain_after_single_reconciliation"
+                        },
+                        **self._assignment_fence_kwargs(),
                     )
                     return
                 if phase is AssignmentPhase.ACTION_EXECUTING:

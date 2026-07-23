@@ -4,7 +4,7 @@
 **更新时间：** 2026-07-21
 **适用范围：** 多账号移动触达、浏览器承接、AI 客服、私域导流、人工成交与经营漏斗
 
-> 当前生产先执行 A 策略：六台设备持续完成同一份去重目标池，并保留持久化断点。B 策略（每 1,000 个目标组成一个短批次，再由所有设备完成该批次）只作为后续对照实验记录，在当前 CSV 全量任务完成前不切换。
+> 当前运行已切换到 B 策略：原始去重目标池按短批次集中触达，并保留原任务、设备和持久化断点。策略只改变调度顺序，不改变资格、互动、额度、核验、幂等或 N/N 覆盖口径。
 
 ## 1. 业务目标
 
@@ -107,19 +107,19 @@ following > followers AND video_count >= 1
 系统分别记录访问覆盖和执行终态：
 
 - `profile_visit_confirmed`：已经在该设备上看见并确认目标主页身份，是正式 N/N 访问覆盖口径；
-- `assignment_completed`：该设备要求的留痕或互动已经达到可验证终态，是动作完整性和容量审计口径。
+- `assignment_completed`：该 assignment 已经耗尽自动处理。通常表示留痕或互动达到可验证终态；若唯一一次 reconciliation 后仍为 uncertain，或已确认访问后来无法重开未完成目标，则只表示自动重试终结，不能解释为互动确认成功。
 
 正式 `N/N` 覆盖以 durable confirmed visits 为准。创建任务或尝试导航不计覆盖；一个 deferred assignment 可能已经确认主页访问，但其互动终态仍未完成，因此覆盖率和 assignment completion 必须分列展示。
 
-普通慢页面会在本地执行有界恢复，包括重新检查、返回基线、重启 TikTok 或重建 Appium 会话。动作结果不确定时先读取当前状态进行 reconciliation，禁止直接再次点击可能会切换状态的控件。
+普通慢页面会在本地执行有界恢复，包括重新检查、返回基线、重启 TikTok 或重建 Appium 会话。动作结果不确定时只读取当前状态进行一次 reconciliation，禁止再次点击可能会切换状态的控件；仍不明确时保留 action plan 和 quota 的 uncertain 状态并终结该 assignment 的自动重试。容量与推广审计必须继续把它列为未确认互动。
 
-首次 assignment claim 仍停留在 `profile_opening`、没有 confirmed visit，并且 `open_target` 或 `confirm_profile_identity` 抛出精确的普通 `ValueError` 时，立即记录该设备 assignment 为 `profile_unreachable/skipped`。该结果不跨设备传播，其他启用设备仍保留并执行自己的 assignment；`ProfileIdentityMismatch`、身份确认后的错误、视频/动作失败和 uncertain 结果继续 deferred。可见且类型明确的 private/inaccessible 主页按身份确认后的 trace 处理，不归入 skipped。skipped 不计 N/N 覆盖；运营耗尽可用 `completed + skipped` 判断 worker 是否还有可处理任务。
+首次 assignment claim 仍停留在 `profile_opening`、没有 confirmed visit，并且 `open_target` 或 `confirm_profile_identity` 抛出精确的普通 `ValueError` 时，立即记录该设备 assignment 为 `profile_unreachable/skipped`。该结果不跨设备传播，其他启用设备仍保留并执行自己的 assignment。已确认访问后来无法重开未完成目标时保留访问证据、记录明确失败并终结自动处理，不伪造互动成功；其他 `ProfileIdentityMismatch` 和视频/动作失败继续 deferred。可见且类型明确的 private/inaccessible 主页按身份确认后的 trace 处理，不归入 skipped。skipped 不计 N/N 覆盖；运营耗尽可用 `completed + skipped` 判断 worker 是否还有可处理任务。
 
 ### 4.1 批次策略
 
-- **A 策略（当前生产）：** 所有设备对同一个完整目标池执行各自确定性乱序，持续运行直到全量 assignment 耗尽。优点是断点简单、设备可独立推进、现有生产证据最多。
-- **B 策略（后续实验）：** 把目标池按约 1,000 个逻辑用户拆成短批次，所有设备优先完成当前短批次，再进入下一批。目标是让同一批用户在更短时间窗口内获得多账号触达。
-- B 策略不改变任何目标资格、动作选择、额度、可见核验或 N/N 覆盖规则。正式启用前必须与 A 策略做转化率、吞吐、失败率和设备空闲率对照。
+- **A 策略：** 所有设备对同一个完整目标池执行各自确定性乱序，持续运行直到全量 assignment 耗尽。优点是断点简单、设备可独立推进。
+- **B 策略（当前运行）：** 把目标池按约 1,000 个逻辑用户拆成短批次，所有设备优先完成当前短批次，再进入下一批。目标是让同一批用户在更短时间窗口内获得多账号触达。
+- B 策略不改变任何目标资格、动作选择、额度、可见核验或 N/N 覆盖规则。运行期间继续与 A 策略对比转化率、吞吐、失败率和设备空闲率。
 
 ### 4.2 直播兴趣用户插队
 

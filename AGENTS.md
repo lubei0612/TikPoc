@@ -95,9 +95,12 @@ user-approved document and update this guide in the same change.
   classification, or new workflow branches unless required by approved business
   logic and separately verified against visible live state.
 - Automatic mobile claims process untouched pending assignments before deferred
-  repair work. After one uncertain reconciliation, or when an already-confirmed
-  visit cannot reopen its unfinished target, retain the immutable evidence in
-  manual-retry hold instead of reclaiming it every five minutes.
+  repair work. Perform exactly one reconciliation for an uncertain action and
+  never press its interaction control again. If that read remains uncertain, or
+  an already-confirmed visit cannot reopen its unfinished target, terminate the
+  automatic assignment while retaining the immutable plan, quota, failure and
+  uncertain evidence. This operational terminal state is not an interaction
+  confirmation and must remain visible as a capacity/promotion audit gap.
 - Per-account rolling one-hour limits are: like `100`, favorite `14`, repost
   `25`.
 - Rolling action usage and pacing are stored in the selected SQLite database.

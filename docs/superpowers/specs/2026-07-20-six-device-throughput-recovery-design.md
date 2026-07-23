@@ -167,13 +167,14 @@ click prevention was deployed, none became confirmed through a second or third
 consecutive reconciliation. Repeating the same read only extended action tails
 and amplified the deferred backlog.
 
-After a fresh action returns `uncertain`, perform at most one reconciliation.
-An already-uncertain durable plan receives one reconciliation only after an
-explicit operator retry. If that read is still ambiguous, reports `not_applied`,
-or reports an unavailable non-repost control, preserve the immutable plan as
-`uncertain`, keep its quota reservation, defer the assignment for manual retry,
-and release the device. It must not become automatically claimable again after
-five minutes. A visibly
+After a fresh action returns `uncertain`, perform exactly one reconciliation.
+An already-uncertain durable plan receives that single read when its assignment
+is resumed. If the read is still ambiguous, reports `not_applied`, or reports an
+unavailable non-repost control, preserve the immutable plan as `uncertain`, keep
+its quota reservation, record the assignment as an operational terminal result,
+and release the device. `completed` in this case means automatic work is
+exhausted; it does not mean the interaction was confirmed, and the uncertain
+plan must continue to fail capacity/promotion acceptance. A visibly
 unavailable repost control retains its existing trace fallback. Reconciliation
 never returns the plan to executable state and never presses the interaction
 control again.
@@ -207,10 +208,13 @@ still in `profile_opening` and has no confirmed visit. The transition records
 and terminal timestamp, then releases the assignment lease. The observation
 does not suppress the same target on other configured devices.
 
-`ProfileIdentityMismatch`, failures after identity confirmation, video/action
-failures, and uncertain actions remain deferred. They must not be converted to
-skipped because they represent integrity or reconciliation work rather than an
-unreachable target.
+`ProfileIdentityMismatch` and ordinary video/action failures remain deferred.
+An action still uncertain after its one reconciliation becomes operationally
+terminal while its plan and quota remain `uncertain`. If a durable confirmed
+visit later cannot reopen the unfinished target, record the explicit reopen
+failure and terminate automatic processing without claiming interaction
+success. Neither case is converted to `skipped`, because the confirmed visit
+must remain part of strict coverage accounting.
 
 Operational exhaustion uses `completed + skipped == total`, so a small number
 of unreachable profiles cannot keep a fleet alive forever. Coverage remains
@@ -225,8 +229,8 @@ untouched pending rows, all six devices entered repeated profile recovery and
 completed zero new assignments in the final five-minute audit window.
 
 Automatic claims now select pending rows before deferred rows. A confirmed-visit
-assignment that cannot reopen its unfinished target is held for manual retry,
-as is an action that remains uncertain after its one reconciliation. These rows
-retain their visit, immutable plan, selected video, quota reservation, error, and
-coverage gap. Operator retry resets the hold when a deliberate repair window is
-appropriate.
+assignment that cannot reopen its unfinished target, and an action that remains
+uncertain after its one reconciliation, terminate automatic processing instead
+of being reclaimed every five minutes. These rows retain their visit, immutable
+plan, selected video, quota reservation, error or uncertain evidence, and audit
+gap. They are never interpreted as confirmed interaction success.

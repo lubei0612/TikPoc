@@ -2293,10 +2293,17 @@ class AcquisitionRepository:
         expected_phase: AssignmentPhase | str,
         *,
         now_ms: int,
+        terminal_error_code: str | None = None,
+        completion_details: Mapping[str, object] | None = None,
         worker_account_id: str | None = None,
         worker_fence_token: int | None = None,
     ) -> RoundAssignment:
         expected = AssignmentPhase(expected_phase)
+        normalized_terminal_error = (
+            None if terminal_error_code is None else str(terminal_error_code).strip()
+        )
+        if terminal_error_code is not None and not normalized_terminal_error:
+            raise ValueError("terminal error code must be nonempty")
         if AssignmentPhase.COMPLETED not in _ALLOWED_PHASE_TRANSITIONS.get(
             expected, set()
         ):
@@ -2324,11 +2331,17 @@ class AcquisitionRepository:
                 """
                 UPDATE round_assignments
                 SET phase = 'completed', completed_at_ms = ?,
-                    last_error_code = NULL, lease_owner = NULL,
+                    last_error_code = ?, lease_owner = NULL,
                     lease_expires_at_ms = 0
                 WHERE assignment_id = ? AND lease_owner = ? AND phase = ?
                 """,
-                (now_ms, assignment_id, owner_id, expected.value),
+                (
+                    now_ms,
+                    normalized_terminal_error,
+                    assignment_id,
+                    owner_id,
+                    expected.value,
+                ),
             )
             if cursor.rowcount != 1:
                 raise ValueError("assignment phase or lease owner changed")
@@ -2338,7 +2351,7 @@ class AcquisitionRepository:
                 expected,
                 AssignmentPhase.COMPLETED,
                 now_ms,
-                {},
+                completion_details or {},
             )
             round_id = str(row["round_id"])
             priority = connection.execute(
