@@ -12,7 +12,7 @@ The existing `priority_batches` queue is also being used to store preloaded Stra
 
 `priority_batches` gains an immutable `batch_class`:
 
-- `background`: preloaded Strategy B waves. They retain their existing FIFO and all-device barrier semantics.
+- `background`: preloaded Strategy B waves. They retain FIFO order, while the barrier is evaluated against the devices currently controlled as `running` so temporarily paused devices do not halt the active cohort.
 - `live_interrupt`: collector submissions. They are selected before every background batch, while remaining FIFO among themselves.
 
 Existing databases migrate conservatively with `live_interrupt` as the schema default because that preserves the behavior of batches created by earlier releases. The current Strategy B database is backed up and its `strategy-b-*` batches are explicitly reclassified as `background` before live acceptance.
@@ -37,6 +37,8 @@ When a worker asks for scheduled work:
 6. When no live interrupt remains, scheduling returns to the oldest incomplete background wave and its existing checkpoint.
 
 A live batch does not mark background assignments completed and does not change their order keys, phases, attempts, or leases. Confirmed-visit propagation continues to suppress genuine same-device duplicate visits; skipped, deferred, uncertain, or unconfirmed results do not propagate.
+
+For background waves, a paused device's assignments remain pending and auditable. When every currently running device reaches a terminal phase for the oldest wave, those running devices may advance together to the next background wave. When a paused device resumes, it becomes part of the running barrier again, claims its earliest missed wave first, and the already-ahead devices wait until the resumed cohort catches up. No paused assignment is marked completed or skipped merely to advance the active cohort.
 
 ## CLI Contract
 
@@ -66,4 +68,5 @@ Successful JSON adds:
 4. Replaying the import after control changes returns the same batch and original four participants.
 5. After the live barrier completes, the next claim returns to the exact unfinished background batch.
 6. Existing strict background barrier tests remain green.
-7. Current production DB is backed up, existing Strategy B batches are reclassified, a synthetic live batch is imported, processed by active devices, and the original background checkpoint remains unchanged except for valid confirmed-visit propagation.
+7. Pausing one background participant lets the remaining running cohort advance after its own barrier; resuming that participant makes it claim the earliest missed wave without losing assignments.
+8. Current production DB is backed up, existing Strategy B batches are reclassified, a synthetic live batch is imported, processed by active devices, and the original background checkpoint remains unchanged except for valid confirmed-visit propagation.

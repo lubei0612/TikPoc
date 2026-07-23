@@ -78,7 +78,7 @@ git commit -m "feat: persist priority batch classes"
 
 - [ ] **Step 1: Write failing scheduler tests**
 
-Add tests proving: an unfinished background batch yields to a later live batch after the current lease; two live batches remain FIFO; a device outside the live participant snapshot receives no live assignment; completing the live participant barrier returns the next claim to the original unfinished background batch; existing strict background barrier behavior remains unchanged.
+Add tests proving: an unfinished background batch yields to a later live batch after the current lease; two live batches remain FIFO; a device outside the live participant snapshot receives no live assignment; completing the live participant barrier returns the next claim to the original unfinished background batch; existing strict background barrier behavior remains unchanged; a paused background participant does not block the running cohort; and a resumed participant claims its earliest missed wave before the ahead cohort continues.
 
 - [ ] **Step 2: Verify RED**
 
