@@ -1,6 +1,9 @@
 from tests.test_profile_parser import PROFILE_XML
 import pytest
-from selenium.common.exceptions import StaleElementReferenceException
+from selenium.common.exceptions import (
+    StaleElementReferenceException,
+    WebDriverException,
+)
 from tikpoc.acquisition_models import (
     ActionResult,
     OutcomeKind,
@@ -199,6 +202,26 @@ class ScrollingProfileDriver(FakeDriver):
     ) -> None:
         self.swipes += 1
         self.page_source = self.page_source.replace('text="101"', 'text="404"')
+
+
+class LowResolutionScrollingProfileDriver(ScrollingProfileDriver):
+    def __init__(self) -> None:
+        super().__init__()
+        self.swipe_coordinates: tuple[int, int, int, int, int] | None = None
+
+    def get_window_size(self) -> dict[str, int]:
+        return {"width": 720, "height": 1600}
+
+    def swipe(
+        self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int
+    ) -> None:
+        self.swipe_coordinates = (start_x, start_y, end_x, end_y, duration)
+        super().swipe(start_x, start_y, end_x, end_y, duration)
+
+
+class UnavailableWindowSizeScrollingProfileDriver(LowResolutionScrollingProfileDriver):
+    def get_window_size(self) -> dict[str, int]:
+        raise WebDriverException("window size is temporarily unavailable")
 
 
 class DelayedProfileMarkerDriver(FakeDriver):
@@ -1195,6 +1218,24 @@ def test_appium_device_scrolls_to_confirm_more_than_three_posts() -> None:
 
     assert metrics == ProfileMetrics(12, 10, 4)
     assert driver.swipes == 1
+
+
+def test_appium_device_scales_profile_grid_swipe_to_window_size() -> None:
+    driver = LowResolutionScrollingProfileDriver()
+    device = AppiumTikTokDevice(driver, poll_interval=0)
+
+    assert device.read_profile_metrics() == ProfileMetrics(12, 10, 4)
+
+    assert driver.swipe_coordinates == (360, 1440, 360, 800, 600)
+
+
+def test_appium_device_uses_legacy_grid_swipe_when_window_size_fails() -> None:
+    driver = UnavailableWindowSizeScrollingProfileDriver()
+    device = AppiumTikTokDevice(driver, poll_interval=0)
+
+    assert device.read_profile_metrics() == ProfileMetrics(12, 10, 4)
+
+    assert driver.swipe_coordinates == (540, 1900, 540, 1050, 600)
 
 
 def test_appium_device_performs_semantic_video_actions() -> None:

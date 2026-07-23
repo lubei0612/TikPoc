@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Protocol
 
 from PIL import Image, UnidentifiedImageError
+from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.common.by import By
 
 from .acquisition_models import (
@@ -151,6 +152,23 @@ class AppiumTikTokDevice:
         self._profile_source = None
         self._visible_post_elements = None
 
+    def _swipe_profile_grid(self) -> None:
+        try:
+            window = self.driver.get_window_size()
+            width = max(1, int(window["width"]))
+            height = max(1, int(window["height"]))
+        except (AttributeError, KeyError, TypeError, ValueError, WebDriverException):
+            self.driver.swipe(540, 1900, 540, 1050, 600)
+            return
+        center_x = width // 2
+        self.driver.swipe(
+            center_x,
+            int(height * 0.9),
+            center_x,
+            int(height * 0.5),
+            600,
+        )
+
     def _open_route(self, uri: str) -> None:
         self._invalidate_profile_source()
         if self.route_opener is not None:
@@ -216,7 +234,7 @@ class AppiumTikTokDevice:
                 page = parse_profile_page(self.driver.page_source)
                 if page.visible_post_count != 3:
                     return page.metrics
-                self.driver.swipe(540, 1900, 540, 1050, 600)
+                self._swipe_profile_grid()
                 time.sleep(self.poll_interval)
                 next_keys = parse_visible_post_keys(self.driver.page_source)
                 has_new_post = bool(set(next_keys) - set(page.visible_post_keys))
@@ -458,7 +476,7 @@ class AppiumTikTokDevice:
                     self.sleeper(self.poll_interval)
                     continue
             if page.visible_post_count == 3:
-                self.driver.swipe(540, 1900, 540, 1050, 600)
+                self._swipe_profile_grid()
                 self.sleeper(self.poll_interval)
                 next_source = str(self.driver.page_source)
                 self._profile_source = next_source
