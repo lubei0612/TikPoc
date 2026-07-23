@@ -10,7 +10,7 @@ TikPoc 是一套面向多账号运营的本地任务编排系统。它把移动�
 - **可恢复执行**：SQLite 持久化 assignment、租约、动作计划、额度和断点。
 - **可见状态核验**：主页身份、视频打开和 confirmed 互动均以界面可见证据为准；唯一一次核验仍不明确时保留 uncertain 证据并终结自动重试。
 - **策略 A / B**：支持全量独立乱序，以及按短批次集中触达并设置全设备屏障。
-- **实时插队**：直播兴趣用户可作为 FIFO 优先批次插入；完成后从原任务断点继续。
+- **实时插队**：直播兴趣用户进入独立 `live_interrupt` 通道，抢占预载策略 B 波次；按提交时运行设备完成后从原断点继续。
 - **浏览器承接**：独立 Chrome Profile 处理关注、消息、AI 回复计划和人工接管。
 - **运营控制台**：查看设备健康、任务进度、覆盖、异常和线索漏斗。
 
@@ -156,6 +156,8 @@ uv run tikpoc priority-import \
 
 uv run tikpoc priority-status --db runtime/tikpoc.db
 ```
+
+`priority-import` 会快照提交时控制状态为 `running` 的设备。输出中的 `batch_class` 为 `live_interrupt`；暂停设备不参加该批，相同文件与 `source-live` 重放仍返回第一次的参与快照。
 
 详细机器合同见 [直播插队 CLI](docs/priority-live-batch-cli.md)。
 

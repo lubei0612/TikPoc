@@ -123,7 +123,7 @@ following > followers AND video_count >= 1
 
 ### 4.2 直播兴趣用户插队
 
-直播间采集器可以把当前在线且与产品相关的用户作为 FIFO 插队批次提交。系统先让各设备完成已经持有租约的当前用户，再由所有参与设备完成最早的插队批次；快设备在全设备屏障等待，不提前返回原任务。多个插队批次按提交顺序执行，全部完成后从普通大任务原有 assignment、attempt 和乱序断点继续。
+直播间采集器可以把当前在线且与产品相关的用户作为 `live_interrupt` 插队批次提交。系统先让各设备完成已经持有租约的当前用户，再抢占预载的 `background` 策略 B 波次。导入瞬间控制状态为 `running` 的设备形成不可变参与快照；暂停或停止设备不参与该批。快设备在参与设备屏障等待，多个实时插队按提交顺序执行，全部完成后从原 background assignment、attempt 和乱序断点继续。
 
 插队批次沿用当前普通轮次的设备账号快照，每台设备仍使用不同的持久化乱序种子。同一设备账号在本轮已确认访问的身份不会重复触达：普通任务的 confirmed visit 可以满足插队 assignment，插队 confirmed visit 也可以满足该设备尚未开始的普通 assignment 和后续重复插队 assignment。该传播只接受明确 confirmed visit；skipped、deferred/uncertain、缺少访问证据或稳定身份冲突都不传播，也不跨设备账号传播。
 

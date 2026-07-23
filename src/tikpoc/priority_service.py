@@ -15,6 +15,7 @@ from .priority_importer import read_priority_targets
 @dataclass(frozen=True)
 class PriorityImportSummary:
     batch_id: str
+    batch_class: str
     parent_round_id: str
     unique_targets: int
     skipped_duplicates: int
@@ -88,6 +89,7 @@ class PriorityBatchService:
         if existing is not None:
             return PriorityImportSummary(
                 batch_id=existing.batch_id,
+                batch_class=existing.batch_class.value,
                 parent_round_id=existing.parent_round_id,
                 unique_targets=len(parsed.targets),
                 skipped_duplicates=parsed.skipped_duplicates,
@@ -126,6 +128,7 @@ class PriorityBatchService:
         )
         return PriorityImportSummary(
             batch_id=batch_id,
+            batch_class=PriorityBatchClass.LIVE_INTERRUPT.value,
             parent_round_id=parent_round_id,
             unique_targets=imported.unique_targets,
             skipped_duplicates=parsed.skipped_duplicates,
@@ -146,7 +149,7 @@ class PriorityBatchService:
         with self.repository._connect_read_only() as connection:
             rows = connection.execute(
                 """
-                SELECT batch_id, parent_round_id, priority_round_id
+                SELECT batch_id, batch_class, parent_round_id, priority_round_id
                 FROM priority_batches
                 WHERE source_checksum = ? AND source_live_id = ?
                 ORDER BY queue_sequence
@@ -165,6 +168,7 @@ class PriorityBatchService:
             raise ValueError("device ids do not match replayed priority batch")
         return PriorityImportSummary(
             batch_id=str(row["batch_id"]),
+            batch_class=str(row["batch_class"]),
             parent_round_id=str(row["parent_round_id"]),
             unique_targets=unique_targets,
             skipped_duplicates=skipped_duplicates,
@@ -204,6 +208,7 @@ class PriorityBatchService:
                 batch_rows.append(
                     {
                         "batch_id": str(batch["batch_id"]),
+                        "batch_class": str(batch["batch_class"]),
                         "parent_round_id": str(batch["parent_round_id"]),
                         "queue_sequence": int(batch["queue_sequence"]),
                         "source_live_id": str(batch["source_live_id"]),

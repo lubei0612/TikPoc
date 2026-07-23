@@ -5,7 +5,7 @@
 ## 前置条件
 
 - SQLite 中恰好有一个 `pending` 或 `running` 的普通触达轮次。
-- `--devices` 必须与该轮次的设备 ID 完全一致。
+- `--devices` 必须与该轮次的设备 ID 完全一致；系统会从中快照命令提交时控制状态为 `running` 的设备，暂停或停止的设备不参加本次实时插队。
 - 采集程序先在临时文件中写完整内容并关闭文件，再原子重命名为最终路径，最后调用 CLI。
 - 不要边追加文件边执行导入。TikPoc 会拒绝读取期间发生变化的文件。
 
@@ -46,10 +46,12 @@ uv run tikpoc priority-import \
 成功时 stdout 只输出一行 JSON：
 
 ```json
-{"batch_id":"priority-0123456789abcdef","device_count":6,"parent_round_id":"round-0123456789abcdef0123","skipped_duplicates":3,"skipped_invalid":1,"unique_targets":246}
+{"batch_class":"live_interrupt","batch_id":"priority-0123456789abcdef","device_count":4,"parent_round_id":"round-0123456789abcdef0123","skipped_duplicates":3,"skipped_invalid":1,"unique_targets":246}
 ```
 
 相同普通轮次、文件 SHA-256 和 `source-live` 会得到相同 batch ID。批次完成且进程重启后再次执行同一命令，也会返回原 batch ID。若已有新的活动普通轮次，同一来源会为新轮次创建独立批次。
+
+参与设备快照是不可变的。相同命令重放时，即使设备暂停/运行状态已经变化，也返回第一次导入的 batch ID 和参与设备数量。
 
 ## 状态命令
 
@@ -60,6 +62,7 @@ uv run tikpoc priority-status --db /path/to/tikpoc.db
 stdout 输出一行 JSON，包含：
 
 - `batches`：按 `queue_sequence` 升序排列的全部批次；
+- `batch_class`：采集器提交为 `live_interrupt`，预载策略 B 波次为 `background`；
 - `state`：`queued`、`running`、`barrier` 或 `completed`；
 - `devices`：每台设备的 `total`、`pending`、`deferred`、`completed`、`skipped`；
 - `ordinary_checkpoint`：原任务的 `total`、`pending`、`deferred`、`completed`、`skipped` 和 `visits_confirmed`。
@@ -69,9 +72,10 @@ stdout 输出一行 JSON，包含：
 ## 调度与恢复
 
 1. 已持有租约的当前用户先完成完整原子流程。
-2. 执行最早的未完成插队批次。
-3. 所有参与设备到达终态后才进入下一插队批次。
-4. 插队队列清空后，从原 assignment、attempt 和 order key 断点继续。
+2. `live_interrupt` 优先于所有 `background` 波次；多个实时插队仍按提交顺序 FIFO。
+3. 只有导入瞬间为 `running` 的设备进入不可变参与快照。
+4. 所有快照设备到达终态后才进入下一实时插队批次。
+5. 实时插队队列清空后，从原 background assignment、attempt 和 order key 断点继续。
 
 同一设备账号若已在当前普通轮次确认访问该身份，插队 assignment 直接记录为满足；插队确认访问也会满足同设备账号尚未开始的普通 assignment 和后续重复插队 assignment。`deferred`/uncertain、`skipped` 和缺少 confirmed visit 的结果不会传播。
 

@@ -87,6 +87,7 @@ def test_priority_import_is_idempotent_and_prints_redacted_json(
 
     assert first == second
     assert first == {
+        "batch_class": "live_interrupt",
         "batch_id": first["batch_id"],
         "device_count": 2,
         "parent_round_id": parent_round,
@@ -95,6 +96,7 @@ def test_priority_import_is_idempotent_and_prints_redacted_json(
         "unique_targets": 2,
     }
     assert set(first) == {
+        "batch_class",
         "batch_id",
         "device_count",
         "parent_round_id",
@@ -146,6 +148,7 @@ def test_priority_status_prints_fifo_device_progress_and_parent_checkpoint(
     assert len(payload["batches"]) == 1
     batch = payload["batches"][0]
     assert batch["queue_sequence"] == 1
+    assert batch["batch_class"] == "live_interrupt"
     assert batch["source_live_id"] == "live-1"
     assert batch["state"] == "queued"
     assert batch["devices"] == [
