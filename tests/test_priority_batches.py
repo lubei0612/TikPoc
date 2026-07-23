@@ -84,7 +84,12 @@ def test_priority_batch_uses_distinct_deterministic_order_per_device(
 ) -> None:
     repository, ordinary_round, priority_pool = _seeded_repository(tmp_path)
 
-    batch = _create_batch(repository, ordinary_round, priority_pool)
+    batch = _create_batch(
+        repository,
+        ordinary_round,
+        priority_pool,
+        device_seeds={"d1": "a1", "d2": "b1"},
+    )
 
     first_order = repository.device_target_order(batch.priority_round_id, "d1")
     second_order = repository.device_target_order(batch.priority_round_id, "d2")
@@ -169,6 +174,28 @@ def test_background_batch_records_class_and_requires_full_parent(
     )
 
     assert batch.batch_class is PriorityBatchClass.BACKGROUND
+
+
+def test_batch_class_contributes_to_priority_round_identity(tmp_path: Path) -> None:
+    background_repository, background_parent, background_pool = _seeded_repository(
+        tmp_path / "background"
+    )
+    live_repository, live_parent, live_pool = _seeded_repository(tmp_path / "live")
+
+    background = _create_batch(
+        background_repository,
+        background_parent,
+        background_pool,
+        batch_class="background",
+    )
+    live = _create_batch(
+        live_repository,
+        live_parent,
+        live_pool,
+        batch_class="live_interrupt",
+    )
+
+    assert background.priority_round_id != live.priority_round_id
 
 
 def test_priority_batch_rejects_terminal_parent_round(tmp_path: Path) -> None:

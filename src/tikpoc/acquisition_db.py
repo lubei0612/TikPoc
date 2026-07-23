@@ -1278,6 +1278,7 @@ class AcquisitionRepository:
                 "parent_round_id": normalized_parent,
                 "pool_id": normalized_pool,
                 "source_checksum": checksum,
+                "batch_class": normalized_batch_class.value,
                 "device_seeds": sorted(normalized_seeds.items()),
             },
             separators=(",", ":"),
