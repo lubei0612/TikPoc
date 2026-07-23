@@ -94,8 +94,18 @@ user-approved document and update this guide in the same change.
 - Keep throughput fixes minimal and local. Do not add Inbox navigation, target
   classification, or new workflow branches unless required by approved business
   logic and separately verified against visible live state.
+- Automatic mobile claims process untouched pending assignments before deferred
+  repair work. After one uncertain reconciliation, or when an already-confirmed
+  visit cannot reopen its unfinished target, retain the immutable evidence in
+  manual-retry hold instead of reclaiming it every five minutes.
 - Per-account rolling one-hour limits are: like `100`, favorite `14`, repost
   `25`.
+- Rolling action usage and pacing are stored in the selected SQLite database.
+  Never switch a live account to a fresh database until it has completed a full
+  60-minute no-action cooldown measured from the latest non-trace reservation,
+  action attempt, or later controlled-action evidence; every prior database has
+  been checked; and no other worker can act for that account/device. Prefer a
+  fresh pool and round in the persistent fleet database.
 - A repost is complete only after the visible repost control inside the share
   surface has been activated and its resulting state has been verified.
 - A visibly loaded share surface without a repost control records
@@ -337,9 +347,9 @@ Completed on `feat/web-lead-conversion`:
 - Rolling-hour pacing now spreads like/favorite/repost toward 100/14/25 per
   account, accepts profiles with at least one post, and keeps trace-only visits
   when no action is due.
-- Blank stable routes now perform bounded route retries, an Inbox baseline
-  reset, and one TikTok restart before a terminal failure. Route, identity,
-  metrics, video, and action durations are persisted per assignment.
+- Blank stable routes now perform bounded route retries followed by one direct
+  terminate-and-route restart, without using Inbox as a baseline. Route,
+  identity, metrics, video, and action durations are persisted per assignment.
 - The Chinese Operations console now shows rolling pacing and 20-hour capacity
   KPIs. Component tests pass 29/29 and Playwright passes 12/12 at 1440x1000,
   1920x1080, and 390x844 with inspected full-page screenshots.
@@ -347,8 +357,8 @@ Completed on `feat/web-lead-conversion`:
   plans or leases. Final-attempt mean/P90 were 4.658/6.980 seconds and the
   20-hour projection was 15,455 targets. This is measured 326-target evidence;
   the unchanged-build 500-unique-target gate remains open.
-- Stable-ID routes that remain blank after baseline and one restart now fall
-  back to the public username URL and require exact visible username matching.
+- Stable-ID routes that remain blank after the direct restart fall back to the
+  public username URL and require exact visible username matching.
 - Multi-account Browser Tasks 1-3 are complete: the localhost service exposes
   redacted arbitrary-account bindings, visible TikTok identity gates Activity
   and Messages actions, and each Chrome Profile selects one server mapping from
@@ -538,9 +548,11 @@ Outstanding at the current checkpoint:
    bidirectional manual DM delivery, and `4/4` browser health already passed; do
    not repeat them on a conversation whose later bubbles disappear after reload.
    Continue with a fresh controlled conversation that receives live DOM updates.
-4. Repeat the fresh final-build 100-target slot-1 preflight after cooldown or
-   measured route/video latency improvement. Start the clean 500-target gate
-   only when mean is below 6.5 seconds and P90 is below 8.64 seconds.
+4. Repeat the fresh final-build 100-target slot-1 preflight only after the full
+   cross-database 60-minute no-action cooldown and either measured route/video
+   latency improvement or a documented unchanged-build retry. Start the clean
+   500-target gate only when mean is below 6.5 seconds and P90 is below 8.64
+   seconds.
 5. Execute the remaining Mobile Task 10 two-device live gate on slots 1 and 2.
 6. Finish full regression, two-device calibration, four-/eight-hour endurance
    tests, the seven-device benchmark, runbooks, and branch/PR integration.
