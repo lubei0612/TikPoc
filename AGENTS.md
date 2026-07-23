@@ -117,6 +117,10 @@ user-approved document and update this guide in the same change.
   device/account pair.
 - All enabled accounts process the same logical target batch. Coverage is based
   on durable confirmed visits, not task creation or attempted navigation.
+- Strategy B groups five 200-target waves into each 1,000-target task. Each
+  device uses an independent deterministic shuffle and applies no inter-device
+  delay to the same target; coincidental nearby visits are acceptable, while a
+  shared identical device order is not.
 
 ### Browser lead plane
 
