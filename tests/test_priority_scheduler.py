@@ -51,6 +51,7 @@ def _seeded_priority_queue(
         source_live_id="live-1",
         source_checksum="b" * 64,
         device_seeds={"d1": "priority-1-d1", "d2": "priority-1-d2"},
+        batch_class="background",
     )
     second_pool = _import_pool(repository, "priority-two", "c")
     second = repository.create_priority_batch(
@@ -60,8 +61,30 @@ def _seeded_priority_queue(
         source_live_id="live-2",
         source_checksum="c" * 64,
         device_seeds={"d1": "priority-2-d1", "d2": "priority-2-d2"},
+        batch_class="background",
     )
     return repository, ordinary_round, first.priority_round_id, second.priority_round_id
+
+
+def _create_live_interrupt(
+    repository: AcquisitionRepository,
+    ordinary_round: str,
+    *,
+    name: str,
+    checksum_char: str,
+    devices: tuple[str, ...] = ("d1", "d2"),
+) -> str:
+    pool = _import_pool(repository, name, checksum_char)
+    batch = repository.create_priority_batch(
+        batch_id=f"priority-{name}",
+        parent_round_id=ordinary_round,
+        pool_id=pool,
+        source_live_id=name,
+        source_checksum=checksum_char * 64,
+        device_seeds={device: f"{name}-{device}" for device in devices},
+        batch_class="live_interrupt",
+    )
+    return batch.priority_round_id
 
 
 def _mark_assignment_terminal(
@@ -260,6 +283,91 @@ def test_fast_device_waits_while_another_device_has_priority_work(
     assert repository.priority_batch("priority-1").state.value == "barrier"
     assert slow_device is not None
     assert slow_device.round_id == priority_one
+
+
+def test_live_interrupt_preempts_unfinished_background_after_current_lease(
+    tmp_path: Path,
+) -> None:
+    repository, ordinary, background_one, _background_two = _seeded_priority_queue(
+        tmp_path
+    )
+    current = repository.claim_scheduled_assignment(
+        ordinary, "d1", "worker-1", now_ms=1_000
+    )
+    assert current is not None
+    assert current.round_id == background_one
+    live = _create_live_interrupt(
+        repository,
+        ordinary,
+        name="live-now",
+        checksum_char="d",
+    )
+
+    _mark_assignment_terminal(repository, current.assignment_id, now_ms=1_100)
+    claimed = repository.claim_scheduled_assignment(
+        ordinary, "d1", "worker-1", now_ms=1_200
+    )
+
+    assert claimed is not None
+    assert claimed.round_id == live
+
+
+def test_live_interrupts_remain_fifo_before_background_resume(tmp_path: Path) -> None:
+    repository, ordinary, background_one, _background_two = _seeded_priority_queue(
+        tmp_path
+    )
+    live_one = _create_live_interrupt(
+        repository,
+        ordinary,
+        name="live-one",
+        checksum_char="d",
+    )
+    live_two = _create_live_interrupt(
+        repository,
+        ordinary,
+        name="live-two",
+        checksum_char="e",
+    )
+
+    first = repository.claim_scheduled_assignment(
+        ordinary, "d1", "worker-1", now_ms=1_000
+    )
+    assert first is not None and first.round_id == live_one
+    _mark_round_terminal(repository, live_one, now_ms=1_100)
+    second = repository.claim_scheduled_assignment(
+        ordinary, "d1", "worker-1", now_ms=1_200
+    )
+    assert second is not None and second.round_id == live_two
+    _mark_round_terminal(repository, live_two, now_ms=1_300)
+
+    resumed = repository.claim_scheduled_assignment(
+        ordinary, "d1", "worker-1", now_ms=1_400
+    )
+    assert resumed is not None
+    assert resumed.round_id == background_one
+
+
+def test_nonparticipant_waits_while_live_interrupt_is_active(tmp_path: Path) -> None:
+    repository, ordinary, _background_one, _background_two = _seeded_priority_queue(
+        tmp_path
+    )
+    live = _create_live_interrupt(
+        repository,
+        ordinary,
+        name="live-d1-only",
+        checksum_char="d",
+        devices=("d1",),
+    )
+
+    assert (
+        repository.claim_scheduled_assignment(ordinary, "d2", "worker-2", now_ms=1_000)
+        is None
+    )
+    participant = repository.claim_scheduled_assignment(
+        ordinary, "d1", "worker-1", now_ms=1_000
+    )
+    assert participant is not None
+    assert participant.round_id == live
 
 
 def test_scheduler_resumes_ordinary_round_after_all_priority_batches_terminal(

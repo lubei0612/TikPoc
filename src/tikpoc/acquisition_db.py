@@ -1537,7 +1537,13 @@ class AcquisitionRepository:
                     """
                     SELECT * FROM priority_batches
                     WHERE parent_round_id = ? AND state <> 'completed'
-                    ORDER BY queue_sequence LIMIT 1
+                    ORDER BY
+                      CASE batch_class
+                        WHEN 'live_interrupt' THEN 0
+                        ELSE 1
+                      END,
+                      queue_sequence
+                    LIMIT 1
                     """,
                     (normalized_parent,),
                 ).fetchone()
