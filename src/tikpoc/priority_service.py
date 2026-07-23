@@ -7,6 +7,7 @@ from zipfile import BadZipFile
 from openpyxl.utils.exceptions import InvalidFileException
 
 from .acquisition_db import AcquisitionRepository
+from .acquisition_models import PriorityBatchClass
 from .fleet import FleetConfig
 from .priority_importer import read_priority_targets
 
@@ -81,6 +82,27 @@ class PriorityBatchService:
         if configured_device_ids != self.repository.round_device_ids(parent_round_id):
             raise ValueError("device ids do not match active ordinary round")
 
+        existing = self.repository.priority_batch_for_source(
+            parent_round_id, live_id, checksum
+        )
+        if existing is not None:
+            return PriorityImportSummary(
+                batch_id=existing.batch_id,
+                parent_round_id=existing.parent_round_id,
+                unique_targets=len(parsed.targets),
+                skipped_duplicates=parsed.skipped_duplicates,
+                skipped_invalid=parsed.skipped_invalid,
+                device_count=len(
+                    self.repository.round_device_ids(existing.priority_round_id)
+                ),
+            )
+
+        participant_device_ids = self.repository.running_round_device_ids(
+            parent_round_id
+        )
+        if not participant_device_ids:
+            raise ValueError("priority import requires at least one running device")
+
         imported = self.repository.import_pool(source.name, checksum, parsed.targets)
         batch_digest = hashlib.sha256(
             "\0".join((parent_round_id, live_id, checksum)).encode()
@@ -90,7 +112,7 @@ class PriorityBatchService:
             device_id: hashlib.sha256(
                 "\0".join((batch_id, device_id)).encode()
             ).hexdigest()
-            for device_id in configured_device_ids
+            for device_id in participant_device_ids
         }
         self.repository.create_priority_batch(
             batch_id=batch_id,
@@ -99,6 +121,7 @@ class PriorityBatchService:
             source_live_id=live_id,
             source_checksum=checksum,
             device_seeds=device_seeds,
+            batch_class=PriorityBatchClass.LIVE_INTERRUPT,
             require_unique_active_parent=True,
         )
         return PriorityImportSummary(
@@ -107,7 +130,7 @@ class PriorityBatchService:
             unique_targets=imported.unique_targets,
             skipped_duplicates=parsed.skipped_duplicates,
             skipped_invalid=parsed.skipped_invalid,
-            device_count=len(configured_device_ids),
+            device_count=len(participant_device_ids),
         )
 
     def _replay_completed_batch(
@@ -138,7 +161,7 @@ class PriorityBatchService:
         stored_device_ids = self.repository.round_device_ids(
             str(row["priority_round_id"])
         )
-        if configured_device_ids != stored_device_ids:
+        if not set(stored_device_ids).issubset(configured_device_ids):
             raise ValueError("device ids do not match replayed priority batch")
         return PriorityImportSummary(
             batch_id=str(row["batch_id"]),
@@ -146,7 +169,7 @@ class PriorityBatchService:
             unique_targets=unique_targets,
             skipped_duplicates=skipped_duplicates,
             skipped_invalid=skipped_invalid,
-            device_count=len(configured_device_ids),
+            device_count=len(stored_device_ids),
         )
 
     def status(self) -> dict[str, object]:

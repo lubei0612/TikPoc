@@ -1182,6 +1182,49 @@ class AcquisitionRepository:
                 )
             )
 
+    def running_round_device_ids(self, round_id: str) -> tuple[str, ...]:
+        with self._connect_read_only() as connection:
+            return tuple(
+                str(row["device_id"])
+                for row in connection.execute(
+                    """
+                    SELECT seed.device_id
+                    FROM round_device_seeds AS seed
+                    LEFT JOIN operator_control_states AS control
+                      ON control.scope = 'device'
+                     AND control.scope_id = seed.device_id
+                    WHERE seed.round_id = ?
+                      AND COALESCE(control.state, 'running') = 'running'
+                    ORDER BY seed.device_id
+                    """,
+                    (str(round_id).strip(),),
+                )
+            )
+
+    def priority_batch_for_source(
+        self,
+        parent_round_id: str,
+        source_live_id: str,
+        source_checksum: str,
+    ) -> PriorityBatch | None:
+        with self._connect_read_only() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM priority_batches
+                WHERE parent_round_id = ?
+                  AND source_live_id = ?
+                  AND source_checksum = ?
+                ORDER BY queue_sequence
+                LIMIT 1
+                """,
+                (
+                    str(parent_round_id).strip(),
+                    str(source_live_id).strip(),
+                    str(source_checksum).strip(),
+                ),
+            ).fetchone()
+            return None if row is None else self._priority_batch_from_row(row)
+
     def create_priority_batch(
         self,
         *,
