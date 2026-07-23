@@ -117,6 +117,24 @@ def _mark_round_terminal(
         )
 
 
+def _set_device_control(
+    repository: AcquisitionRepository, device_id: str, state: str, *, now_ms: int
+) -> None:
+    with repository._connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO operator_control_states(
+                scope, scope_id, state, updated_at_ms, command_id
+            ) VALUES ('device', ?, ?, ?, ?)
+            ON CONFLICT(scope, scope_id) DO UPDATE SET
+                state=excluded.state,
+                updated_at_ms=excluded.updated_at_ms,
+                command_id=excluded.command_id
+            """,
+            (device_id, state, now_ms, f"control-{device_id}-{now_ms}"),
+        )
+
+
 def test_scheduler_finishes_current_lease_then_prefers_oldest_priority_batch(
     tmp_path: Path,
 ) -> None:
@@ -283,6 +301,54 @@ def test_fast_device_waits_while_another_device_has_priority_work(
     assert repository.priority_batch("priority-1").state.value == "barrier"
     assert slow_device is not None
     assert slow_device.round_id == priority_one
+
+
+def test_paused_background_device_does_not_block_running_cohort(
+    tmp_path: Path,
+) -> None:
+    repository, ordinary, priority_one, priority_two = _seeded_priority_queue(tmp_path)
+    _set_device_control(repository, "d2", "paused", now_ms=900)
+    first = repository.claim_scheduled_assignment(
+        ordinary, "d1", "worker-1", now_ms=1_000
+    )
+    assert first is not None and first.round_id == priority_one
+    _mark_assignment_terminal(repository, first.assignment_id, now_ms=1_100)
+
+    advanced = repository.claim_scheduled_assignment(
+        ordinary, "d1", "worker-1", now_ms=1_200
+    )
+
+    assert advanced is not None
+    assert advanced.round_id == priority_two
+
+
+def test_resumed_background_device_catches_up_before_ahead_cohort(
+    tmp_path: Path,
+) -> None:
+    repository, ordinary, priority_one, priority_two = _seeded_priority_queue(tmp_path)
+    _set_device_control(repository, "d2", "paused", now_ms=900)
+    first = repository.claim_scheduled_assignment(
+        ordinary, "d1", "worker-1", now_ms=1_000
+    )
+    assert first is not None
+    _mark_assignment_terminal(repository, first.assignment_id, now_ms=1_100)
+    ahead = repository.claim_scheduled_assignment(
+        ordinary, "d1", "worker-1", now_ms=1_200
+    )
+    assert ahead is not None and ahead.round_id == priority_two
+    _mark_assignment_terminal(repository, ahead.assignment_id, now_ms=1_300)
+    _set_device_control(repository, "d2", "running", now_ms=1_400)
+
+    waiting = repository.claim_scheduled_assignment(
+        ordinary, "d1", "worker-1", now_ms=1_500
+    )
+    catch_up = repository.claim_scheduled_assignment(
+        ordinary, "d2", "worker-2", now_ms=1_500
+    )
+
+    assert waiting is None
+    assert catch_up is not None
+    assert catch_up.round_id == priority_one
 
 
 def test_live_interrupt_preempts_unfinished_background_after_current_lease(

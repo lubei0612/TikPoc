@@ -1580,6 +1580,26 @@ class AcquisitionRepository:
                     """
                     SELECT * FROM priority_batches
                     WHERE parent_round_id = ? AND state <> 'completed'
+                      AND (
+                        batch_class = 'live_interrupt'
+                        OR NOT EXISTS (
+                          SELECT 1 FROM round_assignments AS remaining_assignment
+                          WHERE remaining_assignment.round_id = priority_round_id
+                            AND remaining_assignment.phase
+                                NOT IN ('completed', 'skipped')
+                        )
+                        OR EXISTS (
+                          SELECT 1
+                          FROM round_assignments AS active_assignment
+                          LEFT JOIN operator_control_states AS active_control
+                            ON active_control.scope = 'device'
+                           AND active_control.scope_id = active_assignment.device_id
+                          WHERE active_assignment.round_id = priority_round_id
+                            AND active_assignment.phase
+                                NOT IN ('completed', 'skipped')
+                            AND COALESCE(active_control.state, 'running') = 'running'
+                        )
+                      )
                     ORDER BY
                       CASE batch_class
                         WHEN 'live_interrupt' THEN 0
@@ -1591,6 +1611,16 @@ class AcquisitionRepository:
                     (normalized_parent,),
                 ).fetchone()
                 if batch is None:
+                    blocked_priority = connection.execute(
+                        """
+                        SELECT 1 FROM priority_batches
+                        WHERE parent_round_id = ? AND state <> 'completed'
+                        LIMIT 1
+                        """,
+                        (normalized_parent,),
+                    ).fetchone()
+                    if blocked_priority is not None:
+                        return None
                     self._mark_round_completed_if_terminal(
                         connection, normalized_parent
                     )
