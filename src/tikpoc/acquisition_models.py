@@ -18,6 +18,11 @@ class PriorityBatchState(StrEnum):
     COMPLETED = "completed"
 
 
+class PriorityBatchClass(StrEnum):
+    BACKGROUND = "background"
+    LIVE_INTERRUPT = "live_interrupt"
+
+
 class AssignmentPhase(StrEnum):
     PENDING = "pending"
     PROFILE_OPENING = "profile_opening"
@@ -109,6 +114,7 @@ class PriorityBatch:
     pool_id: str
     source_live_id: str
     source_checksum: str
+    batch_class: PriorityBatchClass
     queue_sequence: int
     state: PriorityBatchState
     created_at_ms: int

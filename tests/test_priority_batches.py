@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from tikpoc.acquisition_db import AcquisitionRepository
+from tikpoc.acquisition_models import PriorityBatchClass
 from tikpoc.importer import Target
 from tikpoc.rounds import create_exposure_round
 
@@ -136,7 +137,38 @@ def test_priority_batch_requires_exact_parent_device_snapshot(tmp_path: Path) ->
             ordinary_round,
             priority_pool,
             device_seeds={"d1": "priority-only-d1"},
+            batch_class="background",
         )
+
+
+def test_live_interrupt_accepts_nonempty_parent_device_subset(tmp_path: Path) -> None:
+    repository, ordinary_round, priority_pool = _seeded_repository(tmp_path)
+
+    batch = _create_batch(
+        repository,
+        ordinary_round,
+        priority_pool,
+        device_seeds={"d1": "priority-only-d1"},
+        batch_class="live_interrupt",
+    )
+
+    assert batch.batch_class is PriorityBatchClass.LIVE_INTERRUPT
+    assert repository.priority_batch_device_ids(batch.batch_id) == ("d1",)
+
+
+def test_background_batch_records_class_and_requires_full_parent(
+    tmp_path: Path,
+) -> None:
+    repository, ordinary_round, priority_pool = _seeded_repository(tmp_path)
+
+    batch = _create_batch(
+        repository,
+        ordinary_round,
+        priority_pool,
+        batch_class="background",
+    )
+
+    assert batch.batch_class is PriorityBatchClass.BACKGROUND
 
 
 def test_priority_batch_rejects_terminal_parent_round(tmp_path: Path) -> None:

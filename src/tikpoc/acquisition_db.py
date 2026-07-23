@@ -22,6 +22,7 @@ from .acquisition_models import (
     PoolImport,
     PoolTarget,
     PriorityBatch,
+    PriorityBatchClass,
     PriorityBatchState,
     ProfileAccessState,
     ProfileSnapshot,
@@ -248,6 +249,8 @@ class AcquisitionRepository:
                     pool_id TEXT NOT NULL,
                     source_live_id TEXT NOT NULL,
                     source_checksum TEXT NOT NULL,
+                    batch_class TEXT NOT NULL DEFAULT 'live_interrupt'
+                        CHECK(batch_class IN ('background','live_interrupt')),
                     queue_sequence INTEGER NOT NULL UNIQUE,
                     state TEXT NOT NULL
                         CHECK(state IN ('queued','running','barrier','completed')),
@@ -259,6 +262,20 @@ class AcquisitionRepository:
                 )
                 """
             )
+            priority_columns = {
+                str(row["name"])
+                for row in connection.execute(
+                    "PRAGMA table_info(priority_batches)"
+                ).fetchall()
+            }
+            if "batch_class" not in priority_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE priority_batches
+                    ADD COLUMN batch_class TEXT NOT NULL DEFAULT 'live_interrupt'
+                        CHECK(batch_class IN ('background','live_interrupt'))
+                    """
+                )
             connection.execute(
                 """
                 CREATE INDEX IF NOT EXISTS priority_batch_queue_idx
@@ -1174,6 +1191,7 @@ class AcquisitionRepository:
         source_live_id: str,
         source_checksum: str,
         device_seeds: Mapping[str, str],
+        batch_class: PriorityBatchClass | str = PriorityBatchClass.LIVE_INTERRUPT,
         require_unique_active_parent: bool = False,
     ) -> PriorityBatch:
         normalized_batch_id = str(batch_id).strip()
@@ -1181,6 +1199,10 @@ class AcquisitionRepository:
         normalized_pool = str(pool_id).strip()
         normalized_live_id = str(source_live_id).strip()
         checksum = str(source_checksum).strip()
+        try:
+            normalized_batch_class = PriorityBatchClass(str(batch_class))
+        except ValueError as error:
+            raise ValueError("priority batch class is invalid") from error
         normalized_seed_items = tuple(
             (str(device_id).strip(), str(seed).strip())
             for device_id, seed in device_seeds.items()
@@ -1244,6 +1266,7 @@ class AcquisitionRepository:
                     and str(existing["pool_id"]) == normalized_pool
                     and str(existing["source_live_id"]) == normalized_live_id
                     and str(existing["source_checksum"]) == checksum
+                    and str(existing["batch_class"]) == normalized_batch_class.value
                     and stored_seeds == normalized_seeds
                 )
                 if not same_content:
@@ -1272,8 +1295,17 @@ class AcquisitionRepository:
             }
             if not parent_devices:
                 raise ValueError("parent round has no devices")
-            if set(normalized_seeds) != parent_devices:
+            seed_devices = set(normalized_seeds)
+            if (
+                normalized_batch_class is PriorityBatchClass.BACKGROUND
+                and seed_devices != parent_devices
+            ):
                 raise ValueError("device seeds must match parent round")
+            if (
+                normalized_batch_class is PriorityBatchClass.LIVE_INTERRUPT
+                and not seed_devices.issubset(parent_devices)
+            ):
+                raise ValueError("live device seeds must belong to parent round")
             if require_unique_active_parent:
                 active_ordinary = tuple(
                     str(row["round_id"])
@@ -1371,9 +1403,10 @@ class AcquisitionRepository:
                 """
                 INSERT INTO priority_batches(
                     batch_id, parent_round_id, priority_round_id, pool_id,
-                    source_live_id, source_checksum, queue_sequence, state,
+                    source_live_id, source_checksum, batch_class,
+                    queue_sequence, state,
                     created_at_ms
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)
                 """,
                 (
                     normalized_batch_id,
@@ -1382,6 +1415,7 @@ class AcquisitionRepository:
                     normalized_pool,
                     normalized_live_id,
                     checksum,
+                    normalized_batch_class.value,
                     queue_sequence,
                     now_ms,
                 ),
@@ -4059,6 +4093,7 @@ class AcquisitionRepository:
             pool_id=str(row["pool_id"]),
             source_live_id=str(row["source_live_id"]),
             source_checksum=str(row["source_checksum"]),
+            batch_class=PriorityBatchClass(str(row["batch_class"])),
             queue_sequence=int(row["queue_sequence"]),
             state=PriorityBatchState(str(row["state"])),
             created_at_ms=int(row["created_at_ms"]),
