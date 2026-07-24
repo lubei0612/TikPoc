@@ -1,7 +1,6 @@
 from tikpoc.models import ProfileMetrics
 from tikpoc.profile_parser import parse_profile_page
 
-
 PROFILE_XML = """
 <hierarchy>
   <node text="@sample" resource-id="com.zhiliaoapp.musically:id/s7e" />
@@ -61,6 +60,28 @@ def test_parse_profile_page_accepts_current_tiktok_resource_ids() -> None:
     assert page.username == "sample"
     assert page.metrics == ProfileMetrics(following=326, followers=198, posts=2)
     assert page.visible_post_keys == ("57", "30")
+
+
+def test_parse_profile_page_accepts_tiktok_46_chinese_resource_ids() -> None:
+    current = """
+    <hierarchy>
+      <node text="@sample" resource-id="com.zhiliaoapp.musically:id/oul" />
+      <node text="104" resource-id="com.zhiliaoapp.musically:id/oti" />
+      <node text="关注" resource-id="com.zhiliaoapp.musically:id/oth" />
+      <node text="20" resource-id="com.zhiliaoapp.musically:id/opr" />
+      <node text="粉丝" resource-id="com.zhiliaoapp.musically:id/ops" />
+      <node resource-id="com.zhiliaoapp.musically:id/dp6" />
+      <node text="587" resource-id="com.zhiliaoapp.musically:id/vlr" />
+      <node resource-id="com.zhiliaoapp.musically:id/dp6" />
+      <node text="242" resource-id="com.zhiliaoapp.musically:id/vlr" />
+    </hierarchy>
+    """
+
+    page = parse_profile_page(current)
+
+    assert page.username == "sample"
+    assert page.metrics == ProfileMetrics(following=104, followers=20, posts=2)
+    assert page.visible_post_keys == ("587", "242")
 
 
 def test_parse_profile_page_accepts_singular_follower_label() -> None:

@@ -27,13 +27,13 @@ from .profile_parser import (
     profile_surface_visible,
 )
 
-
 TIKTOK_PACKAGE = "com.zhiliaoapp.musically"
 POST_CONTAINER_ID = f"{TIKTOK_PACKAGE}:id/eqx"
 POST_CONTAINER_IDS = (
     POST_CONTAINER_ID,
     f"{TIKTOK_PACKAGE}:id/efq",
     f"{TIKTOK_PACKAGE}:id/cover",
+    f"{TIKTOK_PACKAGE}:id/dp6",
 )
 POST_CONTAINER_XPATH = (
     "//*["
@@ -41,10 +41,16 @@ POST_CONTAINER_XPATH = (
     + "]"
 )
 PROFILE_USERNAME_ID = f"{TIKTOK_PACKAGE}:id/s7e"
-PROFILE_USERNAME_IDS = (PROFILE_USERNAME_ID, f"{TIKTOK_PACKAGE}:id/rgn")
+PROFILE_USERNAME_IDS = (
+    PROFILE_USERNAME_ID,
+    f"{TIKTOK_PACKAGE}:id/rgn",
+    f"{TIKTOK_PACKAGE}:id/oul",
+)
 PROFILE_STAT_LABEL_IDS = (
     f"{TIKTOK_PACKAGE}:id/s5x",
     f"{TIKTOK_PACKAGE}:id/rfc",
+    f"{TIKTOK_PACKAGE}:id/oth",
+    f"{TIKTOK_PACKAGE}:id/ops",
 )
 
 

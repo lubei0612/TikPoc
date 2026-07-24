@@ -18,7 +18,9 @@ def parse_visible_post_keys(page_source: str) -> tuple[str, ...]:
     return tuple(
         node.attrib.get("text", "").strip()
         for node in root.iter()
-        if node.attrib.get("resource-id", "").endswith((":id/tv_play_count", ":id/z9h"))
+        if node.attrib.get("resource-id", "").endswith(
+            (":id/tv_play_count", ":id/z9h", ":id/vlr")
+        )
         and node.attrib.get("text", "").strip()
     )
 
@@ -27,7 +29,7 @@ def parse_profile_username(page_source: str) -> str:
     root = ElementTree.fromstring(page_source)
     for node in root.iter():
         resource_id = node.attrib.get("resource-id", "")
-        if resource_id.endswith((":id/s7e", ":id/rgn")):
+        if resource_id.endswith((":id/s7e", ":id/rgn", ":id/oul")):
             return node.attrib.get("text", "").strip().removeprefix("@").lower()
     return ""
 
@@ -43,7 +45,7 @@ def profile_surface_visible(page_source: str) -> bool:
             or "this account is private" in description.lower()
             or "此帐户为私密帐户" in text
             or "此帐户为私密帐户" in description
-            or resource_id.endswith((":id/s5x", ":id/rfc"))
+            or resource_id.endswith((":id/s5x", ":id/rfc", ":id/oth", ":id/ops"))
         ):
             return True
     return False
@@ -60,15 +62,22 @@ def parse_profile_page(page_source: str) -> ProfilePage:
     for node in root.iter():
         resource_id = node.attrib.get("resource-id", "")
         text = node.attrib.get("text", "").strip()
-        if resource_id.endswith((":id/s5y", ":id/rfd")):
+        if resource_id.endswith((":id/s5y", ":id/rfd", ":id/oti", ":id/opr")):
             pending_value = text
-        elif resource_id.endswith((":id/s5x", ":id/rfc")) and pending_value is not None:
+        elif (
+            resource_id.endswith((":id/s5x", ":id/rfc", ":id/oth", ":id/ops"))
+            and pending_value is not None
+        ):
             label = text.lower()
             if label == "follower":
                 label = "followers"
+            elif label == "关注":
+                label = "following"
+            elif label == "粉丝":
+                label = "followers"
             stats[label] = parse_visible_count(pending_value)
             pending_value = None
-        elif resource_id.endswith(":id/cover"):
+        elif resource_id.endswith((":id/cover", ":id/dp6")):
             visible_post_count += 1
 
     if not username or "following" not in stats or "followers" not in stats:

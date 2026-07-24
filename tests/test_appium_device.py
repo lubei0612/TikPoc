@@ -1,19 +1,20 @@
-from tests.test_profile_parser import PROFILE_XML
+from io import BytesIO
+from pathlib import Path
+
 import pytest
+from PIL import Image
 from selenium.common.exceptions import (
     StaleElementReferenceException,
     WebDriverException,
 )
+
+from tests.test_profile_parser import PROFILE_XML
 from tikpoc.acquisition_models import (
     ActionResult,
     OutcomeKind,
     PoolTarget,
     ProfileAccessState,
 )
-from io import BytesIO
-from pathlib import Path
-
-from PIL import Image
 from tikpoc.device import (
     AppiumTikTokDevice,
     ProfileIdentityMismatch,
@@ -170,6 +171,31 @@ class FakeDriver:
         self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int
     ) -> None:
         return None
+
+
+class TikTok46Driver:
+    def __init__(self) -> None:
+        self.page_source = """
+        <hierarchy>
+          <node text="@sample" resource-id="com.zhiliaoapp.musically:id/oul" />
+          <node text="104" resource-id="com.zhiliaoapp.musically:id/oti" />
+          <node text="关注" resource-id="com.zhiliaoapp.musically:id/oth" />
+          <node text="20" resource-id="com.zhiliaoapp.musically:id/opr" />
+          <node text="粉丝" resource-id="com.zhiliaoapp.musically:id/ops" />
+          <node resource-id="com.zhiliaoapp.musically:id/dp6" />
+          <node text="587" resource-id="com.zhiliaoapp.musically:id/vlr" />
+          <node resource-id="com.zhiliaoapp.musically:id/dp6" />
+          <node text="242" resource-id="com.zhiliaoapp.musically:id/vlr" />
+        </hierarchy>
+        """
+        self.posts = [FakeElement(), FakeElement()]
+
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if by == "id" and value == "com.zhiliaoapp.musically:id/oul":
+            return [FakeElement("@sample")]
+        if by == "xpath" and "com.zhiliaoapp.musically:id/dp6" in value:
+            return self.posts
+        return []
 
 
 class DelayedProfileDriver(FakeDriver):
@@ -805,6 +831,20 @@ def test_appium_device_accepts_current_cover_post_container_id() -> None:
     device = AppiumTikTokDevice(driver)
 
     assert device.list_visible_posts() == ("0", "1", "2", "3")
+
+
+def test_appium_device_accepts_tiktok_46_profile_username_id() -> None:
+    device = AppiumTikTokDevice(
+        TikTok46Driver(), metric_read_attempts=1, poll_interval=0
+    )
+
+    device.wait_profile_ready("sample")
+
+
+def test_appium_device_accepts_tiktok_46_post_container_id() -> None:
+    device = AppiumTikTokDevice(TikTok46Driver())
+
+    assert device.list_visible_posts() == ("0", "1")
 
 
 def test_appium_device_waits_for_delayed_semantic_post_grid() -> None:
