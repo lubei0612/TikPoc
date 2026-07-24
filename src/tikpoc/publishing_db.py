@@ -15,12 +15,22 @@ class PublishingJob:
     account_id: str
     caption: str
     asset_paths: tuple[str, ...]
+    asset_sha256s: tuple[str, ...]
     state: str
     lease_owner: str
     lease_expires_at_ms: int
     visible_post_url: str
     created_at_ms: int
     updated_at_ms: int
+
+
+@dataclass(frozen=True)
+class PublishingAttempt:
+    attempt_id: int
+    job_id: int
+    stage: str
+    detail: str
+    created_at_ms: int
 
 
 class PublishingRepository:
@@ -57,6 +67,7 @@ class PublishingRepository:
                     account_id TEXT NOT NULL,
                     caption TEXT NOT NULL,
                     asset_paths_json TEXT NOT NULL,
+                    asset_sha256s_json TEXT NOT NULL DEFAULT '[]',
                     state TEXT NOT NULL CHECK (
                         state IN ('prepared', 'approved', 'publishing', 'published', 'uncertain', 'rejected')
                     ),
@@ -72,8 +83,25 @@ class PublishingRepository:
 
                 CREATE INDEX IF NOT EXISTS publishing_jobs_claim_idx
                 ON publishing_jobs (account_id, state, created_at_ms, job_id);
+
+                CREATE TABLE IF NOT EXISTS publishing_attempts (
+                    attempt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id INTEGER NOT NULL REFERENCES publishing_jobs(job_id),
+                    stage TEXT NOT NULL,
+                    detail TEXT NOT NULL DEFAULT '',
+                    created_at_ms INTEGER NOT NULL
+                );
                 """
             )
+            columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(publishing_jobs)")
+            }
+            if "asset_sha256s_json" not in columns:
+                connection.execute(
+                    "ALTER TABLE publishing_jobs "
+                    "ADD COLUMN asset_sha256s_json TEXT NOT NULL DEFAULT '[]'"
+                )
 
     def prepare_job(
         self,
@@ -82,13 +110,19 @@ class PublishingRepository:
         account_id: str,
         caption: str,
         asset_paths: tuple[Path, ...],
+        asset_sha256s: tuple[str, ...] | None = None,
         now_ms: int,
     ) -> PublishingJob:
         normalized_account = account_id.strip()
         normalized_caption = caption.strip()
         paths = tuple(str(Path(path)) for path in asset_paths)
+        hashes = tuple(asset_sha256s or ("" for _ in paths))
         if not normalized_account or not normalized_caption or not paths:
             raise ValueError("account_id, caption, and asset_paths are required")
+        if len(hashes) != len(paths):
+            raise ValueError("asset paths and SHA-256 values must have equal length")
+        if any(value and (len(value) != 64 or not _is_hex(value)) for value in hashes):
+            raise ValueError("asset SHA-256 values are invalid")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
@@ -114,8 +148,9 @@ class PublishingRepository:
                 """
                 INSERT INTO publishing_jobs (
                     source_key, account_id, caption, asset_paths_json,
+                    asset_sha256s_json,
                     state, created_at_ms, updated_at_ms
-                ) VALUES (?, ?, ?, ?, 'prepared', ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, 'prepared', ?, ?)
                 ON CONFLICT(source_key, account_id) DO NOTHING
                 """,
                 (
@@ -123,6 +158,7 @@ class PublishingRepository:
                     normalized_account,
                     normalized_caption,
                     json.dumps(paths),
+                    json.dumps(hashes),
                     now_ms,
                     now_ms,
                 ),
@@ -175,6 +211,15 @@ class PublishingRepository:
             raise ValueError("owner and positive lease_ms are required")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                UPDATE publishing_jobs
+                SET state = 'uncertain', lease_expires_at_ms = 0, updated_at_ms = ?
+                WHERE account_id = ? AND state = 'publishing'
+                  AND lease_expires_at_ms <= ?
+                """,
+                (now_ms, account_id, now_ms),
+            )
             busy = connection.execute(
                 """
                 SELECT 1 FROM publishing_jobs
@@ -241,6 +286,135 @@ class PublishingRepository:
             ).fetchone()
         return _job(row)
 
+    def release_job(
+        self,
+        job_id: int,
+        *,
+        owner: str,
+        now_ms: int,
+    ) -> PublishingJob:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE publishing_jobs
+                SET state = 'approved', lease_owner = '', lease_expires_at_ms = 0,
+                    updated_at_ms = ?
+                WHERE job_id = ? AND state = 'publishing' AND lease_owner = ?
+                """,
+                (now_ms, job_id, owner),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("job must be publishing under the same owner")
+            row = connection.execute(
+                "SELECT * FROM publishing_jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()
+        return _job(row)
+
+    def record_attempt(
+        self,
+        job_id: int,
+        *,
+        owner: str,
+        stage: str,
+        now_ms: int,
+        detail: str = "",
+    ) -> PublishingAttempt:
+        normalized_stage = stage.strip()
+        if not normalized_stage:
+            raise ValueError("publishing attempt stage is required")
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM publishing_jobs
+                WHERE job_id = ? AND state = 'publishing' AND lease_owner = ?
+                """,
+                (job_id, owner),
+            ).fetchone()
+            if row is None:
+                raise ValueError("job must be publishing under the same owner")
+            cursor = connection.execute(
+                """
+                INSERT INTO publishing_attempts(job_id, stage, detail, created_at_ms)
+                VALUES (?, ?, ?, ?)
+                """,
+                (job_id, normalized_stage, detail.strip()[:500], now_ms),
+            )
+            attempt_id = int(cursor.lastrowid)
+        return PublishingAttempt(
+            attempt_id=attempt_id,
+            job_id=job_id,
+            stage=normalized_stage,
+            detail=detail.strip()[:500],
+            created_at_ms=now_ms,
+        )
+
+    def attempts(self, job_id: int) -> tuple[PublishingAttempt, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT attempt_id, job_id, stage, detail, created_at_ms
+                FROM publishing_attempts WHERE job_id = ? ORDER BY attempt_id
+                """,
+                (job_id,),
+            ).fetchall()
+        return tuple(
+            PublishingAttempt(
+                attempt_id=int(row["attempt_id"]),
+                job_id=int(row["job_id"]),
+                stage=str(row["stage"]),
+                detail=str(row["detail"]),
+                created_at_ms=int(row["created_at_ms"]),
+            )
+            for row in rows
+        )
+
+    def list_jobs(self, *, account_id: str = "") -> tuple[PublishingJob, ...]:
+        query = "SELECT * FROM publishing_jobs"
+        parameters: tuple[str, ...] = ()
+        if account_id.strip():
+            query += " WHERE account_id = ?"
+            parameters = (account_id.strip(),)
+        query += " ORDER BY created_at_ms, job_id"
+        with self._connect() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return tuple(_job(row) for row in rows)
+
+    def reconcile_uncertain(
+        self,
+        job_id: int,
+        *,
+        visible_post_url: str,
+        now_ms: int,
+    ) -> PublishingJob:
+        evidence = visible_post_url.strip()
+        if not evidence:
+            raise ValueError("visible post evidence is required")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE publishing_jobs
+                SET state = 'published', visible_post_url = ?, finished_at_ms = ?,
+                    updated_at_ms = ?
+                WHERE job_id = ? AND state = 'uncertain'
+                """,
+                (evidence, now_ms, now_ms, job_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("job must be uncertain before reconciliation")
+            connection.execute(
+                """
+                INSERT INTO publishing_attempts(job_id, stage, detail, created_at_ms)
+                VALUES (?, 'reconciled_after_uncertain', ?, ?)
+                """,
+                (job_id, evidence[:500], now_ms),
+            )
+            row = connection.execute(
+                "SELECT * FROM publishing_jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()
+        return _job(row)
+
 
 def _job(row: sqlite3.Row | None) -> PublishingJob:
     if row is None:
@@ -251,6 +425,7 @@ def _job(row: sqlite3.Row | None) -> PublishingJob:
         account_id=str(row["account_id"]),
         caption=str(row["caption"]),
         asset_paths=tuple(json.loads(row["asset_paths_json"])),
+        asset_sha256s=tuple(json.loads(row["asset_sha256s_json"])),
         state=str(row["state"]),
         lease_owner=str(row["lease_owner"]),
         lease_expires_at_ms=int(row["lease_expires_at_ms"]),
@@ -258,3 +433,11 @@ def _job(row: sqlite3.Row | None) -> PublishingJob:
         created_at_ms=int(row["created_at_ms"]),
         updated_at_ms=int(row["updated_at_ms"]),
     )
+
+
+def _is_hex(value: str) -> bool:
+    try:
+        int(value, 16)
+    except ValueError:
+        return False
+    return True

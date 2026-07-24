@@ -100,6 +100,29 @@ def test_unexpired_publish_lease_is_exclusive(tmp_path: Path) -> None:
     )
 
 
+def test_expired_publish_lease_is_frozen_uncertain_before_next_claim(
+    tmp_path: Path,
+) -> None:
+    repository = PublishingRepository(tmp_path / "publishing.db")
+    job = repository.prepare_job(
+        _product(),
+        account_id="account-01",
+        caption="Caption",
+        asset_paths=(tmp_path / "one.jpg",),
+        now_ms=100,
+    )
+    repository.approve_job(job.job_id, now_ms=110)
+    repository.claim_job(account_id="account-01", owner="dead", now_ms=120, lease_ms=10)
+
+    assert (
+        repository.claim_job(
+            account_id="account-01", owner="next", now_ms=131, lease_ms=10
+        )
+        is None
+    )
+    assert repository.get_job(job.job_id).state == "uncertain"
+
+
 def test_completion_records_published_result_once(tmp_path: Path) -> None:
     repository = PublishingRepository(tmp_path / "publishing.db")
     job = repository.prepare_job(
@@ -134,6 +157,38 @@ def test_completion_records_published_result_once(tmp_path: Path) -> None:
         )
 
 
+def test_uncertain_job_can_be_reconciled_from_visible_evidence(tmp_path: Path) -> None:
+    repository = PublishingRepository(tmp_path / "publishing.db")
+    job = repository.prepare_job(
+        _product(),
+        account_id="account-01",
+        caption="Caption",
+        asset_paths=(tmp_path / "one.jpg",),
+        now_ms=100,
+    )
+    repository.approve_job(job.job_id, now_ms=200)
+    repository.claim_job(
+        account_id="account-01", owner="worker-01", now_ms=300, lease_ms=1_000
+    )
+    repository.finish_job(
+        job.job_id,
+        owner="worker-01",
+        result="uncertain",
+        visible_post_url="",
+        now_ms=400,
+    )
+
+    reconciled = repository.reconcile_uncertain(
+        job.job_id,
+        visible_post_url="tiktok-visible://@account/abc",
+        now_ms=500,
+    )
+
+    assert reconciled.state == "published"
+    assert reconciled.visible_post_url.endswith("/abc")
+    assert repository.attempts(job.job_id)[-1].stage == "reconciled_after_uncertain"
+
+
 def test_uncertain_result_is_not_claimed_again(tmp_path: Path) -> None:
     repository = PublishingRepository(tmp_path / "publishing.db")
     job = repository.prepare_job(
@@ -161,3 +216,27 @@ def test_uncertain_result_is_not_claimed_again(tmp_path: Path) -> None:
         )
         is None
     )
+
+
+def test_job_persists_immutable_asset_hashes(tmp_path: Path) -> None:
+    repository = PublishingRepository(tmp_path / "publishing.db")
+
+    job = repository.prepare_job(
+        _product(),
+        account_id="account-01",
+        caption="Caption",
+        asset_paths=(tmp_path / "one.jpg", tmp_path / "two.jpg"),
+        asset_sha256s=("a" * 64, "b" * 64),
+        now_ms=100,
+    )
+
+    assert job.asset_sha256s == ("a" * 64, "b" * 64)
+    repeated = repository.prepare_job(
+        _product(),
+        account_id="account-01",
+        caption="Changed caption",
+        asset_paths=(tmp_path / "other.jpg",),
+        asset_sha256s=("c" * 64,),
+        now_ms=200,
+    )
+    assert repeated.asset_sha256s == job.asset_sha256s

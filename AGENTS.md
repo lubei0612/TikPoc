@@ -544,6 +544,23 @@ Completed on `feat/web-lead-conversion`:
   stale-address recovery both passed; the final cycle reported six healthy
   devices and six TikTok HTTP `200` results. Subscription URLs and provider
   state remain outside TikPoc files and logs.
+- The GXHY catalog source now exposes `tikpoc catalog scrape` for a shop URL or
+  UID. It preserves public raw product text and structured details separately
+  from the sanitized publishing model, emits AI-readable JSONL and per-product
+  files, downloads images atomically with hashes and dimensions, reuses cached
+  assets, isolates bad images, and blocks private-network image URLs.
+- A bounded live TOP1-shop smoke export completed 2 products and 18/18 images;
+  the same-directory rerun reused all assets. This is interface and small-batch
+  evidence, not a claim that an entire shop has been exported. Focused catalog
+  and CLI verification passed `45` tests; the full Python suite passed `802`
+  with the existing Starlette/httpx deprecation warning. Ruff, touched-file
+  format, CLI help, and `git diff --check` passed.
+- The controlled slot-1 catalog publishing gate completed one TOP1-shop product
+  as one five-image TikTok photo post. The Post control was activated exactly
+  once; a first-use Profile modal caused the automatic result to freeze as
+  `uncertain`, and read-only visible evidence on the exact expected account then
+  reconciled that same job to `published`. Final durable status is
+  `published=1`, `uncertain=0`; no duplicate or automatic retry occurred.
 
 Outstanding at the current checkpoint:
 

@@ -6,6 +6,7 @@ from tikpoc.catalog import (
     GxhyCatalogClient,
     decrypt_wxt_payload,
     encrypt_wxt_payload,
+    parse_gxhy_shop,
     sanitize_catalog_description,
 )
 
@@ -111,3 +112,79 @@ def test_catalog_client_rejects_unbounded_page_size() -> None:
         assert "page_size" in str(exc)
     else:
         raise AssertionError("expected bounded page size validation")
+
+
+def test_catalog_client_preserves_public_raw_product_fields() -> None:
+    def transport(_url: str, _body: str, _headers: dict[str, str]) -> str:
+        return encrypt_wxt_payload(
+            {
+                "success": True,
+                "data": [
+                    {
+                        "id": "product-01",
+                        "title": "P140 boxed shoulder bag",
+                        "description": "Raw supplier copy\n尺寸：30*20cm",
+                        "createdTime": 123456,
+                        "lastEditDate": 123999,
+                        "price": 140,
+                        "labels": [{"id": "label-1", "name": "新品"}],
+                        "props": {"颜色": "黑色"},
+                        "pics": {
+                            "picList": ["http://product.example/0.jpg"],
+                            "videoList": ["https://product.example/0.mp4"],
+                        },
+                    }
+                ],
+            }
+        )
+
+    product = GxhyCatalogClient(transport=transport).fetch_raw_page(
+        shop_id="shop-01", market_code="gz", page_index=0, page_size=50
+    )[0]
+
+    assert product.description == "Raw supplier copy\n尺寸：30*20cm"
+    assert product.price == 140
+    assert product.labels == ({"id": "label-1", "name": "新品"},)
+    assert product.properties == {"颜色": "黑色"}
+    assert product.image_urls == ("https://product.example/0.jpg",)
+    assert product.video_urls == ("https://product.example/0.mp4",)
+
+
+def test_catalog_client_iterates_until_a_short_page() -> None:
+    seen_pages: list[int] = []
+
+    def transport(_url: str, body: str, _headers: dict[str, str]) -> str:
+        payload = decrypt_wxt_payload(body)
+        page = int(payload["pageIndex"])
+        seen_pages.append(page)
+        row_count = 2 if page == 0 else 1
+        return encrypt_wxt_payload(
+            {
+                "success": True,
+                "data": [
+                    {
+                        "id": f"product-{page}-{index}",
+                        "title": "Product",
+                        "description": "Description",
+                        "pics": {"picList": ["https://product.example/0.jpg"]},
+                    }
+                    for index in range(row_count)
+                ],
+            }
+        )
+
+    products = tuple(
+        GxhyCatalogClient(transport=transport).iter_raw_products(
+            shop_id="shop-01", market_code="gz", page_size=2
+        )
+    )
+
+    assert len(products) == 3
+    assert seen_pages == [0, 1]
+
+
+def test_parse_gxhy_shop_accepts_uid_or_shop_url() -> None:
+    assert parse_gxhy_shop("shop-01") == ("shop-01", "gz")
+    assert parse_gxhy_shop(
+        "https://gxhy1688.com/Shopindex?marketCode=sz&uid=shop-02"
+    ) == ("shop-02", "sz")

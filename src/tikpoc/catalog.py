@@ -3,9 +3,11 @@ from __future__ import annotations
 import base64
 import json
 import re
+import time
 from dataclasses import dataclass
+from collections.abc import Iterator
 from typing import Callable, Mapping
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from cryptography.hazmat.primitives import padding
@@ -39,6 +41,22 @@ class CatalogProduct:
     description: str
     created_time: int | None
     image_urls: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RawCatalogProduct:
+    source_key: str
+    source_id: str
+    shop_id: str
+    title: str
+    description: str
+    price: object
+    created_time: int | None
+    updated_time: int | None
+    labels: tuple[object, ...]
+    properties: object
+    image_urls: tuple[str, ...]
+    video_urls: tuple[str, ...]
 
 
 CatalogTransport = Callable[[str, str, dict[str, str]], str]
@@ -92,12 +110,90 @@ class GxhyCatalogClient:
         page_index: int,
         page_size: int = 50,
     ) -> tuple[CatalogProduct, ...]:
+        rows = self._fetch_rows(
+            shop_id=shop_id,
+            market_code=market_code,
+            page_index=page_index,
+            page_size=page_size,
+        )
+        return tuple(
+            product
+            for row in rows
+            if (product := _parse_product(row, shop_id=shop_id)) is not None
+        )
+
+    def fetch_raw_page(
+        self,
+        *,
+        shop_id: str,
+        market_code: str,
+        page_index: int,
+        page_size: int = 50,
+    ) -> tuple[RawCatalogProduct, ...]:
+        rows = self._fetch_rows(
+            shop_id=shop_id,
+            market_code=market_code,
+            page_index=page_index,
+            page_size=page_size,
+        )
+        return tuple(
+            product
+            for row in rows
+            if (product := _parse_raw_product(row, shop_id=shop_id)) is not None
+        )
+
+    def iter_raw_products(
+        self,
+        *,
+        shop_id: str,
+        market_code: str,
+        page_size: int = 50,
+        max_products: int | None = None,
+        delay_seconds: float = 0,
+    ) -> Iterator[RawCatalogProduct]:
+        if max_products is not None and max_products <= 0:
+            raise ValueError("max_products must be positive")
+        if delay_seconds < 0:
+            raise ValueError("delay_seconds must be non-negative")
+        emitted = 0
+        page_index = 0
+        while max_products is None or emitted < max_products:
+            rows = self._fetch_rows(
+                shop_id=shop_id,
+                market_code=market_code,
+                page_index=page_index,
+                page_size=page_size,
+            )
+            for row in rows:
+                product = _parse_raw_product(row, shop_id=shop_id)
+                if product is None:
+                    continue
+                yield product
+                emitted += 1
+                if max_products is not None and emitted >= max_products:
+                    return
+            if len(rows) < page_size:
+                return
+            page_index += 1
+            if delay_seconds:
+                time.sleep(delay_seconds)
+
+    def _fetch_rows(
+        self,
+        *,
+        shop_id: str,
+        market_code: str,
+        page_index: int,
+        page_size: int,
+    ) -> tuple[Mapping[str, object], ...]:
         if not shop_id.strip():
             raise ValueError("shop_id is required")
         if page_index < 0:
             raise ValueError("page_index must be non-negative")
         if not 1 <= page_size <= 100:
             raise ValueError("page_size must be between 1 and 100")
+        if not market_code.strip():
+            raise ValueError("market_code is required")
 
         query = urlencode({"marketCode": market_code})
         url = (
@@ -124,12 +220,7 @@ class GxhyCatalogClient:
         rows = response.get("data")
         if not isinstance(rows, list):
             raise ValueError("catalog response data must be a list")
-        return tuple(
-            product
-            for row in rows
-            if isinstance(row, dict)
-            and (product := _parse_product(row, shop_id=shop_id)) is not None
-        )
+        return tuple(row for row in rows if isinstance(row, dict))
 
 
 def _parse_product(row: Mapping[str, object], *, shop_id: str) -> CatalogProduct | None:
@@ -162,6 +253,74 @@ def _parse_product(row: Mapping[str, object], *, shop_id: str) -> CatalogProduct
         created_time=int(created) if isinstance(created, (int, float)) else None,
         image_urls=image_urls,
     )
+
+
+def _parse_raw_product(
+    row: Mapping[str, object], *, shop_id: str
+) -> RawCatalogProduct | None:
+    source_id = str(row.get("id") or row.get("productId") or "").strip()
+    if not source_id:
+        return None
+    pics = row.get("pics")
+    pic_data = pics if isinstance(pics, dict) else {}
+    image_urls = _media_urls(pic_data.get("picList"))
+    video_urls = _media_urls(pic_data.get("videoList"))
+    labels = row.get("labels")
+    label_values = tuple(labels) if isinstance(labels, list) else ()
+    return RawCatalogProduct(
+        source_key=f"gxhy:{shop_id}:{source_id}",
+        source_id=source_id,
+        shop_id=shop_id,
+        title=str(row.get("title") or "").strip(),
+        description=str(row.get("description") or row.get("title") or "").strip(),
+        price=row.get("price"),
+        created_time=_optional_int(row.get("createdTime")),
+        updated_time=_optional_int(row.get("lastEditDate")),
+        labels=label_values,
+        properties=row.get("props") if row.get("props") is not None else {},
+        image_urls=image_urls,
+        video_urls=video_urls,
+    )
+
+
+def parse_gxhy_shop(value: str, *, default_market_code: str = "gz") -> tuple[str, str]:
+    candidate = str(value or "").strip()
+    if not candidate:
+        raise ValueError("shop is required")
+    if "://" not in candidate:
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", candidate):
+            raise ValueError("shop must be a GXHY shop URL or uid")
+        return candidate, default_market_code
+    parsed = urlparse(candidate)
+    if parsed.scheme != "https" or parsed.hostname not in {
+        "gxhy1688.com",
+        "www.gxhy1688.com",
+    }:
+        raise ValueError("shop URL must use https://gxhy1688.com")
+    query = parse_qs(parsed.query)
+    shop_id = str((query.get("uid") or [""])[0]).strip()
+    market_code = str((query.get("marketCode") or [default_market_code])[0]).strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", shop_id):
+        raise ValueError("shop URL is missing a valid uid")
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", market_code):
+        raise ValueError("shop URL has an invalid marketCode")
+    return shop_id, market_code
+
+
+def _media_urls(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    return tuple(
+        dict.fromkeys(
+            _https_url(item)
+            for item in value
+            if isinstance(item, str) and item.startswith(("http://", "https://"))
+        )
+    )
+
+
+def _optional_int(value: object) -> int | None:
+    return int(value) if isinstance(value, (int, float)) else None
 
 
 def _https_url(value: str) -> str:
