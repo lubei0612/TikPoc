@@ -1501,7 +1501,7 @@ class ChineseSemanticActionDriver:
             return (
                 [
                     SemanticElement(
-                        "取消点赞视频。", attributes={"content-desc": "取消点赞视频。"}
+                        "点赞的视频", attributes={"content-desc": "点赞的视频"}
                     )
                 ]
                 if self.liked

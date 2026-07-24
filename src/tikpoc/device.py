@@ -64,7 +64,8 @@ LIKE_CONTROL_XPATH = (
 )
 LIKE_ACTIVE_XPATH = (
     '//*[@content-desc="Video liked" or starts-with(@content-desc,"Unlike video") or '
-    'starts-with(@content-desc,"取消点赞视频") or contains(@content-desc,"已点赞")]'
+    'starts-with(@content-desc,"取消点赞视频") or contains(@content-desc,"已点赞") or '
+    'contains(@content-desc,"点赞的视频")]'
 )
 FAVORITE_CONTROL_XPATH = (
     '//*[@content-desc="Add or remove this video from Favorites." or '
@@ -693,6 +694,7 @@ class AppiumTikTokDevice:
                     or "unlike video" in semantics
                     or "取消点赞视频" in semantics
                     or "已点赞" in semantics
+                    or "点赞的视频" in semantics
                 ):
                     return True, None, ""
             return (
