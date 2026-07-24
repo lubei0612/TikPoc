@@ -1469,6 +1469,69 @@ class SemanticActionDriver:
         return elements[0]
 
 
+class ChineseSemanticActionDriver:
+    def __init__(self) -> None:
+        self.liked = False
+        self.favorite = False
+        self.share_open = False
+        self.reposted = False
+        self.like = SemanticElement(
+            "点赞视频。12 个赞",
+            lambda: setattr(self, "liked", True),
+            {"content-desc": "点赞视频。12 个赞"},
+        )
+        self.favorite_control = SemanticElement(
+            "将此视频添加到或移出收藏。",
+            lambda: setattr(self, "favorite", True),
+            {"content-desc": "将此视频添加到或移出收藏。"},
+        )
+        self.share = SemanticElement(
+            "分享视频。分享 次分享",
+            lambda: setattr(self, "share_open", True),
+            {"content-desc": "分享视频。分享 次分享"},
+        )
+        self.repost = SemanticElement(
+            "转发",
+            lambda: setattr(self, "reposted", True),
+            {"content-desc": "转发"},
+        )
+
+    def find_elements(self, by: str, value: str):
+        if "取消点赞视频" in value and "点赞视频。" in value:
+            return (
+                [
+                    SemanticElement(
+                        "取消点赞视频。", attributes={"content-desc": "取消点赞视频。"}
+                    )
+                ]
+                if self.liked
+                else [self.like]
+            )
+        if "从收藏中移除" in value and "将此视频添加到或移出收藏" in value:
+            return (
+                [
+                    SemanticElement(
+                        "从收藏中移除。", attributes={"content-desc": "从收藏中移除。"}
+                    )
+                ]
+                if self.favorite
+                else [self.favorite_control]
+            )
+        if "已转发" in value and "分享视频。" in value:
+            if self.reposted:
+                return [
+                    SemanticElement("已转发", attributes={"content-desc": "已转发"})
+                ]
+            if self.share_open:
+                return [self.repost]
+            return [self.share]
+        if "底部工作表" in value and self.share_open:
+            return [SemanticElement("底部工作表")]
+        if "复制链接" in value and self.share_open:
+            return [SemanticElement("复制链接")]
+        return []
+
+
 class RepostUnavailableDriver(SemanticActionDriver):
     def find_elements(self, by: str, value: str):
         if "You reposted" in value and "Share video" in value:
@@ -1569,6 +1632,24 @@ def test_execute_like_waits_for_delayed_selected_state() -> None:
 
     assert device.execute_outcome(OutcomeKind.LIKE) is ActionResult.CONFIRMED
     assert driver.clicked_labels == ["Like"]
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    (OutcomeKind.LIKE, OutcomeKind.FAVORITE, OutcomeKind.REPOST),
+)
+def test_execute_outcome_accepts_tiktok_46_chinese_semantics(
+    outcome: OutcomeKind,
+) -> None:
+    device = AppiumTikTokDevice(
+        ChineseSemanticActionDriver(),
+        poll_interval=0,
+        action_timeout=2,
+        clock=SteppingClock(),
+        sleeper=lambda _: None,
+    )
+
+    assert device.execute_outcome(outcome) is ActionResult.CONFIRMED
 
 
 def test_execute_like_waits_for_delayed_initial_control() -> None:

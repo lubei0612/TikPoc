@@ -58,25 +58,42 @@ class ProfileIdentityMismatch(ValueError):
     pass
 
 
-LIKE_CONTROL_XPATH = '//*[starts-with(@content-desc, "Like video.")]'
-LIKE_ACTIVE_XPATH = (
-    '//*[@content-desc="Video liked" or starts-with(@content-desc,"Unlike video")]'
+LIKE_CONTROL_XPATH = (
+    '//*[starts-with(@content-desc, "Like video.") or '
+    'starts-with(@content-desc, "点赞视频。")]'
 )
-FAVORITE_CONTROL_XPATH = '//*[@content-desc="Add or remove this video from Favorites."]'
+LIKE_ACTIVE_XPATH = (
+    '//*[@content-desc="Video liked" or starts-with(@content-desc,"Unlike video") or '
+    'starts-with(@content-desc,"取消点赞视频") or contains(@content-desc,"已点赞")]'
+)
+FAVORITE_CONTROL_XPATH = (
+    '//*[@content-desc="Add or remove this video from Favorites." or '
+    'starts-with(@content-desc,"将此视频添加到或移出收藏")]'
+)
 FAVORITE_ACTIVE_XPATH = (
     '//*[contains(@content-desc,"Remove from Favorites") or '
-    'contains(@text,"Added to Favorites") or contains(@content-desc,"Added to Favorites")]'
+    'contains(@text,"Added to Favorites") or contains(@content-desc,"Added to Favorites") or '
+    'contains(@text,"从收藏中移除") or contains(@content-desc,"从收藏中移除") or '
+    'contains(@text,"已添加到收藏") or contains(@content-desc,"已添加到收藏")]'
 )
-SHARE_CONTROL_XPATH = '//*[starts-with(@content-desc, "Share video.")]'
-REPOST_CONTROL_XPATH = '//*[@text="Repost" or @content-desc="Repost"]'
-SHARE_SURFACE_XPATH = '//*[@content-desc="Bottom sheet"]'
+SHARE_CONTROL_XPATH = (
+    '//*[starts-with(@content-desc, "Share video.") or '
+    'starts-with(@content-desc, "分享视频。")]'
+)
+REPOST_CONTROL_XPATH = (
+    '//*[@text="Repost" or @content-desc="Repost" or '
+    '@text="转发" or @content-desc="转发"]'
+)
+SHARE_SURFACE_XPATH = '//*[@content-desc="Bottom sheet" or @content-desc="底部工作表"]'
 COPY_LINK_XPATH = (
     '//*[@text="Copy link" or @content-desc="Copy link" or '
     '@text="复制链接" or @content-desc="复制链接"]'
 )
 REPOST_ACTIVE_XPATH = (
     '//*[contains(@text,"You reposted") or contains(@content-desc,"You reposted") or '
-    'contains(@text,"Remove repost") or contains(@content-desc,"Remove repost")]'
+    'contains(@text,"Remove repost") or contains(@content-desc,"Remove repost") or '
+    'contains(@text,"已转发") or contains(@content-desc,"已转发") or '
+    'contains(@text,"取消转发") or contains(@content-desc,"取消转发")]'
 )
 LIKE_STATE_XPATH = f"{LIKE_ACTIVE_XPATH} | {LIKE_CONTROL_XPATH}"
 FAVORITE_STATE_XPATH = f"{FAVORITE_ACTIVE_XPATH} | {FAVORITE_CONTROL_XPATH}"
@@ -671,7 +688,12 @@ class AppiumTikTokDevice:
             elements = self._visible_elements(LIKE_STATE_XPATH)
             for element in elements:
                 semantics = self._element_semantics(element)
-                if "video liked" in semantics or "unlike video" in semantics:
+                if (
+                    "video liked" in semantics
+                    or "unlike video" in semantics
+                    or "取消点赞视频" in semantics
+                    or "已点赞" in semantics
+                ):
                     return True, None, ""
             return (
                 (False, elements[0], "like") if len(elements) == 1 else (None, None, "")
@@ -683,6 +705,8 @@ class AppiumTikTokDevice:
                 if (
                     "remove from favorites" in semantics
                     or "added to favorites" in semantics
+                    or "从收藏中移除" in semantics
+                    or "已添加到收藏" in semantics
                 ):
                     return True, None, ""
             if len(elements) != 1:
@@ -701,13 +725,18 @@ class AppiumTikTokDevice:
         elements = self._visible_elements(REPOST_STATE_XPATH)
         for element in elements:
             semantics = self._element_semantics(element)
-            if "you reposted" in semantics or "remove repost" in semantics:
+            if (
+                "you reposted" in semantics
+                or "remove repost" in semantics
+                or "已转发" in semantics
+                or "取消转发" in semantics
+            ):
                 return True, None, ""
         repost_controls = [
             element
             for element in elements
             if (semantics := self._element_semantics(element))
-            and all(value == "repost" for value in semantics.split())
+            and all(value in {"repost", "转发"} for value in semantics.split())
         ]
         if len(repost_controls) == 1:
             return False, repost_controls[0], "repost"
@@ -718,6 +747,8 @@ class AppiumTikTokDevice:
             for element in elements
             if "share video" in (semantics := self._element_semantics(element))
             or semantics == "share"
+            or "分享视频" in semantics
+            or semantics == "分享"
         ]
         if len(share_controls) == 1:
             return False, share_controls[0], "share"
