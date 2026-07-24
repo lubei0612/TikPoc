@@ -52,6 +52,9 @@ PROFILE_STAT_LABEL_IDS = (
     f"{TIKTOK_PACKAGE}:id/oth",
     f"{TIKTOK_PACKAGE}:id/ops",
 )
+PROFILE_VIDEO_TAB_XPATH = (
+    '//*[@clickable="true" and (@content-desc="视频" or @content-desc="Videos")]'
+)
 
 
 class ProfileIdentityMismatch(ValueError):
@@ -429,6 +432,7 @@ class AppiumTikTokDevice:
     def read_profile_observation(self) -> ProfileObservation:
         source = self._profile_source
         last_error: ValueError | None = None
+        video_tab_attempted = False
         for attempt in range(self.metric_read_attempts):
             if source is None:
                 source = str(self.driver.page_source)
@@ -493,12 +497,24 @@ class AppiumTikTokDevice:
                         followers=metrics.followers,
                         posts=len(semantic_posts),
                     )
-                elif attempt + 1 < self.metric_read_attempts:
-                    last_error = ValueError("profile post grid is not ready")
-                    source = None
-                    self._profile_source = None
-                    self.sleeper(self.poll_interval)
-                    continue
+                else:
+                    if not video_tab_attempted:
+                        video_tab = self._first_visible(PROFILE_VIDEO_TAB_XPATH)
+                        video_tab_attempted = True
+                        if video_tab is not None:
+                            video_tab.click()
+                            last_error = ValueError("profile video tab is loading")
+                            source = None
+                            self._profile_source = None
+                            if attempt + 1 < self.metric_read_attempts:
+                                self.sleeper(self.poll_interval)
+                                continue
+                    if attempt + 1 < self.metric_read_attempts:
+                        last_error = ValueError("profile post grid is not ready")
+                        source = None
+                        self._profile_source = None
+                        self.sleeper(self.poll_interval)
+                        continue
             if page.visible_post_count == 3:
                 self._swipe_profile_grid()
                 self.sleeper(self.poll_interval)

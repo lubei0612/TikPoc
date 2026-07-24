@@ -429,6 +429,20 @@ class CurrentSemanticOnlyVideoDriver(SemanticOnlyVideoDriver):
         return super().find_elements(by, value)
 
 
+class ShopTabProfileDriver(SemanticOnlyVideoDriver):
+    def __init__(self) -> None:
+        super().__init__([])
+        self.video_tab = FakeElement(on_click=self._open_video_tab)
+
+    def _open_video_tab(self) -> None:
+        self.posts = [FakeElement(), FakeElement(), FakeElement(), FakeElement()]
+
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if by == "xpath" and '@content-desc="视频"' in value:
+            return [self.video_tab]
+        return super().find_elements(by, value)
+
+
 class DisplayCheckFailureElement(FakeElement):
     def is_displayed(self) -> bool:
         raise RuntimeError("element became stale during visibility check")
@@ -1063,6 +1077,17 @@ def test_zero_parsed_posts_accept_current_semantic_container_in_one_query() -> N
 
     assert observation.metrics == ProfileMetrics(12, 10, 4)
     assert driver.post_queries == 1
+
+
+def test_zero_parsed_posts_open_shop_profile_video_tab_once() -> None:
+    driver = ShopTabProfileDriver()
+    device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
+
+    observation = device.read_profile_observation()
+
+    assert driver.video_tab.clicked is True
+    assert observation.metrics == ProfileMetrics(12, 10, 4)
+    assert device.list_video_keys() == ("0", "1", "2", "3")
 
 
 def test_zero_parsed_posts_skip_semantic_query_when_following_not_greater() -> None:
