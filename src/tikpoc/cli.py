@@ -125,6 +125,11 @@ def _parser() -> argparse.ArgumentParser:
     catalog_status = catalog_commands.add_parser("status")
     catalog_status.add_argument("--db", type=Path, required=True)
     catalog_status.add_argument("--account-id", default="")
+    vmos = commands.add_parser("vmos")
+    vmos_commands = vmos.add_subparsers(dest="vmos_command", required=True)
+    vmos_inspect = vmos_commands.add_parser("inspect")
+    vmos_inspect.add_argument("--env-file", type=Path, required=True)
+    vmos_inspect.add_argument("--pad-code", default="")
     for command_name in ("serve", "dashboard"):
         serve = commands.add_parser(command_name)
         serve.add_argument("--db", type=Path, required=True)
@@ -181,6 +186,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (KeyError, OSError, ValueError) as error:
             raise SystemExit(str(error)) from None
         print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+        return 0
+    if args.command == "vmos":
+        try:
+            instances = _run_vmos_inspect(
+                env_file=args.env_file, pad_code=args.pad_code
+            )
+        except (OSError, RuntimeError, ValueError) as error:
+            raise SystemExit(str(error)) from None
+        for instance in instances:
+            print(
+                f"pad_code={instance.pad_code} "
+                f"online={str(instance.online).lower()} model={instance.model}"
+            )
         return 0
     if args.command == "catalog":
         if args.catalog_command in {"scrape", "run"}:
@@ -743,6 +761,20 @@ def _run_catalog_select(
     )
     write_selected_manifest(output, records, selected)
     return len(selected)
+
+
+def _run_vmos_inspect(*, env_file: Path, pad_code: str):
+    from .vmos_cloud import VmosCloudClient, VmosCredentials
+
+    instances = VmosCloudClient(
+        VmosCredentials.from_env_file(env_file)
+    ).list_instances()
+    expected = pad_code.strip()
+    if expected:
+        instances = tuple(item for item in instances if item.pad_code == expected)
+        if len(instances) != 1:
+            raise ValueError(f"VMOS instance is not present exactly once: {expected}")
+    return instances
 
 
 def _run_catalog_prepare(

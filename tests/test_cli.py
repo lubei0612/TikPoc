@@ -338,6 +338,36 @@ def test_cli_catalog_select_writes_exact_bounded_selection(
     assert capsys.readouterr().out == f"selected=20 output={output}\n"
 
 
+def test_cli_vmos_inspect_prints_only_redacted_instance_fields(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    env_file = tmp_path / "vmos.env"
+    env_file.write_text("VMOS_ACCESS_KEY=secret\n", encoding="utf-8")
+    env_file.chmod(0o600)
+
+    monkeypatch.setattr(
+        cli,
+        "_run_vmos_inspect",
+        lambda **_kwargs: (
+            type(
+                "Instance",
+                (),
+                {
+                    "pad_code": "ACP250625501MXP",
+                    "online": True,
+                    "model": "SM-G996U1(8G)",
+                },
+            )(),
+        ),
+        raising=False,
+    )
+
+    assert main(["vmos", "inspect", "--env-file", str(env_file)]) == 0
+    output = capsys.readouterr().out
+    assert output == "pad_code=ACP250625501MXP online=true model=SM-G996U1(8G)\n"
+    assert "secret" not in output
+
+
 def test_cli_catalog_publish_targets_one_configured_device(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
