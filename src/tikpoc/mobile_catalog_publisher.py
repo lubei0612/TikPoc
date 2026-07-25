@@ -182,10 +182,31 @@ class AppiumTikTokPhotoUi:
         if album is not None:
             album.click()
         escaped_album = album_name.replace('"', "")
-        self._click_required(
-            f'//*[@text="{escaped_album}" or @content-desc="{escaped_album}"]',
-            "isolated job album",
+        job_album_xpath = (
+            f'//*[@text="{escaped_album}" or @content-desc="{escaped_album}"]'
         )
+        job_album = self._first_now(job_album_xpath)
+        if job_album is None:
+            size = self.driver.get_window_size()
+            for _ in range(10):
+                self.driver.execute_script(
+                    "mobile: swipeGesture",
+                    {
+                        "left": 0,
+                        "top": round(int(size["height"]) * 0.12),
+                        "width": int(size["width"]),
+                        "height": round(int(size["height"]) * 0.76),
+                        "direction": "up",
+                        "percent": 0.75,
+                    },
+                )
+                self.sleeper(0.25)
+                job_album = self._first_now(job_album_xpath)
+                if job_album is not None:
+                    break
+        if job_album is None:
+            raise RuntimeError("isolated job album is not visible")
+        job_album.click()
         multi = self._first(MULTI_SELECT_CONTROL_XPATH)
         if multi is None:
             multi = self._first(MULTI_SELECT_XPATH)

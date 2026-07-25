@@ -522,6 +522,38 @@ def test_appium_photo_ui_selects_exact_job_album_images_and_reconciles() -> None
     assert ui.reconcile(before).startswith("tiktok-visible://@expected/")
 
 
+def test_appium_photo_ui_scrolls_to_offscreen_job_album() -> None:
+    class OffscreenAlbumDriver(AppiumPublishingDriver):
+        def __init__(self) -> None:
+            super().__init__()
+            self.album_visible = False
+
+        def execute_script(self, name, args) -> None:
+            super().execute_script(name, args)
+            if name == "mobile: swipeGesture":
+                self.album_visible = True
+
+        def get_window_size(self):
+            return {"width": 720, "height": 1280}
+
+        def find_elements(self, by, xpath):
+            if "job-1" in xpath and not self.album_visible:
+                return []
+            return super().find_elements(by, xpath)
+
+    driver = OffscreenAlbumDriver()
+    ui = AppiumTikTokPhotoUi(driver, timeout=0, sleeper=lambda _: None)
+
+    ui.verify_identity("expected")
+    ui.prepare(
+        ("/sdcard/Pictures/TikPoc/job-1/001.jpg",),
+        "One product, one view.",
+    )
+
+    assert any(name == "mobile: swipeGesture" for name, _ in driver.scripts)
+    assert driver.job_album.clicks == 1
+
+
 def test_appium_photo_ui_opens_tiktok_46_photo_tab_without_legacy_album_control() -> (
     None
 ):
