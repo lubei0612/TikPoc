@@ -107,6 +107,8 @@ class HelperResponse:
     evidence_digest: str
     evidence: HelperEvidence | Mapping[str, object] | None
     error_code: str | None = None
+    tree_age_ms: int = 0
+    event_wait_ms: int = 0
 
 
 def build_request(
@@ -178,6 +180,8 @@ def parse_response(
         evidence_digest=digest,
         evidence=evidence,
         error_code=error_code,
+        tree_age_ms=_optional_nonnegative_int(payload, "tree_age_ms"),
+        event_wait_ms=_optional_nonnegative_int(payload, "event_wait_ms"),
     )
 
 
@@ -286,6 +290,12 @@ def _nonnegative_int(values: Mapping[str, object], name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise DeviceSideProtocolError(f"invalid_{name}")
     return value
+
+
+def _optional_nonnegative_int(values: Mapping[str, object], name: str) -> int:
+    if name not in values:
+        return 0
+    return _nonnegative_int(values, name)
 
 
 def _bool(values: Mapping[str, object], name: str) -> bool:

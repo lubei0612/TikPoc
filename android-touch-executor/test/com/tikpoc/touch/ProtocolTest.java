@@ -60,7 +60,8 @@ public final class ProtocolTest {
                 "com.ss.android.ugc.aweme.main.MainActivity",
                 44L,
                 "sha256:abc",
-                Collections.<String, Object>singletonMap("ready", true));
+                Collections.<String, Object>singletonMap("ready", true))
+                .withPerformance(7L, 18L);
         String encoded = Protocol.encodeResponse(response);
         check(encoded.contains("\"helper_version\":\"1.0.0\""), "helper version");
         check(encoded.contains("\"command_id\":\"cmd-1\""), "response command id");
@@ -68,6 +69,8 @@ public final class ProtocolTest {
         check(encoded.contains("\"assignment_id\":19"), "response assignment");
         check(encoded.contains("\"event_sequence\":44"), "event sequence");
         check(encoded.contains("\"evidence_digest\":\"sha256:abc\""), "digest");
+        check(encoded.contains("\"tree_age_ms\":7"), "tree age");
+        check(encoded.contains("\"event_wait_ms\":18"), "event wait");
     }
 
     private static String validRequest() {

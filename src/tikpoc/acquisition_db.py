@@ -416,6 +416,17 @@ class AcquisitionRepository:
                     element_queries INTEGER NOT NULL CHECK(element_queries >= 0),
                     execute_script_calls INTEGER NOT NULL
                         CHECK(execute_script_calls >= 0),
+                    helper_command_count INTEGER NOT NULL DEFAULT 0
+                        CHECK(helper_command_count >= 0),
+                    helper_processing_ms INTEGER NOT NULL DEFAULT 0
+                        CHECK(helper_processing_ms >= 0),
+                    host_round_trip_ms INTEGER NOT NULL DEFAULT 0
+                        CHECK(host_round_trip_ms >= 0),
+                    tree_age_ms INTEGER NOT NULL DEFAULT 0 CHECK(tree_age_ms >= 0),
+                    event_wait_ms INTEGER NOT NULL DEFAULT 0 CHECK(event_wait_ms >= 0),
+                    fallback_count INTEGER NOT NULL DEFAULT 0
+                        CHECK(fallback_count >= 0),
+                    fallback_reason TEXT NOT NULL DEFAULT '',
                     recorded_at_ms INTEGER NOT NULL,
                     PRIMARY KEY(assignment_id, stage),
                     FOREIGN KEY(assignment_id)
@@ -423,6 +434,26 @@ class AcquisitionRepository:
                 )
                 """
             )
+            metric_columns = {
+                str(row["name"])
+                for row in connection.execute(
+                    "PRAGMA table_info(assignment_command_metrics)"
+                ).fetchall()
+            }
+            helper_metric_columns = {
+                "helper_command_count": "INTEGER NOT NULL DEFAULT 0 CHECK(helper_command_count >= 0)",
+                "helper_processing_ms": "INTEGER NOT NULL DEFAULT 0 CHECK(helper_processing_ms >= 0)",
+                "host_round_trip_ms": "INTEGER NOT NULL DEFAULT 0 CHECK(host_round_trip_ms >= 0)",
+                "tree_age_ms": "INTEGER NOT NULL DEFAULT 0 CHECK(tree_age_ms >= 0)",
+                "event_wait_ms": "INTEGER NOT NULL DEFAULT 0 CHECK(event_wait_ms >= 0)",
+                "fallback_count": "INTEGER NOT NULL DEFAULT 0 CHECK(fallback_count >= 0)",
+                "fallback_reason": "TEXT NOT NULL DEFAULT ''",
+            }
+            for column, definition in helper_metric_columns.items():
+                if column not in metric_columns:
+                    connection.execute(
+                        f"ALTER TABLE assignment_command_metrics ADD COLUMN {column} {definition}"
+                    )
             connection.execute(
                 """
                 CREATE INDEX IF NOT EXISTS assignment_phase_history_capacity_idx
@@ -2215,6 +2246,13 @@ class AcquisitionRepository:
         element_queries: int,
         execute_script_calls: int,
         recorded_at_ms: int,
+        helper_command_count: int = 0,
+        helper_processing_ms: int = 0,
+        host_round_trip_ms: int = 0,
+        tree_age_ms: int = 0,
+        event_wait_ms: int = 0,
+        fallback_count: int = 0,
+        fallback_reason: str = "",
         worker_owner_id: str | None = None,
         worker_account_id: str | None = None,
         worker_fence_token: int | None = None,
@@ -2226,12 +2264,19 @@ class AcquisitionRepository:
             page_source_reads,
             element_queries,
             execute_script_calls,
+            helper_command_count,
+            helper_processing_ms,
+            host_round_trip_ms,
+            tree_age_ms,
+            event_wait_ms,
+            fallback_count,
             recorded_at_ms,
         )
         if assignment_id <= 0:
             raise ValueError("assignment id must be positive")
         if any(value < 0 for value in values):
             raise ValueError("assignment command metrics must be nonnegative")
+        normalized_fallback_reason = fallback_reason.strip()[:120]
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             if worker_fence_token is not None:
@@ -2258,17 +2303,42 @@ class AcquisitionRepository:
                 INSERT INTO assignment_command_metrics(
                     assignment_id, stage, command_count, command_duration_ms,
                     page_source_reads, element_queries, execute_script_calls,
-                    recorded_at_ms
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    helper_command_count, helper_processing_ms,
+                    host_round_trip_ms, tree_age_ms, event_wait_ms,
+                    fallback_count, fallback_reason, recorded_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(assignment_id, stage) DO UPDATE SET
                     command_count=excluded.command_count,
                     command_duration_ms=excluded.command_duration_ms,
                     page_source_reads=excluded.page_source_reads,
                     element_queries=excluded.element_queries,
                     execute_script_calls=excluded.execute_script_calls,
+                    helper_command_count=excluded.helper_command_count,
+                    helper_processing_ms=excluded.helper_processing_ms,
+                    host_round_trip_ms=excluded.host_round_trip_ms,
+                    tree_age_ms=excluded.tree_age_ms,
+                    event_wait_ms=excluded.event_wait_ms,
+                    fallback_count=excluded.fallback_count,
+                    fallback_reason=excluded.fallback_reason,
                     recorded_at_ms=excluded.recorded_at_ms
                 """,
-                (assignment_id, normalized.value, *values),
+                (
+                    assignment_id,
+                    normalized.value,
+                    command_count,
+                    command_duration_ms,
+                    page_source_reads,
+                    element_queries,
+                    execute_script_calls,
+                    helper_command_count,
+                    helper_processing_ms,
+                    host_round_trip_ms,
+                    tree_age_ms,
+                    event_wait_ms,
+                    fallback_count,
+                    normalized_fallback_reason,
+                    recorded_at_ms,
+                ),
             )
         return AssignmentCommandMetrics(
             assignment_id=assignment_id,
@@ -2279,6 +2349,13 @@ class AcquisitionRepository:
             element_queries=element_queries,
             execute_script_calls=execute_script_calls,
             recorded_at_ms=recorded_at_ms,
+            helper_command_count=helper_command_count,
+            helper_processing_ms=helper_processing_ms,
+            host_round_trip_ms=host_round_trip_ms,
+            tree_age_ms=tree_age_ms,
+            event_wait_ms=event_wait_ms,
+            fallback_count=fallback_count,
+            fallback_reason=normalized_fallback_reason,
         )
 
     def assignment_command_metrics(
@@ -2289,6 +2366,9 @@ class AcquisitionRepository:
                 """
                 SELECT assignment_id, stage, command_count, command_duration_ms,
                        page_source_reads, element_queries, execute_script_calls,
+                       helper_command_count, helper_processing_ms,
+                       host_round_trip_ms, tree_age_ms, event_wait_ms,
+                       fallback_count, fallback_reason,
                        recorded_at_ms
                 FROM assignment_command_metrics
                 WHERE assignment_id = ?
@@ -2305,6 +2385,13 @@ class AcquisitionRepository:
                 element_queries=int(row["element_queries"]),
                 execute_script_calls=int(row["execute_script_calls"]),
                 recorded_at_ms=int(row["recorded_at_ms"]),
+                helper_command_count=int(row["helper_command_count"]),
+                helper_processing_ms=int(row["helper_processing_ms"]),
+                host_round_trip_ms=int(row["host_round_trip_ms"]),
+                tree_age_ms=int(row["tree_age_ms"]),
+                event_wait_ms=int(row["event_wait_ms"]),
+                fallback_count=int(row["fallback_count"]),
+                fallback_reason=str(row["fallback_reason"]),
             )
             for row in rows
         )

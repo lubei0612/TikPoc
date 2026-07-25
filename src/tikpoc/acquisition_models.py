@@ -247,3 +247,10 @@ class AssignmentCommandMetrics:
     element_queries: int
     execute_script_calls: int
     recorded_at_ms: int
+    helper_command_count: int = 0
+    helper_processing_ms: int = 0
+    host_round_trip_ms: int = 0
+    tree_age_ms: int = 0
+    event_wait_ms: int = 0
+    fallback_count: int = 0
+    fallback_reason: str = ""

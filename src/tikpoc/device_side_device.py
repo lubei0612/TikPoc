@@ -69,6 +69,7 @@ class DeviceSideTikTokDevice:
         self._target: PoolTarget | None = None
         self._confirmed_username = ""
         self._profile: ProfileEvidence | None = None
+        self._performance = DevicePerformanceSnapshot()
 
     def bind_assignment(
         self,
@@ -207,7 +208,7 @@ class DeviceSideTikTokDevice:
         self._phase = AssignmentPhase(phase)
 
     def performance_snapshot(self) -> DevicePerformanceSnapshot:
-        return DevicePerformanceSnapshot()
+        return self._performance
 
     def _command(
         self,
@@ -232,11 +233,12 @@ class DeviceSideTikTokDevice:
             payload = self.transport.request(
                 build_request(context, command=command, arguments=arguments)
             )
+            completed_at_ms = self.monotonic_ms()
             response = parse_response(
                 payload,
                 context=context,
                 command=command,
-                now_monotonic_ms=self.monotonic_ms(),
+                now_monotonic_ms=completed_at_ms,
                 expected_username=expected_username,
             )
         except DeviceSideTransportError as error:
@@ -249,6 +251,22 @@ class DeviceSideTikTokDevice:
             }:
                 raise DeviceSideUnavailable(error.code) from None
             raise DeviceSideEvidenceError(error.code) from None
+        current = self._performance
+        self._performance = DevicePerformanceSnapshot(
+            command_count=current.command_count,
+            command_duration_ms=current.command_duration_ms,
+            page_source_reads=current.page_source_reads,
+            element_queries=current.element_queries,
+            execute_script_calls=current.execute_script_calls,
+            helper_command_count=current.helper_command_count + 1,
+            helper_processing_ms=current.helper_processing_ms + response.elapsed_ms,
+            host_round_trip_ms=current.host_round_trip_ms
+            + max(0, completed_at_ms - now_ms),
+            tree_age_ms=current.tree_age_ms + response.tree_age_ms,
+            event_wait_ms=current.event_wait_ms + response.event_wait_ms,
+            fallback_count=current.fallback_count,
+            fallback_reason=current.fallback_reason,
+        )
         if response.status == "error":
             code = response.error_code or "helper_error"
             if code in {"service_disabled", "helper_crashed", "version_mismatch"}:

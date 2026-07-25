@@ -106,7 +106,9 @@ public final class TouchCommandDispatcher {
         return Protocol.Response.uncertain(
                 request, elapsed(startedAt), surface.packageName(), surface.activityName(),
                 after.eventSequence,
-                after.digest, evidence);
+                after.digest, evidence).withPerformance(
+                after.ageMs(clock.elapsedRealtimeMs()),
+                Math.max(0L, after.capturedAtElapsedMs - startedAt));
     }
 
     private Protocol.Response observeProfile(Protocol.Request request, long startedAt)
@@ -177,7 +179,9 @@ public final class TouchCommandDispatcher {
             Map<String, Object> evidence) {
         return Protocol.Response.success(
                 request, elapsed(startedAt), surface.packageName(), surface.activityName(),
-                snapshot.eventSequence, snapshot.digest, evidence);
+                snapshot.eventSequence, snapshot.digest, evidence).withPerformance(
+                snapshot.ageMs(clock.elapsedRealtimeMs()),
+                Math.max(0L, snapshot.capturedAtElapsedMs - startedAt));
     }
 
     private long elapsed(long startedAt) {

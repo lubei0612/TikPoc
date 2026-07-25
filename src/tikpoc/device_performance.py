@@ -1,6 +1,6 @@
 import time
 from collections.abc import Callable
-from dataclasses import astuple, dataclass
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -10,15 +10,47 @@ class DevicePerformanceSnapshot:
     page_source_reads: int = 0
     element_queries: int = 0
     execute_script_calls: int = 0
+    helper_command_count: int = 0
+    helper_processing_ms: int = 0
+    host_round_trip_ms: int = 0
+    tree_age_ms: int = 0
+    event_wait_ms: int = 0
+    fallback_count: int = 0
+    fallback_reason: str = ""
 
     def __sub__(
         self, previous: "DevicePerformanceSnapshot"
     ) -> "DevicePerformanceSnapshot":
-        values = tuple(
-            max(0, current - old)
-            for current, old in zip(astuple(self), astuple(previous), strict=True)
+        return type(self)(
+            command_count=max(0, self.command_count - previous.command_count),
+            command_duration_ms=max(
+                0, self.command_duration_ms - previous.command_duration_ms
+            ),
+            page_source_reads=max(
+                0, self.page_source_reads - previous.page_source_reads
+            ),
+            element_queries=max(0, self.element_queries - previous.element_queries),
+            execute_script_calls=max(
+                0, self.execute_script_calls - previous.execute_script_calls
+            ),
+            helper_command_count=max(
+                0, self.helper_command_count - previous.helper_command_count
+            ),
+            helper_processing_ms=max(
+                0, self.helper_processing_ms - previous.helper_processing_ms
+            ),
+            host_round_trip_ms=max(
+                0, self.host_round_trip_ms - previous.host_round_trip_ms
+            ),
+            tree_age_ms=max(0, self.tree_age_ms - previous.tree_age_ms),
+            event_wait_ms=max(0, self.event_wait_ms - previous.event_wait_ms),
+            fallback_count=max(0, self.fallback_count - previous.fallback_count),
+            fallback_reason=(
+                self.fallback_reason
+                if self.fallback_count > previous.fallback_count
+                else ""
+            ),
         )
-        return type(self)(*values)
 
 
 class _MeasuredCommandExecutor:

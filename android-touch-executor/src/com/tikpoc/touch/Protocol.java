@@ -105,6 +105,13 @@ public final class Protocol {
             return new Response(values);
         }
 
+        public Response withPerformance(long treeAgeMs, long eventWaitMs) {
+            Map<String, Object> measured = new LinkedHashMap<String, Object>(values);
+            measured.put("tree_age_ms", Math.max(0L, treeAgeMs));
+            measured.put("event_wait_ms", Math.max(0L, eventWaitMs));
+            return new Response(measured);
+        }
+
         private static Map<String, Object> base(Request request) {
             Map<String, Object> values = new LinkedHashMap<String, Object>();
             values.put("version", VERSION);

@@ -1244,7 +1244,53 @@ def test_repository_round_trips_assignment_command_metrics(tmp_path: Path) -> No
         page_source_reads=2,
         element_queries=1,
         execute_script_calls=0,
+        helper_command_count=2,
+        helper_processing_ms=31,
+        host_round_trip_ms=44,
+        tree_age_ms=7,
+        event_wait_ms=18,
+        fallback_count=1,
+        fallback_reason="stale_tree",
         recorded_at_ms=1_010,
     )
 
     assert repository.assignment_command_metrics(assignment.assignment_id) == (stored,)
+
+
+def test_migrate_adds_helper_metrics_to_prior_command_table(tmp_path: Path) -> None:
+    path = tmp_path / "prior-command-metrics.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE assignment_command_metrics (
+                assignment_id INTEGER NOT NULL,
+                stage TEXT NOT NULL,
+                command_count INTEGER NOT NULL DEFAULT 0,
+                command_duration_ms INTEGER NOT NULL DEFAULT 0,
+                page_source_reads INTEGER NOT NULL DEFAULT 0,
+                element_queries INTEGER NOT NULL DEFAULT 0,
+                execute_script_calls INTEGER NOT NULL DEFAULT 0,
+                recorded_at_ms INTEGER NOT NULL,
+                PRIMARY KEY(assignment_id, stage)
+            )
+            """
+        )
+
+    AcquisitionRepository(path).migrate()
+
+    with sqlite3.connect(path) as connection:
+        columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(assignment_command_metrics)"
+            ).fetchall()
+        }
+    assert {
+        "helper_command_count",
+        "helper_processing_ms",
+        "host_round_trip_ms",
+        "tree_age_ms",
+        "event_wait_ms",
+        "fallback_count",
+        "fallback_reason",
+    } <= columns

@@ -682,6 +682,13 @@ class MobileAssignmentWorker:
             page_source_reads=delta.page_source_reads,
             element_queries=delta.element_queries,
             execute_script_calls=delta.execute_script_calls,
+            helper_command_count=delta.helper_command_count,
+            helper_processing_ms=delta.helper_processing_ms,
+            host_round_trip_ms=delta.host_round_trip_ms,
+            tree_age_ms=delta.tree_age_ms,
+            event_wait_ms=delta.event_wait_ms,
+            fallback_count=delta.fallback_count,
+            fallback_reason=delta.fallback_reason,
             recorded_at_ms=recorded_at_ms,
             **self._action_fence_kwargs(),
         )

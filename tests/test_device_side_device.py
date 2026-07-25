@@ -9,6 +9,7 @@ from tikpoc.acquisition_models import (
     PoolTarget,
     ProfileAccessState,
 )
+from tikpoc.device_performance import DevicePerformanceSnapshot
 from tikpoc.device_side_device import (
     DeviceSideEvidenceError,
     DeviceSideTikTokDevice,
@@ -200,3 +201,41 @@ def test_uncertain_action_reconciliation_is_read_only() -> None:
     )
     assert adapter.reconcile_outcome(OutcomeKind.FAVORITE) is ActionResult.CONFIRMED
     assert transport.commands[1]["command"] == "observe_action"
+
+
+def test_performance_snapshot_accumulates_helper_and_round_trip_metrics() -> None:
+    transport = FakeTransport()
+    transport.responses = [
+        response(
+            "cmd-1",
+            {
+                "service_enabled": True,
+                "tiktok_foreground": True,
+                "surface": "MainActivity",
+                "busy": False,
+            },
+            elapsed_ms=31,
+            tree_age_ms=7,
+            event_wait_ms=18,
+        )
+    ]
+    times = iter((1_000, 1_044))
+    adapter = DeviceSideTikTokDevice(
+        transport,
+        device_id="device-1",
+        monotonic_ms=lambda: next(times),
+        command_id_factory=lambda: "cmd-1",
+    )
+    adapter.bind_assignment(
+        19, AssignmentPhase.PROFILE_OPENING, account_id="account-1", fence_token=7
+    )
+
+    adapter.ensure_ready()
+
+    assert adapter.performance_snapshot() == DevicePerformanceSnapshot(
+        helper_command_count=1,
+        helper_processing_ms=31,
+        host_round_trip_ms=44,
+        tree_age_ms=7,
+        event_wait_ms=18,
+    )

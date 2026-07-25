@@ -68,6 +68,36 @@ def test_command_snapshot_subtraction_returns_nonnegative_delta() -> None:
     assert after - before == DevicePerformanceSnapshot(3, 450, 1, 1, 1)
 
 
+def test_helper_snapshot_subtraction_returns_helper_delta_and_reason() -> None:
+    before = DevicePerformanceSnapshot(
+        helper_command_count=2,
+        helper_processing_ms=20,
+        host_round_trip_ms=30,
+        tree_age_ms=5,
+        event_wait_ms=8,
+        fallback_count=0,
+    )
+    after = DevicePerformanceSnapshot(
+        helper_command_count=4,
+        helper_processing_ms=51,
+        host_round_trip_ms=74,
+        tree_age_ms=12,
+        event_wait_ms=26,
+        fallback_count=1,
+        fallback_reason="stale_tree",
+    )
+
+    assert after - before == DevicePerformanceSnapshot(
+        helper_command_count=2,
+        helper_processing_ms=31,
+        host_round_trip_ms=44,
+        tree_age_ms=7,
+        event_wait_ms=18,
+        fallback_count=1,
+        fallback_reason="stale_tree",
+    )
+
+
 def test_failed_command_is_measured_and_original_error_is_preserved() -> None:
     class FailingExecutor(FakeExecutor):
         def execute(self, command: str, params: dict[str, object]):
