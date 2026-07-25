@@ -17,13 +17,18 @@ mkdir -p "$OUT/classes" "$OUT/test-classes"
   -source 8 -target 8 \
   -classpath "$PLATFORM" \
   -d "$OUT/classes" \
-  "$ROOT/src/com/tikpoc/touch/Protocol.java"
+  "$ROOT/src/com/tikpoc/touch/Protocol.java" \
+  "$ROOT/src/com/tikpoc/touch/SemanticSnapshot.java" \
+  "$ROOT/src/com/tikpoc/touch/TikTokSemantics.java"
 
 "$JDK/bin/javac" \
   -source 8 -target 8 \
   -classpath "$PLATFORM:$OUT/classes" \
   -d "$OUT/test-classes" \
-  "$ROOT/test/com/tikpoc/touch/ProtocolTest.java"
+  "$ROOT/test/com/tikpoc/touch/ProtocolTest.java" \
+  "$ROOT/test/com/tikpoc/touch/TikTokSemanticsTest.java"
 
 "$JDK/bin/java" -cp "$PLATFORM:$OUT/classes:$OUT/test-classes" \
   com.tikpoc.touch.ProtocolTest
+"$JDK/bin/java" -cp "$PLATFORM:$OUT/classes:$OUT/test-classes" \
+  com.tikpoc.touch.TikTokSemanticsTest
