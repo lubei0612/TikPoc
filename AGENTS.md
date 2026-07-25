@@ -212,6 +212,9 @@ user-approved document and update this guide in the same change.
 
 ### Delivery Priority
 
+- Subagents used for this project must not run in fast mode. Use the standard
+  inherited model configuration or a higher reasoning setting for every
+  implementation, specification review, and code-quality review.
 - Optimize for the shortest path to a working acquisition-to-private-channel
   business loop. Implement required business behavior before polish.
 - Fix every Critical and Important correctness, duplication, account-isolation,
