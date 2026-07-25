@@ -183,6 +183,56 @@ def test_fleet_parses_two_myt_devices(tmp_path: Path) -> None:
     assert config.relay_allowed_sources == frozenset({"192.168.28.114"})
 
 
+def test_fleet_parses_device_side_backend_without_appium_url(tmp_path: Path) -> None:
+    path = _write_config(
+        tmp_path,
+        """
+  - device_id: vmos-01
+    account_id: account-01
+    myt_slot: 1
+    backend: device-side
+    adb_endpoint: 192.0.2.30:5555
+    helper_host_port: 47101
+    helper_device_port: 47101
+    order_seed: seed-a
+""",
+    )
+
+    device = FleetConfig.from_path(path).devices[0]
+
+    assert device.backend == "device-side"
+    assert device.appium_url == ""
+    assert device.helper_host_port == 47101
+    assert device.helper_device_port == 47101
+
+
+def test_fleet_rejects_duplicate_device_side_host_ports(tmp_path: Path) -> None:
+    path = _write_config(
+        tmp_path,
+        """
+  - device_id: vmos-01
+    account_id: account-01
+    myt_slot: 1
+    backend: device-side
+    adb_endpoint: 192.0.2.30:5555
+    helper_host_port: 47101
+    helper_device_port: 47101
+    order_seed: seed-a
+  - device_id: vmos-02
+    account_id: account-02
+    myt_slot: 2
+    backend: device-side
+    adb_endpoint: 192.0.2.31:5555
+    helper_host_port: 47101
+    helper_device_port: 47101
+    order_seed: seed-b
+""",
+    )
+
+    with pytest.raises(ValueError, match="duplicate helper host port"):
+        FleetConfig.from_path(path)
+
+
 def test_fleet_parses_nonnegative_device_startup_offsets(tmp_path: Path) -> None:
     offsets = (0, 250, 500, 750, 1_000, 1_250)
     devices = "".join(

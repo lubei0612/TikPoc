@@ -8,6 +8,8 @@ from .acquisition_db import AcquisitionRepository, DeviceWorkerLeaseLost
 from .acquisition_models import AssignmentPhase, OutcomeKind, PoolTarget
 from .device import AppiumTikTokDevice
 from .device_performance import DevicePerformanceSnapshot, MeasuredAppiumDriver
+from .device_side_device import DeviceSideTikTokDevice
+from .device_side_transport import DeviceSideTransport
 from .fleet import (
     DeviceWorkerFence,
     FleetConfig,
@@ -40,6 +42,24 @@ class FencedVerifiedDevice:
 
     def ensure_ready(self) -> None:
         self.fence.execute(self.device.ensure_ready)
+
+    def bind_assignment(
+        self,
+        assignment_id: int,
+        phase: AssignmentPhase,
+        *,
+        account_id: str,
+        fence_token: int,
+    ) -> None:
+        binder = getattr(self.device, "bind_assignment", None)
+        if binder is not None:
+            self.fence.execute(
+                binder,
+                assignment_id,
+                phase,
+                account_id=account_id,
+                fence_token=fence_token,
+            )
 
     def open_target(self, target: PoolTarget) -> None:
         self.fence.execute(self.device.open_target, target)
@@ -88,22 +108,45 @@ def run_device_worker(
     device_factory: Callable[[object], object] = AppiumTikTokDevice,
     worker_factory: Callable[..., object] = MobileAssignmentWorker,
     route_factory: Callable[[str], object] = AdbProfileRouter,
+    transport_factory: Callable[[FleetDevice], object] | None = None,
+    device_side_factory: Callable[[FleetDevice, object], object] | None = None,
     clock_ms: Callable[[], int] = _clock_ms,
 ) -> None:
     if device.startup_offset_ms and stop_event.wait(device.startup_offset_ms / 1_000):
         return
     repository = repository_factory(database_path)
-    driver = fence.execute(driver_factory, device.appium_url, device.adb_endpoint)
+    driver = None
+    transport = None
     try:
-        measured_driver = (
-            MeasuredAppiumDriver(driver)
-            if hasattr(driver, "command_executor")
-            else driver
-        )
-        raw_device = device_factory(measured_driver)
-        if hasattr(raw_device, "diagnostics_dir"):
-            raw_device.diagnostics_dir = database_path.parent / "screenshots"
-        raw_device.route_opener = route_factory(device.adb_endpoint).open
+        if device.backend == "device-side":
+            create_transport = transport_factory or (
+                lambda configured: DeviceSideTransport(
+                    configured.adb_endpoint,
+                    host_port=configured.helper_host_port or 0,
+                    device_port=configured.helper_device_port or 0,
+                )
+            )
+            transport = fence.execute(create_transport, device)
+            fence.execute(transport.start)
+            create_device = device_side_factory or (
+                lambda configured, opened_transport: DeviceSideTikTokDevice(
+                    opened_transport, device_id=configured.device_id
+                )
+            )
+            raw_device = fence.execute(create_device, device, transport)
+        else:
+            driver = fence.execute(
+                driver_factory, device.appium_url, device.adb_endpoint
+            )
+            measured_driver = (
+                MeasuredAppiumDriver(driver)
+                if hasattr(driver, "command_executor")
+                else driver
+            )
+            raw_device = device_factory(measured_driver)
+            if hasattr(raw_device, "diagnostics_dir"):
+                raw_device.diagnostics_dir = database_path.parent / "screenshots"
+            raw_device.route_opener = route_factory(device.adb_endpoint).open
         verified_device = FencedVerifiedDevice(raw_device, fence)
         worker = worker_factory(
             repository,
@@ -132,7 +175,10 @@ def run_device_worker(
         except DeviceWorkerLeaseLost:
             return
     finally:
-        driver.quit()
+        if driver is not None:
+            driver.quit()
+        if transport is not None:
+            transport.close()
 
 
 def _process_launcher(

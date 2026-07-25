@@ -15,6 +15,7 @@ devices:
     adb_endpoint: 192.0.2.10:30000
     appium_url: http://127.0.0.1:4723
     order_seed: replace-with-unique-seed-01
+    backend: appium
   - device_id: phone-02
     account_id: account-02
     myt_slot: 2

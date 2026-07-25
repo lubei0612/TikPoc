@@ -85,6 +85,9 @@ class FleetDevice:
     adb_endpoint: str
     appium_url: str
     order_seed: str
+    backend: str = "appium"
+    helper_host_port: int | None = None
+    helper_device_port: int | None = None
     proxy_port: int | None = None
     startup_offset_ms: int = 0
 
@@ -138,6 +141,21 @@ class FleetConfig:
                 adb_endpoint=str(item.get("adb_endpoint") or "").strip(),
                 appium_url=str(item.get("appium_url") or "").strip(),
                 order_seed=str(item.get("order_seed") or "").strip(),
+                backend=str(item.get("backend") or "appium").strip(),
+                helper_host_port=(
+                    _configured_port(
+                        item.get("helper_host_port"), 0, "helper host port"
+                    )
+                    if item.get("helper_host_port") is not None
+                    else None
+                ),
+                helper_device_port=(
+                    _configured_port(
+                        item.get("helper_device_port"), 0, "helper device port"
+                    )
+                    if item.get("helper_device_port") is not None
+                    else None
+                ),
                 proxy_port=(
                     _configured_port(item.get("proxy_port"), 0, "device proxy port")
                     if item.get("proxy_port") is not None
@@ -155,7 +173,12 @@ class FleetConfig:
             raise ValueError("MYT slot must be positive")
         for device in devices:
             _validate_adb_endpoint(device.adb_endpoint)
-            _validate_appium_url(device.appium_url)
+            if device.backend not in {"appium", "device-side"}:
+                raise ValueError("device backend must be appium or device-side")
+            if device.backend == "appium":
+                _validate_appium_url(device.appium_url)
+            elif device.helper_host_port is None or device.helper_device_port is None:
+                raise ValueError("device-side helper ports are required")
         fields = {
             "device id": [device.device_id for device in devices],
             "account id": [device.account_id for device in devices],
@@ -168,8 +191,17 @@ class FleetConfig:
                 raise ValueError(f"{label} is required")
             if len(set(values)) != len(values):
                 raise ValueError(f"duplicate {label}")
-        if any(not device.appium_url for device in devices):
+        if any(
+            device.backend == "appium" and not device.appium_url for device in devices
+        ):
             raise ValueError("Appium URL is required")
+        helper_ports = [
+            device.helper_host_port
+            for device in devices
+            if device.backend == "device-side"
+        ]
+        if len(set(helper_ports)) != len(helper_ports):
+            raise ValueError("duplicate helper host port")
         return cls(
             myt_host=myt_host,
             myt_sdk_port=myt_sdk_port,

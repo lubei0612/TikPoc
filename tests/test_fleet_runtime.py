@@ -193,6 +193,62 @@ def test_device_worker_processes_assignments_until_stopped(tmp_path: Path) -> No
     assert driver.closed is True
 
 
+def test_device_side_worker_never_creates_appium_and_closes_transport(
+    tmp_path: Path,
+) -> None:
+    stop_event = threading.Event()
+    fence = RecordingFence()
+    device = replace(
+        _two_device_config(tmp_path).devices[0],
+        backend="device-side",
+        appium_url="",
+        helper_host_port=47101,
+        helper_device_port=47101,
+    )
+
+    class FakeRepository:
+        def claim_scheduled_assignment(self, *args, **kwargs):
+            return object()
+
+    class FakeTransport:
+        started = False
+        closed = False
+
+        def start(self) -> None:
+            self.started = True
+
+        def close(self) -> None:
+            self.closed = True
+
+    transport = FakeTransport()
+
+    class FakeWorker:
+        def __init__(self, repository, verified_device, **kwargs) -> None:
+            assert isinstance(verified_device, FencedVerifiedDevice)
+
+        def run_assignment(self, assignment) -> None:
+            stop_event.set()
+
+    run_device_worker(
+        tmp_path / "device-side.db",
+        "round-1",
+        device,
+        fence,
+        stop_event,
+        repository_factory=lambda path: FakeRepository(),
+        driver_factory=lambda *args: (_ for _ in ()).throw(
+            AssertionError("Appium must stay off")
+        ),
+        transport_factory=lambda configured: transport,
+        device_side_factory=lambda configured, opened: ProtocolDevice(),
+        worker_factory=FakeWorker,
+        clock_ms=lambda: 1_000,
+    )
+
+    assert transport.started is True
+    assert transport.closed is True
+
+
 def test_device_worker_waits_once_before_creating_appium_session(
     tmp_path: Path,
 ) -> None:
