@@ -548,6 +548,22 @@ class FastVideoControlDriver(BoundedVideoDriver):
         return super().find_elements(by, value)
 
 
+class XPathOnlyVideoControlDriver(BoundedVideoDriver):
+    def __init__(self) -> None:
+        super().__init__()
+        self.share_xpath_queries = 0
+
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if by == "-android uiautomator" and (
+            "Share video" in value or "分享视频" in value
+        ):
+            return []
+        if by == "xpath" and "Share video" in value:
+            self.share_xpath_queries += 1
+            return [FakeElement()]
+        return super().find_elements(by, value)
+
+
 class StaleClickElement(FakeElement):
     def click(self) -> None:
         raise StaleElementReferenceException("cached post became stale")
@@ -1304,6 +1320,17 @@ def test_video_confirmation_uses_fast_semantic_selector_instead_of_xpath() -> No
 
     assert driver.share_uiautomator_queries == 2
     assert driver.share_xpath_queries == 0
+
+
+def test_video_confirmation_falls_back_to_visible_xpath_control_after_timeout() -> None:
+    driver = XPathOnlyVideoControlDriver()
+    device = AppiumTikTokDevice(driver, action_timeout=0)
+
+    assert device.list_video_keys() == ("0", "1", "2", "3")
+
+    device.open_and_confirm_video("2")
+
+    assert driver.share_xpath_queries == 1
 
 
 @pytest.mark.parametrize("invalidate", ["route", "back", "restart", "consume"])

@@ -904,7 +904,7 @@ class AppiumTikTokDevice:
                 if element is not None:
                     return element
             if self.clock() >= deadline:
-                return None
+                return self._first_visible(SHARE_CONTROL_XPATH)
             self.sleeper(self.poll_interval)
 
     def _share_surface_visible(self) -> bool:
