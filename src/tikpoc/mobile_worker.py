@@ -3,6 +3,8 @@ import time
 from collections.abc import Callable
 from typing import Protocol
 
+from selenium.common.exceptions import WebDriverException
+
 from .acquisition_db import AcquisitionRepository, DeviceWorkerLeaseLost
 from .acquisition_models import (
     ActionPlan,
@@ -18,6 +20,7 @@ from .acquisition_models import (
     RoundAssignment,
 )
 from .device_performance import DevicePerformanceSnapshot
+from .mobile_routes import AdbRouteError
 from .outcome_planner import get_or_create_plan
 
 
@@ -194,6 +197,8 @@ class MobileAssignmentWorker:
                         and stored.visit_confirmed_at_ms is not None
                     ),
                 )
+            if isinstance(error, (AdbRouteError, WebDriverException)):
+                raise
 
     def _run_claimed(self, assignment: RoundAssignment) -> None:
         target = PoolTarget(

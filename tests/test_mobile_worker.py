@@ -3,6 +3,7 @@ from collections import deque
 from pathlib import Path
 
 import pytest
+from selenium.common.exceptions import WebDriverException
 
 from tests.test_appium_device import BoundedVideoDriver
 from tikpoc.acquisition_db import AcquisitionRepository, DeviceWorkerLeaseLost
@@ -19,6 +20,7 @@ from tikpoc.acquisition_models import (
 from tikpoc.device import AppiumTikTokDevice, ProfileIdentityMismatch
 from tikpoc.device_performance import DevicePerformanceSnapshot
 from tikpoc.importer import Target
+from tikpoc.mobile_routes import AdbRouteError
 from tikpoc.mobile_worker import MobileAssignmentWorker
 from tikpoc.models import ProfileMetrics
 from tikpoc.outcome_planner import get_or_create_plan
@@ -426,6 +428,36 @@ def test_worker_records_command_metrics_for_deferred_route_failure(
         metric.stage: metric.command_count
         for metric in repository.assignment_command_metrics(assignment.assignment_id)
     } == {AssignmentStage.ROUTE: 1}
+
+
+@pytest.mark.parametrize(
+    "error",
+    [AdbRouteError("ADB route failed"), WebDriverException("session unavailable")],
+)
+def test_worker_defers_then_propagates_device_transport_failure(
+    tmp_path: Path, error: Exception
+) -> None:
+    repository, assignment = _claimed_assignment(tmp_path)
+    device = ScriptedVerifiedDevice(metrics=ProfileMetrics(20, 10, 5))
+
+    def fail_route(target) -> None:
+        raise error
+
+    device.open_target = fail_route
+    worker = MobileAssignmentWorker(
+        repository,
+        device,
+        device_id="phone-01",
+        owner_id="worker-1",
+        clock_ms=lambda: 1_000,
+    )
+
+    with pytest.raises(type(error)):
+        worker.run_assignment(assignment)
+
+    stored = repository.assignment(assignment.assignment_id)
+    assert stored.phase is AssignmentPhase.DEFERRED
+    assert stored.last_error_code == type(error).__name__
 
 
 def test_assignment_stage_timing_replaces_the_previous_attempt(
