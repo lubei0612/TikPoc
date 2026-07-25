@@ -170,3 +170,32 @@ def test_vmos_client_does_not_retry_side_effect_after_system_busy() -> None:
         client.start_app("ACP250625501MXP", "com.zhiliaoapp.musically")
 
     assert len(requests) == 1
+
+
+def test_vmos_client_toggles_online_adb_with_bounded_instance_list() -> None:
+    requests: list[VmosSignedRequest] = []
+
+    def transport(request: VmosSignedRequest) -> str:
+        requests.append(request)
+        return json.dumps(
+            {
+                "code": 200,
+                "data": [
+                    {
+                        "taskId": 42,
+                        "padCode": "ACP250625501MXP",
+                        "taskStatus": 1,
+                    }
+                ],
+            }
+        )
+
+    client = VmosCloudClient(
+        VmosCredentials("ACCESS", "SECRET"),
+        transport=transport,
+        clock=lambda: 1784919000,
+    )
+
+    assert client.set_online_adb("ACP250625501MXP", enabled=True) == "42"
+    assert requests[0].path == "/vcpcloud/api/padApi/openOnlineAdb"
+    assert requests[0].body == ('{"padCodes":["ACP250625501MXP"],"openStatus":1}')

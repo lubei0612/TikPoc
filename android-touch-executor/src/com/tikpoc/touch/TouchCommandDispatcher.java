@@ -6,6 +6,10 @@ import java.util.Map;
 public final class TouchCommandDispatcher {
     public interface SnapshotSource {
         SemanticSnapshot current() throws Exception;
+
+        default SemanticSnapshot awaitAfter(long eventSequence, long timeoutMs) throws Exception {
+            return current();
+        }
     }
 
     public interface Actuator {
@@ -36,6 +40,19 @@ public final class TouchCommandDispatcher {
     }
 
     public Protocol.Response dispatch(Protocol.Request request) throws Exception {
+        try {
+            return dispatchVerified(request);
+        } catch (TikTokSemantics.SemanticException error) {
+            return Protocol.Response.error(request, error.code, "semantic evidence unavailable");
+        } catch (Protocol.ProtocolException error) {
+            return Protocol.Response.error(request, error.code, "invalid command arguments");
+        } catch (Exception error) {
+            return Protocol.Response.error(
+                    request, "command_failed", error.getClass().getSimpleName());
+        }
+    }
+
+    private Protocol.Response dispatchVerified(Protocol.Request request) throws Exception {
         long startedAt = clock.elapsedRealtimeMs();
         if (request.command.equals("health")) return health(request, startedAt);
         if (request.command.equals("diagnostics")) return diagnostics(request, startedAt);
@@ -82,9 +99,18 @@ public final class TouchCommandDispatcher {
     private Protocol.Response applyAction(Protocol.Request request, long startedAt)
             throws Exception {
         String action = requiredArgument(request, "action");
+        if (action.equals("repost")) return applyRepost(request, startedAt);
         SemanticSnapshot before = snapshots.current();
         SemanticSnapshot.Node control = TikTokSemantics.uniqueControl(before, action);
         String beforeState = TikTokSemantics.actionState(control);
+        if (beforeState.equals("on")) {
+            Map<String, Object> evidence = new LinkedHashMap<String, Object>();
+            evidence.put("action", action);
+            evidence.put("before", beforeState);
+            evidence.put("after", beforeState);
+            evidence.put("control_resource_id", control.resourceId);
+            return success(request, startedAt, before, evidence);
+        }
         if (!actuator.click(control)) {
             return Protocol.Response.error(request, "click_rejected", "control rejected click");
         }
@@ -111,11 +137,74 @@ public final class TouchCommandDispatcher {
                 Math.max(0L, after.capturedAtElapsedMs - startedAt));
     }
 
+    private Protocol.Response applyRepost(Protocol.Request request, long startedAt)
+            throws Exception {
+        SemanticSnapshot before = snapshots.current();
+        SemanticSnapshot.Node existing = TikTokSemantics.repostConfirmation(before);
+        if (existing != null) {
+            return actionSuccess(
+                    request, startedAt, before, "repost", "on", "on", existing.resourceId);
+        }
+        SemanticSnapshot.Node share = TikTokSemantics.uniqueControl(before, "share");
+        if (!actuator.click(share)) {
+            return Protocol.Response.error(request, "click_rejected", "share rejected click");
+        }
+        SemanticSnapshot shareSurface = before;
+        SemanticSnapshot.Node repost = null;
+        for (int attempt = 0; attempt < 5 && repost == null; attempt++) {
+            shareSurface = snapshots.awaitAfter(shareSurface.eventSequence, 400L);
+            try {
+                repost = TikTokSemantics.uniqueControl(shareSurface, "repost");
+            } catch (TikTokSemantics.SemanticException intermediate) {
+                if (!intermediate.code.equals("missing_control")) throw intermediate;
+            }
+        }
+        if (repost == null) {
+            return Protocol.Response.error(
+                    request, "missing_control", "repost control is not visible");
+        }
+        if (!actuator.click(repost)) {
+            return Protocol.Response.error(request, "click_rejected", "repost rejected click");
+        }
+        SemanticSnapshot after = shareSurface;
+        SemanticSnapshot.Node confirmation = null;
+        for (int attempt = 0; attempt < 5 && confirmation == null; attempt++) {
+            after = snapshots.awaitAfter(after.eventSequence, 400L);
+            confirmation = TikTokSemantics.repostConfirmation(after);
+        }
+        if (confirmation == null) {
+            Map<String, Object> evidence = new LinkedHashMap<String, Object>();
+            evidence.put("action", "repost");
+            evidence.put("before", "off");
+            evidence.put("after", "unknown");
+            evidence.put("control_resource_id", repost.resourceId);
+            return Protocol.Response.uncertain(
+                    request, elapsed(startedAt), surface.packageName(), surface.activityName(),
+                    after.eventSequence, after.digest, evidence).withPerformance(
+                    after.ageMs(clock.elapsedRealtimeMs()),
+                    Math.max(0L, after.capturedAtElapsedMs - startedAt));
+        }
+        return actionSuccess(
+                request, startedAt, after, "repost", "off", "on", confirmation.resourceId);
+    }
+
+    private Protocol.Response actionSuccess(
+            Protocol.Request request, long startedAt, SemanticSnapshot snapshot,
+            String action, String before, String after, String resourceId) {
+        Map<String, Object> evidence = new LinkedHashMap<String, Object>();
+        evidence.put("action", action);
+        evidence.put("before", before);
+        evidence.put("after", after);
+        evidence.put("control_resource_id", resourceId);
+        return success(request, startedAt, snapshot, evidence);
+    }
+
     private Protocol.Response observeProfile(Protocol.Request request, long startedAt)
             throws Exception {
+        String expectedUsername = requiredArgument(request, "expected_username");
         SemanticSnapshot snapshot = snapshots.current();
         TikTokSemantics.Profile profile = TikTokSemantics.parseProfile(
-                snapshot, clock.elapsedRealtimeMs(), 500L);
+                snapshot, clock.elapsedRealtimeMs(), 500L, expectedUsername);
         Map<String, Object> evidence = new LinkedHashMap<String, Object>();
         evidence.put("access_state", profile.accessState);
         evidence.put("username", profile.username);
@@ -136,21 +225,33 @@ public final class TouchCommandDispatcher {
         if (!actuator.openProfile(route)) {
             return Protocol.Response.error(request, "route_rejected", "profile route rejected");
         }
-        SemanticSnapshot snapshot = snapshots.current();
-        if (snapshot.eventSequence <= before.eventSequence) {
-            return Protocol.Response.error(
-                    request, "profile_not_updated", "profile evidence did not change");
+        boolean observedNewEvent = false;
+        long observedSequence = before.eventSequence;
+        for (int attempt = 0; attempt < 15; attempt++) {
+            SemanticSnapshot snapshot = snapshots.awaitAfter(observedSequence, 400L);
+            if (snapshot.eventSequence > before.eventSequence) {
+                observedNewEvent = true;
+                observedSequence = snapshot.eventSequence;
+                try {
+                    TikTokSemantics.Profile profile = TikTokSemantics.parseProfile(
+                            snapshot, clock.elapsedRealtimeMs(), 500L, expectedUsername);
+                    if (profile.username.equals(expectedUsername)) {
+                        Map<String, Object> evidence = new LinkedHashMap<String, Object>();
+                        evidence.put("route_opened", true);
+                        evidence.put("username", profile.username);
+                        return success(request, startedAt, snapshot, evidence);
+                    }
+                } catch (TikTokSemantics.SemanticException incompleteProfile) {
+                    // Navigation can emit intermediate surfaces before profile evidence settles.
+                }
+            }
         }
-        TikTokSemantics.Profile profile = TikTokSemantics.parseProfile(
-                snapshot, clock.elapsedRealtimeMs(), 500L);
-        if (!profile.username.equals(expectedUsername)) {
-            return Protocol.Response.error(
-                    request, "profile_identity_mismatch", "visible username does not match");
-        }
-        Map<String, Object> evidence = new LinkedHashMap<String, Object>();
-        evidence.put("route_opened", true);
-        evidence.put("username", profile.username);
-        return success(request, startedAt, snapshot, evidence);
+        return Protocol.Response.error(
+                request,
+                observedNewEvent ? "profile_identity_mismatch" : "profile_not_updated",
+                observedNewEvent
+                        ? "visible username does not match"
+                        : "profile evidence did not change");
     }
 
     private Protocol.Response openVideo(Protocol.Request request, long startedAt)
@@ -161,17 +262,20 @@ public final class TouchCommandDispatcher {
         if (!actuator.click(post)) {
             return Protocol.Response.error(request, "click_rejected", "post rejected click");
         }
-        SemanticSnapshot after = snapshots.current();
-        if (after.eventSequence <= before.eventSequence
-                || !TikTokSemantics.hasVideoControls(after)) {
-            return Protocol.Response.error(
-                    request, "video_not_verified", "video controls are not visible");
+        long observedSequence = before.eventSequence;
+        for (int attempt = 0; attempt < 10; attempt++) {
+            SemanticSnapshot after = snapshots.awaitAfter(observedSequence, 400L);
+            if (after.eventSequence <= before.eventSequence) continue;
+            observedSequence = after.eventSequence;
+            if (!TikTokSemantics.hasVideoControls(after)) continue;
+            Map<String, Object> evidence = new LinkedHashMap<String, Object>();
+            evidence.put("video_key", videoKey);
+            evidence.put("post_resource_id", post.resourceId);
+            evidence.put("video_controls_visible", true);
+            return success(request, startedAt, after, evidence);
         }
-        Map<String, Object> evidence = new LinkedHashMap<String, Object>();
-        evidence.put("video_key", videoKey);
-        evidence.put("post_resource_id", post.resourceId);
-        evidence.put("video_controls_visible", true);
-        return success(request, startedAt, after, evidence);
+        return Protocol.Response.error(
+                request, "video_not_verified", "video controls are not visible");
     }
 
     private Protocol.Response success(

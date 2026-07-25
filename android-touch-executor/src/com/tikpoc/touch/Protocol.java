@@ -17,9 +17,9 @@ public final class Protocol {
             "health", "open_profile", "observe_profile", "open_video",
             "observe_action", "apply_action", "diagnostics"));
     private static final List<String> PHASES = Collections.unmodifiableList(Arrays.asList(
-            "pending", "profile_opening", "identity_confirmed", "profile_observed",
-            "video_selected", "action_pending", "action_uncertain", "completed",
-            "deferred", "skipped"));
+            "pending", "profile_opening", "identity_confirmed", "waiting_snapshot",
+            "video_opening", "video_confirmed", "quota_reserved", "action_executing",
+            "action_reconciling", "completed", "deferred", "skipped"));
 
     private Protocol() {}
 

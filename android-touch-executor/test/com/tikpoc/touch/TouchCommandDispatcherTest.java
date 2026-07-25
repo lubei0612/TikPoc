@@ -10,8 +10,15 @@ public final class TouchCommandDispatcherTest {
         healthIsReadOnly();
         healthReadsCurrentSurface();
         opensOnePostAndVerifiesVideoControls();
+        waitsForVideoEventBeforeVerifyingControls();
+        returnsBoundedErrorWhenVideoHandleIsMissing();
+        returnsBoundedErrorWhenActuatorFails();
         opensProfileOnlyAfterExactNewIdentity();
+        waitsForProfileEventBeforeVerifyingIdentity();
+        waitsThroughSlowProfileIntermediateEvents();
         actionClicksOnceAndVerifiesResult();
+        alreadySelectedActionIsConfirmedWithoutClick();
+        repostUsesShareSurfaceAndVerifiesResult();
         missingFinalEvidenceIsUncertainWithoutSecondClick();
         diagnosticsContainsNoVisibleText();
         System.out.println("TouchCommandDispatcherTest PASS");
@@ -28,6 +35,34 @@ public final class TouchCommandDispatcherTest {
         check(evidence.get("username").equals("target_user"), "profile identity");
     }
 
+    private static void waitsForProfileEventBeforeVerifyingIdentity() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.source.snapshots = Arrays.asList(
+                actionSnapshot(false, 1), actionSnapshot(false, 1),
+                actionSnapshot(false, 1), profileSnapshot());
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("open_profile", map("route", "https://www.tiktok.com/@target_user")));
+        check(response.values.get("status").equals("ok"), "delayed profile verified");
+        check(fixture.source.index == 4, "profile snapshots polled");
+    }
+
+    private static void waitsThroughSlowProfileIntermediateEvents() throws Exception {
+        Fixture fixture = new Fixture();
+        java.util.List<SemanticSnapshot> snapshots = new java.util.ArrayList<>();
+        snapshots.add(actionSnapshot(false, 1));
+        for (int sequence = 2; sequence < 14; sequence++) {
+            snapshots.add(actionSnapshot(false, sequence));
+        }
+        snapshots.add(profileSnapshot(14));
+        fixture.source.snapshots = snapshots;
+
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("open_profile", map("route", "https://www.tiktok.com/@target_user")));
+
+        check(response.values.get("status").equals("ok"), "slow profile verified");
+        check(fixture.source.index == 14, "slow profile snapshots polled");
+    }
+
     private static void healthReadsCurrentSurface() throws Exception {
         Fixture fixture = new Fixture();
         fixture.surface.activityName = "CurrentActivity";
@@ -42,6 +77,45 @@ public final class TouchCommandDispatcherTest {
                 request("open_video", map("video_key", "post:0")));
         check(fixture.actuator.clicks == 1, "one post click");
         check(response.values.get("status").equals("ok"), "video verified");
+    }
+
+    private static void waitsForVideoEventBeforeVerifyingControls() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.source.snapshots = Arrays.asList(
+                profileSnapshot(), profileSnapshot(), profileSnapshot(),
+                actionSnapshot(false, 3));
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("open_video", map("video_key", "post:0")));
+        check(fixture.actuator.clicks == 1, "delayed video clicked once");
+        check(response.values.get("status").equals("ok"), "delayed video verified");
+        check(fixture.source.index == 4, "video snapshots polled");
+    }
+
+    private static void returnsBoundedErrorWhenVideoHandleIsMissing() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.source.snapshots = Collections.singletonList(actionSnapshot(false, 1));
+
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("open_video", map("video_key", "post:0")));
+
+        check(response.values.get("status").equals("error"), "missing video error status");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> error = (Map<String, Object>) response.values.get("error");
+        check(error.get("code").equals("missing_post_handle"), "missing video error code");
+    }
+
+    private static void returnsBoundedErrorWhenActuatorFails() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.source.snapshots = Collections.singletonList(profileSnapshot());
+        fixture.actuator.failure = new IllegalStateException("synthetic actuator failure");
+
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("open_video", map("video_key", "post:0")));
+
+        check(response.values.get("status").equals("error"), "actuator error status");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> error = (Map<String, Object>) response.values.get("error");
+        check(error.get("code").equals("command_failed"), "actuator error code");
     }
 
     private static void healthIsReadOnly() throws Exception {
@@ -62,6 +136,38 @@ public final class TouchCommandDispatcherTest {
         check(evidence.get("before").equals("off"), "before");
         check(evidence.get("after").equals("on"), "after");
         check(evidence.get("control_resource_id").equals("like_button"), "control");
+    }
+
+    private static void alreadySelectedActionIsConfirmedWithoutClick() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.source.snapshots = Collections.singletonList(actionSnapshot(true, 1));
+
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("apply_action", map("action", "like")));
+
+        check(response.values.get("status").equals("ok"), "selected action confirmed");
+        check(fixture.actuator.clicks == 0, "selected action not clicked");
+    }
+
+    private static void repostUsesShareSurfaceAndVerifiesResult() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.source.snapshots = Arrays.asList(
+                controlsSnapshot(1, control("share", "分享视频。4 次分享")),
+                controlsSnapshot(2, label("loading", "正在加载")),
+                controlsSnapshot(3, control("repost", "转发")),
+                controlsSnapshot(4, label("loading", "正在处理")),
+                controlsSnapshot(5, label("repost_state", "你已转发")));
+
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("apply_action", map("action", "repost")));
+
+        check(response.values.get("status").equals("ok"), "repost verified");
+        check(fixture.actuator.clicks == 2, "share and repost clicked once each");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> evidence = (Map<String, Object>) response.values.get("evidence");
+        check(evidence.get("control_resource_id").equals("repost_state"),
+                "repost confirmation evidence source");
+        check(fixture.source.index == 5, "repost intermediate snapshots polled");
     }
 
     private static void missingFinalEvidenceIsUncertainWithoutSecondClick() throws Exception {
@@ -113,9 +219,11 @@ public final class TouchCommandDispatcherTest {
 
     private static final class FakeActuator implements TouchCommandDispatcher.Actuator {
         int clicks;
+        RuntimeException failure;
 
         @Override
         public boolean click(SemanticSnapshot.Node node) {
+            if (failure != null) throw failure;
             clicks++;
             return true;
         }
@@ -141,7 +249,37 @@ public final class TouchCommandDispatcherTest {
         }
     }
 
+    private static SemanticSnapshot controlsSnapshot(
+            long sequence, SemanticSnapshot.Node... controls) {
+        try {
+            SemanticSnapshot.Node root = new SemanticSnapshot.Node(
+                    "root", "Frame", "", "", new SemanticSnapshot.Bounds(0, 0, 1080, 1920),
+                    true, false, true, false, Arrays.asList(controls));
+            return SemanticSnapshot.fromRoot(root, sequence, 1_000L);
+        } catch (Exception error) {
+            throw new RuntimeException(error);
+        }
+    }
+
+    private static SemanticSnapshot.Node control(String resourceId, String description) {
+        return new SemanticSnapshot.Node(
+                resourceId, "Button", "", description,
+                new SemanticSnapshot.Bounds(0, 0, 100, 50), true, true, true, false,
+                Collections.<SemanticSnapshot.Node>emptyList());
+    }
+
+    private static SemanticSnapshot.Node label(String resourceId, String text) {
+        return new SemanticSnapshot.Node(
+                resourceId, "TextView", text, "",
+                new SemanticSnapshot.Bounds(0, 0, 100, 50), true, false, true, false,
+                Collections.<SemanticSnapshot.Node>emptyList());
+    }
+
     private static SemanticSnapshot profileSnapshot() {
+        return profileSnapshot(2L);
+    }
+
+    private static SemanticSnapshot profileSnapshot(long sequence) {
         try {
             SemanticSnapshot.Node post = new SemanticSnapshot.Node(
                     "video_item", "ImageView", "", "Video", new SemanticSnapshot.Bounds(
@@ -163,7 +301,7 @@ public final class TouchCommandDispatcherTest {
                     "root", "Frame", "", "", new SemanticSnapshot.Bounds(0, 0, 1080, 1920),
                     true, false, true, false,
                     Arrays.asList(username, following, followers, post));
-            return SemanticSnapshot.fromRoot(root, 2L, 1_000L);
+            return SemanticSnapshot.fromRoot(root, sequence, 1_000L);
         } catch (Exception error) {
             throw new RuntimeException(error);
         }
@@ -172,7 +310,9 @@ public final class TouchCommandDispatcherTest {
     private static Protocol.Request request(String command, Map<String, Object> arguments)
             throws Exception {
         String argumentsJson = "{}";
-        if (arguments.containsKey("action")) argumentsJson = "{\"action\":\"like\"}";
+        if (arguments.containsKey("action")) {
+            argumentsJson = "{\"action\":\"" + arguments.get("action") + "\"}";
+        }
         if (arguments.containsKey("video_key")) argumentsJson = "{\"video_key\":\"post:0\"}";
         if (arguments.containsKey("route")) {
             argumentsJson = "{\"route\":\"https://www.tiktok.com/@target_user\","

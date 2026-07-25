@@ -124,7 +124,11 @@ class DeviceSideTikTokDevice:
         expected = self._confirmed_username or (
             _username(self._target.username) if self._target is not None else None
         )
-        response = self._command("observe_profile", {}, expected_username=expected)
+        response = self._command(
+            "observe_profile",
+            {"expected_username": expected},
+            expected_username=expected,
+        )
         evidence = response.evidence
         if not isinstance(evidence, ProfileEvidence):
             raise DeviceSideEvidenceError("incomplete_profile_evidence")

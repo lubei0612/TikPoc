@@ -9,6 +9,7 @@ public final class ProtocolTest {
 
     public static void main(String[] args) throws Exception {
         parsesCompleteRequest();
+        acceptsEveryWorkerPhase();
         rejectsExpiredDeadline();
         rejectsOversizedRequest();
         rejectsUnknownCommand();
@@ -28,6 +29,19 @@ public final class ProtocolTest {
         check(request.phase.equals("profile_opening"), "phase");
         check(request.deadlineElapsedMs == 9_000L, "deadline");
         check(request.arguments.isEmpty(), "arguments");
+    }
+
+    private static void acceptsEveryWorkerPhase() throws Exception {
+        String[] phases = new String[] {
+                "pending", "profile_opening", "identity_confirmed", "waiting_snapshot",
+                "video_opening", "video_confirmed", "quota_reserved", "action_executing",
+                "action_reconciling", "deferred", "skipped", "completed"
+        };
+        for (String phase : phases) {
+            Protocol.Request request = Protocol.parseRequest(
+                    validRequest().replace("profile_opening", phase), 1_000L);
+            check(request.phase.equals(phase), "worker phase " + phase);
+        }
     }
 
     private static void rejectsExpiredDeadline() {

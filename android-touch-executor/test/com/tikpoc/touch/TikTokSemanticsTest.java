@@ -11,9 +11,15 @@ public final class TikTokSemanticsTest {
     public static void main(String[] args) throws Exception {
         parsesCoherentProfileEvidence();
         parsesAbbreviatedCounts();
+        parsesChineseAbbreviatedCounts();
+        parsesObfuscatedLiveProfileByExactIdentityAndGeometry();
+        prefersAtHandleWhenDisplayNameMatchesUsername();
         classifiesPrivateAndUnavailableProfiles();
         rejectsIncompleteAndStaleEvidence();
         selectsOnlyOneVisibleControl();
+        recognizesLocalizedObfuscatedVideoControls();
+        recognizesLocalizedSelectedLikeState();
+        recognizesLocalizedRepostConfirmation();
         System.out.println("TikTokSemanticsTest PASS");
     }
 
@@ -43,6 +49,53 @@ public final class TikTokSemanticsTest {
         TikTokSemantics.Profile profile = TikTokSemantics.parseProfile(snapshot, 1_010L, 500L);
         check(profile.following == 1_234L, "localized count");
         check(profile.followers == 2_500L, "abbreviated count");
+    }
+
+    private static void parsesChineseAbbreviatedCounts() throws Exception {
+        SemanticSnapshot snapshot = snapshot(
+                node("username", "target_user", "", false),
+                node("following_count", "5,992", "Following", false),
+                node("followers_count", "1.2 万", "Followers", false),
+                node("video_item", "", "Video", true));
+        TikTokSemantics.Profile profile = TikTokSemantics.parseProfile(
+                snapshot, 1_010L, 500L);
+        check(profile.followers == 12_000L, "Chinese ten-thousand count");
+    }
+
+    private static void parsesObfuscatedLiveProfileByExactIdentityAndGeometry()
+            throws Exception {
+        SemanticSnapshot snapshot = snapshot(
+                nodeAt("oul", "@target_user", "", true, 264, 364, 456, 404, "Button"),
+                nodeAt("bio", "@other_user", "", false, 20, 405, 300, 430, "TextView"),
+                nodeAt("oti", "120", "", false, 59, 432, 259, 476, "TextView"),
+                nodeAt("opr", "45", "", false, 326, 424, 394, 472, "TextView"),
+                nodeAt("oti", "9", "", false, 461, 432, 661, 476, "TextView"),
+                nodeAt("dp6", "", "", true, 1, 900, 359, 1375, "FrameLayout"),
+                nodeAt("dp6", "", "", true, 361, 900, 719, 1375, "FrameLayout"));
+
+        TikTokSemantics.Profile profile = TikTokSemantics.parseProfile(
+                snapshot, 1_010L, 500L, "target_user");
+
+        check(profile.username.equals("target_user"), "live exact username");
+        check(profile.following == 120L && profile.followers == 45L, "live metrics");
+        check(profile.postHandles.equals(Arrays.asList("post:0", "post:1")), "live posts");
+        check(TikTokSemantics.postControl(snapshot, "post:1").resourceId.equals("dp6"),
+                "live post control");
+    }
+
+    private static void prefersAtHandleWhenDisplayNameMatchesUsername() throws Exception {
+        SemanticSnapshot snapshot = snapshot(
+                nodeAt("", "target_user", "", true, 200, 320, 500, 364, "Button"),
+                nodeAt("oul", "@target_user", "", true, 240, 364, 480, 404, "Button"),
+                nodeAt("oti", "120", "", false, 59, 432, 259, 476, "TextView"),
+                nodeAt("opr", "45", "", false, 326, 424, 394, 472, "TextView"),
+                nodeAt("oti", "9", "", false, 461, 432, 661, 476, "TextView"),
+                nodeAt("dp6", "", "", true, 1, 900, 359, 1375, "FrameLayout"));
+
+        TikTokSemantics.Profile profile = TikTokSemantics.parseProfile(
+                snapshot, 1_010L, 500L, "target_user");
+
+        check(profile.username.equals("target_user"), "at-handle identity preferred");
     }
 
     private static void classifiesPrivateAndUnavailableProfiles() throws Exception {
@@ -85,6 +138,46 @@ public final class TikTokSemanticsTest {
         expectFailure(() -> TikTokSemantics.uniqueControl(ambiguous, "like"), "ambiguous_control");
     }
 
+    private static void recognizesLocalizedObfuscatedVideoControls() throws Exception {
+        SemanticSnapshot snapshot = snapshot(
+                node("elq", "", "点赞视频。24 个赞", true),
+                node("g4g", "", "将此视频添加到收藏。", true),
+                node("elq", "", "分享视频。4 次分享", true),
+                node("jmc", "", "转发", true));
+
+        check(TikTokSemantics.hasVideoControls(snapshot), "localized video controls");
+        check(TikTokSemantics.uniqueControl(snapshot, "like").resourceId.equals("elq"),
+                "localized like");
+        check(TikTokSemantics.uniqueControl(snapshot, "favorite").resourceId.equals("g4g"),
+                "localized favorite");
+        check(TikTokSemantics.uniqueControl(snapshot, "share").resourceId.equals("elq"),
+                "localized share");
+        check(TikTokSemantics.uniqueControl(snapshot, "repost").resourceId.equals("jmc"),
+                "localized repost");
+    }
+
+    private static void recognizesLocalizedSelectedLikeState() throws Exception {
+        SemanticSnapshot.Node liked = node("elq", "", "点赞的视频", true);
+        SemanticSnapshot snapshot = snapshot(liked);
+
+        check(TikTokSemantics.uniqueControl(snapshot, "like") == liked,
+                "localized selected like control");
+        check(TikTokSemantics.actionState(liked).equals("on"),
+                "localized selected like state");
+    }
+
+    private static void recognizesLocalizedRepostConfirmation() throws Exception {
+        check(TikTokSemantics.hasRepostConfirmation(
+                snapshot(node("w1a", "你已转发", "", false))),
+                "localized repost confirmation");
+        check(TikTokSemantics.repostConfirmation(
+                snapshot(node("w1a", "你已转发", "", false))).resourceId.equals("w1a"),
+                "repost confirmation source");
+        check(!TikTokSemantics.hasRepostConfirmation(
+                snapshot(node("jmc", "", "转发", true))),
+                "repost control is not confirmation");
+    }
+
     private static SemanticSnapshot snapshot(SemanticSnapshot.Node... nodes) throws Exception {
         return snapshotAt(1_000L, nodes);
     }
@@ -103,6 +196,15 @@ public final class TikTokSemanticsTest {
                 resourceId, "TextView", text, description,
                 new SemanticSnapshot.Bounds(0, 0, 100, 50), true, clickable, true, false,
                 Collections.<SemanticSnapshot.Node>emptyList());
+    }
+
+    private static SemanticSnapshot.Node nodeAt(
+            String resourceId, String text, String description, boolean clickable,
+            int left, int top, int right, int bottom, String className) {
+        return new SemanticSnapshot.Node(
+                resourceId, className, text, description,
+                new SemanticSnapshot.Bounds(left, top, right, bottom), true, clickable, true,
+                false, Collections.<SemanticSnapshot.Node>emptyList());
     }
 
     private static void expectFailure(ThrowingRunnable operation, String code) {

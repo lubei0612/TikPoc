@@ -48,6 +48,9 @@ public final class TikPocAccessibilityService extends AccessibilityService
             packageName = event.getPackageName().toString();
         }
         refreshSnapshot();
+        synchronized (this) {
+            notifyAll();
+        }
     }
 
     @Override
@@ -71,6 +74,19 @@ public final class TikPocAccessibilityService extends AccessibilityService
         SemanticSnapshot observed = snapshot;
         if (observed == null) throw new IllegalStateException("accessibility tree unavailable");
         return observed;
+    }
+
+    @Override
+    public synchronized SemanticSnapshot awaitAfter(long sequence, long timeoutMs)
+            throws Exception {
+        long deadline = SystemClock.elapsedRealtime() + Math.max(0L, timeoutMs);
+        while (snapshot != null && snapshot.eventSequence <= sequence) {
+            long remaining = deadline - SystemClock.elapsedRealtime();
+            if (remaining <= 0L) break;
+            wait(remaining);
+        }
+        if (snapshot == null) throw new IllegalStateException("accessibility tree unavailable");
+        return snapshot;
     }
 
     @Override

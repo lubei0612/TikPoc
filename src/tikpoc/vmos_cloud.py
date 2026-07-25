@@ -196,6 +196,19 @@ class VmosCloudClient:
             raise RuntimeError("VMOS start-app response is incomplete")
         return str(first["taskId"])
 
+    def set_online_adb(self, pad_code: str, *, enabled: bool) -> str:
+        normalized = str(pad_code).strip()
+        if not normalized:
+            raise ValueError("pad_code is required")
+        data = self._post(
+            "/vcpcloud/api/padApi/openOnlineAdb",
+            {"padCodes": [normalized], "openStatus": int(enabled)},
+        )
+        first = data[0] if isinstance(data, list) and data else data
+        if not isinstance(first, dict) or not first.get("taskId"):
+            raise RuntimeError("VMOS online-ADB response is incomplete")
+        return str(first["taskId"])
+
     def _post(
         self,
         path: str,

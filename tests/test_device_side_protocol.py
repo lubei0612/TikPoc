@@ -113,6 +113,32 @@ def test_health_response_is_typed() -> None:
     )
 
 
+def test_error_response_preserves_helper_code_without_surface_evidence() -> None:
+    payload = response(
+        status="error",
+        error={"code": "missing_post_handle", "message": "bounded failure"},
+    )
+    for field in (
+        "elapsed_ms",
+        "package_name",
+        "activity_name",
+        "event_sequence",
+        "evidence_digest",
+        "evidence",
+    ):
+        payload.pop(field)
+
+    parsed = parse_response(
+        payload,
+        context=context(),
+        command="open_video",
+        now_monotonic_ms=2_000,
+    )
+
+    assert parsed.status == "error"
+    assert parsed.error_code == "missing_post_handle"
+
+
 def test_profile_response_requires_complete_numeric_and_source_evidence() -> None:
     evidence = {
         "access_state": "available",

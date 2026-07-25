@@ -150,25 +150,34 @@ def parse_response(
     _equal(payload, "phase", context.phase.value, "phase_mismatch")
     if now_monotonic_ms > context.deadline_monotonic_ms:
         raise DeviceSideProtocolError("deadline_expired")
-    package_name = _string(payload, "package_name")
-    if package_name != TIKTOK_PACKAGE:
-        raise DeviceSideProtocolError("unexpected_package")
     status = _string(payload, "status")
     if status not in {"ok", "uncertain", "error"}:
         raise DeviceSideProtocolError("invalid_status")
+    if status == "error":
+        error = _mapping(payload, "error")
+        return HelperResponse(
+            status=status,
+            helper_version=helper_version,
+            command_id=context.command_id,
+            elapsed_ms=0,
+            package_name="",
+            activity_name="",
+            event_sequence=0,
+            evidence_digest="",
+            evidence=None,
+            error_code=_string(error, "code"),
+        )
+    package_name = _string(payload, "package_name")
+    if package_name != TIKTOK_PACKAGE:
+        raise DeviceSideProtocolError("unexpected_package")
     elapsed_ms = _nonnegative_int(payload, "elapsed_ms")
     activity_name = _string(payload, "activity_name", allow_empty=True)
     event_sequence = _nonnegative_int(payload, "event_sequence")
     digest = _string(payload, "evidence_digest")
     evidence: HelperEvidence | Mapping[str, object] | None
     error_code = None
-    if status == "error":
-        error = _mapping(payload, "error")
-        error_code = _string(error, "code")
-        evidence = None
-    else:
-        values = _mapping(payload, "evidence")
-        evidence = _parse_evidence(command, values, expected_username=expected_username)
+    values = _mapping(payload, "evidence")
+    evidence = _parse_evidence(command, values, expected_username=expected_username)
     return HelperResponse(
         status=status,
         helper_version=helper_version,
