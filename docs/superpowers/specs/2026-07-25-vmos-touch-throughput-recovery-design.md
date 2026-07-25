@@ -111,8 +111,48 @@ path expires. Second, `AdbRouteError` and Selenium `WebDriverException` are now
 persisted against the current assignment and then propagated so the fleet
 supervisor rebuilds the device worker with backoff instead of consuming the
 remaining queue through a dead session. Both fixes have focused regression
-coverage. A fresh 100-target canary is still required; this interrupted result
-does not satisfy either the 400-per-hour recovery gate or the production gate.
+coverage.
+
+### 2026-07-26 completed representative 100-target canary
+
+The follow-up used the same deterministic representative CSV in a new isolated
+database,
+`/Users/Shared/TikPoc/vmos-rate/vmos-touch-representative-100-v2.db`, round
+`round-fd6f5347decc7427b746`. The VMOS platform-managed proxy, seven-day remote
+ADB lease, one Appium server, and one account-scoped worker remained connected
+for the complete run. The measurement window from first claim to final durable
+completion was 1,814.621 seconds.
+
+All 100 assignments completed with 100 confirmed visits. Two target attempts
+were deferred once and then completed on their second attempt: one zero-video
+profile produced incomplete post-grid evidence on its first read, and one video
+open left TikTok for an existing Chrome surface. There were no duplicate
+assignments, plans, or `(plan_id, attempt_index)` records. The final plans were
+50 trace, 36 confirmed likes, five confirmed favorites, seven confirmed
+reposts, and two uncertain reposts. Each uncertain repost had exactly one
+initial attempt and one reconciliation record. Quota windows retained 36
+confirmed likes, five confirmed favorites, seven confirmed reposts, and two
+uncertain repost reservations without exceeding configured limits.
+
+The completed rate was 198.4 confirmed visits per hour, projecting 3,968 visits
+in 20 productive hours. The 400-per-hour recovery gate and the 500-per-hour
+production gate therefore failed despite a stable transport and complete
+coverage. Recorded stage mean/P90/maximum seconds were:
+
+- route: 0.955 / 1.311 / 2.236 across 100 samples;
+- identity: 7.202 / 8.847 / 27.500 across 100 samples;
+- metrics: 1.236 / 3.445 / 24.734 across 100 samples;
+- video: 7.084 / 9.222 / 11.946 across 51 samples;
+- action: 6.926 / 11.840 / 22.458 across 51 samples.
+
+Identity remained the largest Appium contribution at 715.01 command-seconds,
+followed by video at 333.43 and action at 327.69. Stable operation therefore
+does not close the capacity gap: identity alone exceeds the 6.5-second
+promotion mean, before any eligible target performs video and action work.
+Further selector-level Appium tuning is not the next promotion candidate. The
+next capacity design must evaluate a lower-overhead device-side accessibility
+or native ADB executor while preserving the exact visible identity, eligibility,
+interaction, verification, quota, retry, and coverage contracts.
 
 ## Business Invariants
 
