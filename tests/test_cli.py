@@ -7,12 +7,11 @@ from pathlib import Path
 import pytest
 import uvicorn
 
+from tests.test_importer import HEADER
 from tikpoc import cli, runner, web_worker
 from tikpoc.acquisition_db import AcquisitionRepository
 from tikpoc.cli import main
 from tikpoc.db import Database
-
-from tests.test_importer import HEADER
 
 
 def _write_acquisition_csv(path: Path, *, count: int = 2) -> None:
@@ -296,6 +295,47 @@ def test_cli_catalog_scrape_passes_bounded_export_options(
         capsys.readouterr().out
         == "products=3 images=8 failed_images=1 output=" + str(tmp_path) + "\n"
     )
+
+
+def test_cli_catalog_select_writes_exact_bounded_selection(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    manifest = tmp_path / "manifest.jsonl"
+    signals = tmp_path / "signals.json"
+    output = tmp_path / "selected.jsonl"
+    manifest.write_text("{}\n", encoding="utf-8")
+    signals.write_text("[]", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def fake_select(**kwargs):
+        captured.update(kwargs)
+        return 20
+
+    monkeypatch.setattr(cli, "_run_catalog_select", fake_select, raising=False)
+
+    result = main(
+        [
+            "catalog",
+            "select",
+            "--manifest",
+            str(manifest),
+            "--signals",
+            str(signals),
+            "--output",
+            str(output),
+            "--limit",
+            "20",
+        ]
+    )
+
+    assert result == 0
+    assert captured == {
+        "manifest": manifest,
+        "signals": signals,
+        "output": output,
+        "limit": 20,
+    }
+    assert capsys.readouterr().out == f"selected=20 output={output}\n"
 
 
 def test_cli_catalog_publish_targets_one_configured_device(

@@ -2,10 +2,10 @@ import argparse
 import hashlib
 import json
 import os
+from collections.abc import Sequence
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Sequence
 
 from .acquisition_db import AcquisitionRepository
 from .capacity import evaluate_round_capacity
@@ -90,6 +90,11 @@ def _parser() -> argparse.ArgumentParser:
     catalog_scrape.add_argument("--delay", type=float, default=0.5)
     catalog_scrape.add_argument("--no-images", action="store_true")
     catalog_scrape.add_argument("--max-image-mb", type=int, default=25)
+    catalog_select = catalog_commands.add_parser("select")
+    catalog_select.add_argument("--manifest", type=Path, required=True)
+    catalog_select.add_argument("--signals", type=Path, required=True)
+    catalog_select.add_argument("--output", type=Path, required=True)
+    catalog_select.add_argument("--limit", type=int, default=20)
     catalog_prepare = catalog_commands.add_parser("prepare")
     catalog_prepare.add_argument("--manifest", type=Path, required=True)
     catalog_prepare.add_argument("--db", type=Path, required=True)
@@ -189,6 +194,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise SystemExit("max-image-mb must be positive")
         if args.catalog_command in {"publish", "run"} and args.max_posts <= 0:
             raise SystemExit("max-posts must be positive")
+        if args.catalog_command == "select" and args.limit <= 0:
+            raise SystemExit("limit must be positive")
         try:
             if args.catalog_command == "scrape":
                 result = _run_catalog_scrape(
@@ -204,6 +211,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                     f"products={result.product_count} images={result.image_count} "
                     f"failed_images={result.failed_image_count} output={args.output}"
                 )
+                return 0
+            if args.catalog_command == "select":
+                selected = _run_catalog_select(
+                    manifest=args.manifest,
+                    signals=args.signals,
+                    output=args.output,
+                    limit=args.limit,
+                )
+                print(f"selected={selected} output={args.output}")
                 return 0
             if args.catalog_command == "prepare":
                 jobs = _run_catalog_prepare(
@@ -709,6 +725,24 @@ def _run_catalog_scrape(
         download_images=download_images,
         max_image_bytes=max_image_bytes,
     )
+
+
+def _run_catalog_select(
+    *, manifest: Path, signals: Path, output: Path, limit: int
+) -> int:
+    from .catalog_selection import (
+        load_manifest_records,
+        load_trend_signals,
+        select_trending_products,
+        write_selected_manifest,
+    )
+
+    records = load_manifest_records(manifest)
+    selected = select_trending_products(
+        records, load_trend_signals(signals), limit=limit
+    )
+    write_selected_manifest(output, records, selected)
+    return len(selected)
 
 
 def _run_catalog_prepare(
