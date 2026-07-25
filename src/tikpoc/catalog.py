@@ -4,9 +4,8 @@ import base64
 import json
 import re
 import time
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
-from collections.abc import Iterator
-from typing import Callable, Mapping
 from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import Request, urlopen
 
@@ -14,10 +13,7 @@ from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 _WXT_KEY = b"wxtdefgabcdawn12"
-_PRICE_ONLY = re.compile(
-    r"^\s*(?:[pP]\s*\d+|[￥¥💰🅿️]\s*\d+)(?:\s*(?:配|双)?(?:盒|礼盒|飞机盒|折叠盒|包装).*)?$"
-)
-_PRICE_TOKEN = re.compile(r"(?:[￥¥💰]\s*\d+(?:\.\d+)?|\b[pP]\s*\d{2,5}\b)")
+_PRICE_TOKEN = re.compile(r"(?:[￥¥💰]\s*\d+(?:\.\d+)?|(?<![A-Za-z0-9])[pP]\s*\d{2,5})")
 _CONTACT = re.compile(
     r"(?:微信|威信|wechat|whatsapp|telegram|手机号|qq|vx|wx|(?:电话|手机)\s*[:：]?\s*\+?\d|\+?\d[\d\s-]{7,}\d)",
     re.IGNORECASE,
@@ -86,7 +82,7 @@ def sanitize_catalog_description(value: object) -> str:
     clean: list[str] = []
     for raw_line in text.splitlines():
         line = " ".join(raw_line.split()).strip(" ·,，;；")
-        if not line or _PRICE_ONLY.fullmatch(line):
+        if not line:
             continue
         if _CONTACT.search(line) or _SUPPLIER_ONLY.search(line):
             continue

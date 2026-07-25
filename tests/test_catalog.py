@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from tikpoc.catalog import (
     GxhyCatalogClient,
     decrypt_wxt_payload,
@@ -29,7 +31,7 @@ Soft structured shoulder bag with an adjustable strap.
 ￥205"""
 
     assert sanitize_catalog_description(source) == (
-        "Soft structured shoulder bag with an adjustable strap.\n尺寸：27*12cm"
+        "配盒\nSoft structured shoulder bag with an adjustable strap.\n尺寸：27*12cm"
     )
 
 
@@ -37,6 +39,21 @@ def test_catalog_description_drops_inventory_and_price_code_only_copy() -> None:
     source = "L家全品类接直播‼️库存充足\\n均价270‼️钢五金‼️163芯片‼️高级货‼️"
 
     assert sanitize_catalog_description(source) == ""
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("💰205 配盒", "配盒"),
+        ("💰260 配折叠盒飞机盒 配小镜子", "配折叠盒飞机盒 配小镜子"),
+        ("大号💰220 配盒 尺寸27*12cm", "大号 配盒 尺寸27*12cm"),
+        ("￥205", ""),
+    ],
+)
+def test_catalog_description_removes_price_but_keeps_packaging(
+    source: str, expected: str
+) -> None:
+    assert sanitize_catalog_description(source) == expected
 
 
 def test_catalog_description_keeps_phone_as_product_capacity_fact() -> None:
@@ -93,7 +110,7 @@ def test_catalog_client_fetches_bounded_sanitized_products() -> None:
     assert seen["headers"] == {"Content-Type": "application/wxt;charset=UTF-8"}
     assert len(products) == 1
     assert products[0].source_key == "gxhy:shop-01:product-01"
-    assert products[0].description == "Compact shoulder bag\n尺寸：30*20cm"
+    assert products[0].description == "配盒\nCompact shoulder bag\n尺寸：30*20cm"
     assert products[0].image_urls == (
         "https://product.example/person/shop/product-01/0.jpg",
     )
