@@ -2,6 +2,9 @@ import argparse
 import hashlib
 import json
 import os
+import subprocess
+import time
+import uuid
 from collections.abc import Sequence
 from dataclasses import asdict
 from datetime import datetime
@@ -130,6 +133,13 @@ def _parser() -> argparse.ArgumentParser:
     vmos_inspect = vmos_commands.add_parser("inspect")
     vmos_inspect.add_argument("--env-file", type=Path, required=True)
     vmos_inspect.add_argument("--pad-code", default="")
+    helper_health = commands.add_parser("helper-health")
+    helper_health.add_argument("--fleet", type=Path, required=True)
+    helper_health.add_argument("--device-id", required=True)
+    helper_bootstrap = commands.add_parser("helper-bootstrap")
+    helper_bootstrap.add_argument("--fleet", type=Path, required=True)
+    helper_bootstrap.add_argument("--device-id", required=True)
+    helper_bootstrap.add_argument("--apk", type=Path, required=True)
     for command_name in ("serve", "dashboard"):
         serve = commands.add_parser(command_name)
         serve.add_argument("--db", type=Path, required=True)
@@ -164,6 +174,18 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command in {"helper-health", "helper-bootstrap"}:
+        result = (
+            _run_helper_health(fleet_path=args.fleet, device_id=args.device_id)
+            if args.command == "helper-health"
+            else _run_helper_bootstrap(
+                fleet_path=args.fleet,
+                device_id=args.device_id,
+                apk_path=args.apk,
+            )
+        )
+        print(json.dumps(_public_helper_status(result), sort_keys=True, indent=2))
+        return 0
     if args.command in {"priority-import", "priority-status"}:
         from .priority_service import PriorityBatchService, summary_json
 
@@ -817,6 +839,122 @@ def _fleet_device(devices_path: Path, device_id: str):
     if len(matches) != 1:
         raise ValueError(f"device id is not configured exactly once: {device_id}")
     return matches[0]
+
+
+def _run_helper_health(*, fleet_path: Path, device_id: str) -> dict[str, object]:
+    from .acquisition_models import AssignmentPhase
+    from .device_side_protocol import (
+        CommandContext,
+        HelperHealth,
+        build_request,
+        parse_response,
+    )
+    from .device_side_transport import DeviceSideTransport
+
+    device = _fleet_device(fleet_path, device_id)
+    if device.backend != "device-side":
+        raise ValueError("helper health requires a device-side backend")
+    now_ms = int(time.monotonic() * 1_000)
+    context = CommandContext(
+        command_id=uuid.uuid4().hex,
+        device_id=device.device_id,
+        account_id=device.account_id,
+        fence_token=1,
+        assignment_id=1,
+        phase=AssignmentPhase.PROFILE_OPENING,
+        deadline_monotonic_ms=now_ms + 10_000,
+    )
+    transport = DeviceSideTransport(
+        device.adb_endpoint,
+        host_port=device.helper_host_port or 0,
+        device_port=device.helper_device_port or 0,
+    )
+    started = time.perf_counter()
+    transport.start()
+    try:
+        payload = transport.request(
+            build_request(context, command="health", arguments={})
+        )
+        parsed = parse_response(
+            payload,
+            context=context,
+            command="health",
+            now_monotonic_ms=int(time.monotonic() * 1_000),
+        )
+    finally:
+        transport.close()
+    if not isinstance(parsed.evidence, HelperHealth):
+        raise TypeError("helper health evidence is incomplete")
+    return {
+        "device_id": device.device_id,
+        "helper_version": parsed.helper_version,
+        "service_enabled": parsed.evidence.service_enabled,
+        "tiktok_foreground": parsed.evidence.tiktok_foreground,
+        "surface": parsed.evidence.surface,
+        "busy": parsed.evidence.busy,
+        "latency_ms": max(0, round((time.perf_counter() - started) * 1_000)),
+        "visible_enablement_required": False,
+    }
+
+
+def _run_helper_bootstrap(
+    *, fleet_path: Path, device_id: str, apk_path: Path
+) -> dict[str, object]:
+    device = _fleet_device(fleet_path, device_id)
+    if device.backend != "device-side":
+        raise ValueError("helper bootstrap requires a device-side backend")
+    if not apk_path.is_file():
+        raise ValueError("helper APK is missing")
+    _run_adb_checked(["adb", "-s", device.adb_endpoint, "install", "-r", str(apk_path)])
+    enabled_services = _run_adb_checked(
+        [
+            "adb",
+            "-s",
+            device.adb_endpoint,
+            "shell",
+            "settings",
+            "get",
+            "secure",
+            "enabled_accessibility_services",
+        ]
+    )
+    component = "com.tikpoc.touch/.TikPocAccessibilityService"
+    if component not in enabled_services:
+        return {
+            "device_id": device.device_id,
+            "service_enabled": False,
+            "tiktok_foreground": False,
+            "surface": "",
+            "busy": False,
+            "latency_ms": 0,
+            "visible_enablement_required": True,
+        }
+    return _run_helper_health(fleet_path=fleet_path, device_id=device_id)
+
+
+def _run_adb_checked(command: list[str]) -> str:
+    completed = subprocess.run(
+        command,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return completed.stdout
+
+
+def _public_helper_status(values: dict[str, object]) -> dict[str, object]:
+    fields = (
+        "device_id",
+        "helper_version",
+        "service_enabled",
+        "tiktok_foreground",
+        "surface",
+        "busy",
+        "latency_ms",
+        "visible_enablement_required",
+    )
+    return {field: values[field] for field in fields if field in values}
 
 
 def _run_catalog_publish(

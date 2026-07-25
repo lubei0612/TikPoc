@@ -54,6 +54,112 @@ devices:
     )
 
 
+def _write_device_side_config(path: Path) -> None:
+    path.write_text(
+        """
+myt:
+  host: 192.0.2.10
+  sdk_port: 8000
+proxy_relay:
+  bind_host: 192.0.2.20
+  bind_port: 7898
+  upstream_host: 127.0.0.1
+  upstream_port: 7897
+devices:
+  - device_id: vmos-01
+    account_id: account-01
+    myt_slot: 1
+    backend: device-side
+    adb_endpoint: 192.0.2.30:5555
+    helper_host_port: 47101
+    helper_device_port: 47101
+    order_seed: seed-a
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+
+def test_cli_helper_health_prints_only_redacted_status(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    config = tmp_path / "devices.yaml"
+    _write_device_side_config(config)
+    monkeypatch.setattr(
+        cli,
+        "_run_helper_health",
+        lambda **kwargs: {
+            "device_id": "vmos-01",
+            "helper_version": "1.0.0",
+            "service_enabled": True,
+            "tiktok_foreground": True,
+            "surface": "MainActivity",
+            "busy": False,
+            "latency_ms": 12,
+            "target_text": "must never print",
+        },
+    )
+
+    assert (
+        main(
+            [
+                "helper-health",
+                "--fleet",
+                str(config),
+                "--device-id",
+                "vmos-01",
+            ]
+        )
+        == 0
+    )
+
+    output = capsys.readouterr().out
+    assert '"device_id": "vmos-01"' in output
+    assert '"service_enabled": true' in output
+    assert "must never print" not in output
+
+
+def test_helper_bootstrap_uses_serial_scoped_adb_arguments(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = tmp_path / "devices.yaml"
+    apk = tmp_path / "touch-executor.apk"
+    _write_device_side_config(config)
+    apk.write_bytes(b"synthetic apk")
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_run_adb_checked",
+        lambda command: (
+            commands.append(command) or "com.tikpoc.touch/.TikPocAccessibilityService"
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_helper_health",
+        lambda **kwargs: {"device_id": "vmos-01", "service_enabled": True},
+    )
+
+    result = cli._run_helper_bootstrap(
+        fleet_path=config, device_id="vmos-01", apk_path=apk
+    )
+
+    assert result["service_enabled"] is True
+    assert commands == [
+        ["adb", "-s", "192.0.2.30:5555", "install", "-r", str(apk)],
+        [
+            "adb",
+            "-s",
+            "192.0.2.30:5555",
+            "shell",
+            "settings",
+            "get",
+            "secure",
+            "enabled_accessibility_services",
+        ],
+    ]
+
+
 def _empty_database(path: Path) -> None:
     sqlite3.connect(path).close()
 
