@@ -326,6 +326,57 @@ def test_worker_passes_device_fence_to_plan_creation(tmp_path: Path) -> None:
     }
 
 
+def test_worker_binds_current_phase_to_device_commands(tmp_path: Path) -> None:
+    repository, assignment = _claimed_assignment(tmp_path)
+    token = repository.claim_device_worker_lease(
+        "phone-01", "account-01", "worker-1", now_ms=1_000, ttl_ms=1_000
+    )
+    assert isinstance(token, int)
+
+    class BoundDevice(ScriptedVerifiedDevice):
+        def __init__(self) -> None:
+            super().__init__(
+                metrics=ProfileMetrics(20, 10, 5),
+                action_results=[ActionResult.UNCERTAIN, ActionResult.CONFIRMED],
+            )
+            self.bindings: list[tuple[int, AssignmentPhase, str, int]] = []
+
+        def bind_assignment(
+            self,
+            assignment_id: int,
+            phase: AssignmentPhase,
+            *,
+            account_id: str,
+            fence_token: int,
+        ) -> None:
+            self.bindings.append((assignment_id, phase, account_id, fence_token))
+
+    device = BoundDevice()
+    worker = MobileAssignmentWorker(
+        repository,
+        device,
+        device_id="phone-01",
+        owner_id="worker-1",
+        worker_account_id="account-01",
+        worker_fence_token=token,
+        clock_ms=lambda: 1_000,
+        plan_provider=_forced_plan(OutcomeKind.LIKE),
+    )
+
+    worker.run_assignment(assignment)
+
+    assert [binding[1] for binding in device.bindings] == [
+        AssignmentPhase.PROFILE_OPENING,
+        AssignmentPhase.VIDEO_OPENING,
+        AssignmentPhase.ACTION_EXECUTING,
+        AssignmentPhase.ACTION_RECONCILING,
+    ]
+    assert all(
+        binding[0] == assignment.assignment_id and binding[2:] == ("account-01", token)
+        for binding in device.bindings
+    )
+
+
 def test_unfenced_worker_keeps_legacy_five_argument_plan_provider(
     tmp_path: Path,
 ) -> None:

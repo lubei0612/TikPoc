@@ -29,6 +29,15 @@ def _clock_ms() -> int:
 
 
 class VerifiedTikTokDevice(Protocol):
+    def bind_assignment(
+        self,
+        assignment_id: int,
+        phase: AssignmentPhase,
+        *,
+        account_id: str,
+        fence_token: int,
+    ) -> None: ...
+
     def ensure_ready(self) -> None: ...
 
     def open_target(self, target: PoolTarget) -> None: ...
@@ -144,6 +153,7 @@ class MobileAssignmentWorker:
             raise ValueError("worker does not hold the assignment lease")
         if current.phase is not AssignmentPhase.PROFILE_OPENING:
             raise ValueError("assignment must be claimed before execution")
+        self._bind_device_assignment(current.assignment_id, current.phase)
         self._renew_lease(current.assignment_id)
         try:
             self._run_claimed(current)
@@ -379,6 +389,9 @@ class MobileAssignmentWorker:
             now_ms=self.clock_ms(),
             **self._assignment_fence_kwargs(),
         )
+        self._bind_device_assignment(
+            assignment.assignment_id, AssignmentPhase.VIDEO_OPENING
+        )
         self._renew_lease(assignment.assignment_id)
         self.device.open_and_confirm_video(plan.video_key or "")
         self._record_stage(
@@ -429,6 +442,7 @@ class MobileAssignmentWorker:
                 now_ms=self.clock_ms(),
                 **self._assignment_fence_kwargs(),
             )
+            self._bind_device_assignment(assignment_id, phase)
             result = self.device.reconcile_outcome(plan.effective_outcome)
             reconciliation_attempts = 1
         else:
@@ -449,6 +463,7 @@ class MobileAssignmentWorker:
                 **self._assignment_fence_kwargs(),
             )
             phase = AssignmentPhase.ACTION_EXECUTING
+            self._bind_device_assignment(assignment_id, phase)
             self.repository.mark_action_executing(
                 plan.plan_id,
                 now_ms=self.clock_ms(),
@@ -530,6 +545,7 @@ class MobileAssignmentWorker:
                         **self._assignment_fence_kwargs(),
                     )
                     phase = AssignmentPhase.ACTION_RECONCILING
+                    self._bind_device_assignment(assignment_id, phase)
                 self.device.recover(phase)
                 self._renew_lease(assignment_id)
                 reconciliation_attempts += 1
@@ -553,6 +569,7 @@ class MobileAssignmentWorker:
                     **self._assignment_fence_kwargs(),
                 )
                 phase = AssignmentPhase.ACTION_EXECUTING
+                self._bind_device_assignment(assignment_id, phase)
             if stored_plan.state is not ActionPlanState.PLANNED:
                 raise RuntimeError("not-applied result did not reset action plan")
             self.repository.mark_action_executing(
@@ -562,6 +579,19 @@ class MobileAssignmentWorker:
             )
             self._renew_lease(assignment_id)
             result = self.device.execute_outcome(plan.effective_outcome)
+
+    def _bind_device_assignment(
+        self, assignment_id: int, phase: AssignmentPhase
+    ) -> None:
+        binder = getattr(self.device, "bind_assignment", None)
+        if binder is None or self.worker_fence_token is None:
+            return
+        binder(
+            assignment_id,
+            phase,
+            account_id=self.worker_account_id or "",
+            fence_token=self.worker_fence_token,
+        )
 
     def _defer(
         self,

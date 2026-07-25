@@ -194,6 +194,16 @@ class AppiumTikTokDevice:
             else DevicePerformanceSnapshot()
         )
 
+    def bind_assignment(
+        self,
+        assignment_id: int,
+        phase: AssignmentPhase,
+        *,
+        account_id: str,
+        fence_token: int,
+    ) -> None:
+        return
+
     def _invalidate_profile_source(self) -> None:
         self._profile_source = None
         self._visible_post_elements = None
