@@ -34,19 +34,42 @@ def parse_profile_username(page_source: str) -> str:
     return ""
 
 
-def profile_surface_visible(page_source: str) -> bool:
+def private_profile_visible(page_source: str) -> bool:
     root = ElementTree.fromstring(page_source)
     for node in root.iter():
-        text = node.attrib.get("text", "").strip()
-        description = node.attrib.get("content-desc", "").strip()
-        resource_id = node.attrib.get("resource-id", "")
+        visible_text = " ".join(
+            (
+                node.attrib.get("text", "").strip(),
+                node.attrib.get("content-desc", "").strip(),
+            )
+        ).lower()
         if (
-            "this account is private" in text.lower()
-            or "this account is private" in description.lower()
-            or "此帐户为私密帐户" in text
-            or "此帐户为私密帐户" in description
-            or resource_id.endswith((":id/s5x", ":id/rfc", ":id/oth", ":id/ops"))
+            "this account is private" in visible_text
+            or "follow this account to see their videos" in visible_text
+            or "此帐户为私密帐户" in visible_text
+            or "关注此账号，即可查看对方的作品和点赞的作品" in visible_text
         ):
+            return True
+    return False
+
+
+def profile_recommendations_visible(page_source: str) -> bool:
+    root = ElementTree.fromstring(page_source)
+    markers = {"recommended accounts", "suggested accounts", "推荐账号"}
+    return any(
+        node.attrib.get("text", "").strip().lower() in markers
+        or node.attrib.get("content-desc", "").strip().lower() in markers
+        for node in root.iter()
+    )
+
+
+def profile_surface_visible(page_source: str) -> bool:
+    if private_profile_visible(page_source):
+        return True
+    root = ElementTree.fromstring(page_source)
+    for node in root.iter():
+        resource_id = node.attrib.get("resource-id", "")
+        if resource_id.endswith((":id/s5x", ":id/rfc", ":id/oth", ":id/ops")):
             return True
     return False
 

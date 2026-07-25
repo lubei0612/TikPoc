@@ -1,5 +1,5 @@
 from tikpoc.models import ProfileMetrics
-from tikpoc.profile_parser import parse_profile_page
+from tikpoc.profile_parser import parse_profile_page, profile_surface_visible
 
 PROFILE_XML = """
 <hierarchy>
@@ -82,6 +82,33 @@ def test_parse_profile_page_accepts_tiktok_46_chinese_resource_ids() -> None:
     assert page.username == "sample"
     assert page.metrics == ProfileMetrics(following=104, followers=20, posts=2)
     assert page.visible_post_keys == ("587", "242")
+
+
+def test_parse_profile_page_accepts_tiktok_46_spaced_chinese_count() -> None:
+    current = """
+    <hierarchy>
+      <node text="@sample" resource-id="com.zhiliaoapp.musically:id/oul" />
+      <node text="1&#160;万" resource-id="com.zhiliaoapp.musically:id/oti" />
+      <node text="关注" resource-id="com.zhiliaoapp.musically:id/oth" />
+      <node text="3778" resource-id="com.zhiliaoapp.musically:id/opr" />
+      <node text="粉丝" resource-id="com.zhiliaoapp.musically:id/ops" />
+      <node resource-id="com.zhiliaoapp.musically:id/dp6" />
+    </hierarchy>
+    """
+
+    page = parse_profile_page(current)
+
+    assert page.metrics == ProfileMetrics(following=10_000, followers=3778, posts=1)
+
+
+def test_profile_surface_accepts_chinese_follow_required_marker() -> None:
+    restricted = """
+    <hierarchy>
+      <node text="关注此账号，即可查看对方的作品和点赞的作品。" />
+    </hierarchy>
+    """
+
+    assert profile_surface_visible(restricted) is True
 
 
 def test_parse_profile_page_accepts_singular_follower_label() -> None:

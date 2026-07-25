@@ -33,6 +33,43 @@ An earlier 50-target VMOS diagnostic recorded about 287 visits per hour. The
 regression between the two windows means the first task is evidence collection,
 not a global timeout reduction.
 
+### 2026-07-25 parser and video-wait recovery
+
+Command instrumentation on a later 30-target run isolated the dominant failure:
+the metrics stage read the complete hierarchy about 15 times per target. A real
+TikTok 46 profile exposed `1\u00a0万` for following count. The count parser rejected
+the Chinese suffix and non-breaking space, retried the same hierarchy up to 20
+times, and then mislabeled the visible profile as inaccessible. Another real
+profile exposed a recommendations panel followed, after one scroll, by the
+Chinese follow-required message. It was likewise retried instead of being
+recorded as private.
+
+The recovery now parses Chinese `万` and `亿` counts, recognizes the current
+follow-required message, checks once below a recommendations panel for either
+real posts or restricted visibility, and uses the cached identity hierarchy for
+metrics. Video confirmation keeps visible semantic evidence, uses the faster
+UiAutomator description selector, and allows the observed sixth-poll control to
+arrive within an eight-second ceiling.
+
+An exclusive 10-target canary after those fixes produced 10 first-pass terminal
+completions and 10 confirmed visits in 189.3 seconds, or 190.2 targets per hour.
+The measured stage means were route 1.06 seconds, identity 6.54 seconds, metrics
+2.48 seconds, video 6.94 seconds, and action 4.44 seconds. This is about 39%
+faster than the comparable 136.4-per-hour diagnostic and raised first-pass
+completion from 15/20 to 10/10 in the bounded sample, but it remains below the
+400-per-hour recovery gate.
+
+Two intermediate runs are excluded from throughput comparison. A stale Codex
+process repeatedly launched the old baseline worker against the same VMOS and
+caused Appium to terminate the active session; those databases contain batches
+of `InvalidSessionIdException`, not business-path outcomes. After terminating
+that process and restarting a single Appium server, the exclusive canary stayed
+session-stable. Further Appium selector and timeout tuning is now a low-value
+path: the stable identity and video stages alone exceed the 8.64-second daily
+budget. The next capacity investigation should benchmark a native ADB or Android
+accessibility executor that preserves the same visible identity, action, and
+result evidence.
+
 ## Business Invariants
 
 - Eligibility remains `following > followers AND video_count >= 1`.

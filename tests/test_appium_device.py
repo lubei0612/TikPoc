@@ -334,6 +334,42 @@ class CachedProfileObservationDriver(FakeDriver):
         return super().find_elements(by, value)
 
 
+class DelayedSemanticStableRouteDriver(CachedProfileObservationDriver):
+    def __init__(self) -> None:
+        super().__init__(PROFILE_XML.replace("@sample", "@previous"))
+        self.routed = False
+        self.route_polls = 0
+
+    @property
+    def page_source(self) -> str:
+        self.page_source_reads += 1
+        if not self.routed:
+            return PROFILE_XML.replace("@sample", "@previous")
+        self.route_polls += 1
+        username = "sample" if self.route_polls >= 3 else "previous"
+        return PROFILE_XML.replace("@sample", f"@{username}")
+
+    @page_source.setter
+    def page_source(self, value: str) -> None:
+        self._page_source = value
+
+    def execute_script(self, name: str, arguments: dict[str, str]) -> None:
+        super().execute_script(name, arguments)
+        self.routed = True
+
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if by == "id" and value in {
+            "com.zhiliaoapp.musically:id/s7e",
+            "com.zhiliaoapp.musically:id/rgn",
+            "com.zhiliaoapp.musically:id/oul",
+        }:
+            if self.routed:
+                self.route_polls += 1
+            username = "sample" if self.route_polls >= 3 else "previous"
+            return [FakeElement(f"@{username}")]
+        return super().find_elements(by, value)
+
+
 class BoundedVideoDriver(CachedProfileObservationDriver):
     def __init__(self) -> None:
         bounded = PROFILE_XML.replace(
@@ -421,6 +457,35 @@ class SemanticOnlyVideoDriver(CachedProfileObservationDriver):
         return super().find_elements(by, value)
 
 
+class RecommendationsCoveredPrivateProfileDriver(SemanticOnlyVideoDriver):
+    def __init__(self) -> None:
+        super().__init__([])
+        self._page_source = self._page_source.replace(
+            "</hierarchy>",
+            '<node text="推荐账号" resource-id="com.zhiliaoapp.musically:id/tyl" />'
+            "</hierarchy>",
+        )
+        self.swipe_calls = 0
+
+    def swipe(
+        self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int
+    ) -> None:
+        self.swipe_calls += 1
+        self._page_source = (
+            "<hierarchy>"
+            '<node text="关注此账号，即可查看对方的作品和点赞的作品。" />'
+            "</hierarchy>"
+        )
+
+
+class RecommendationsCoveredPostsDriver(RecommendationsCoveredPrivateProfileDriver):
+    def swipe(
+        self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int
+    ) -> None:
+        self.swipe_calls += 1
+        self.posts = [FakeElement(), FakeElement()]
+
+
 class CurrentSemanticOnlyVideoDriver(SemanticOnlyVideoDriver):
     def find_elements(self, by: str, value: str) -> list[FakeElement]:
         if by == "id" and value == "com.zhiliaoapp.musically:id/eqx":
@@ -452,6 +517,34 @@ class MissingVideoControlDriver(BoundedVideoDriver):
     def find_elements(self, by: str, value: str) -> list[FakeElement]:
         if "Share video" in value:
             return []
+        return super().find_elements(by, value)
+
+
+class SixthPollVideoControlDriver(BoundedVideoDriver):
+    def __init__(self) -> None:
+        super().__init__()
+        self.video_control_queries = 0
+
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if "Share video" in value:
+            self.video_control_queries += 1
+            if self.video_control_queries < 6:
+                return []
+        return super().find_elements(by, value)
+
+
+class FastVideoControlDriver(BoundedVideoDriver):
+    def __init__(self) -> None:
+        super().__init__()
+        self.share_xpath_queries = 0
+        self.share_uiautomator_queries = 0
+
+    def find_elements(self, by: str, value: str) -> list[FakeElement]:
+        if "Share video" in value or "分享视频" in value:
+            if by == "xpath":
+                self.share_xpath_queries += 1
+            elif by == "-android uiautomator":
+                self.share_uiautomator_queries += 1
         return super().find_elements(by, value)
 
 
@@ -929,7 +1022,29 @@ def test_profile_readiness_snapshot_is_reused_for_observation() -> None:
     assert observation.metrics == ProfileMetrics(12, 10, 4)
     assert observation.access_state is ProfileAccessState.PUBLIC
     assert driver.page_source_reads == 1
-    assert driver.username_queries == 1
+    assert driver.username_queries == 2
+
+
+def test_stable_route_polls_username_before_reading_full_profile_source() -> None:
+    driver = DelayedSemanticStableRouteDriver()
+    device = AppiumTikTokDevice(driver, metric_read_attempts=6, poll_interval=0)
+    target = PoolTarget(
+        pool_id="pool-1",
+        identity_key="uid:123",
+        target_id="123",
+        sec_uid="sec-1",
+        username="sample",
+        profile_url="",
+        source_video_id="",
+        source_line_numbers=(2,),
+        ordinal=0,
+    )
+
+    device.open_target(target)
+    device.confirm_profile_identity(target)
+
+    assert driver.page_source_reads == 1
+    assert driver.route_polls == 4
 
 
 def test_cached_profile_opens_and_verifies_video_with_semantic_elements() -> None:
@@ -1069,6 +1184,31 @@ def test_zero_parsed_posts_keep_zero_when_semantic_grid_is_empty() -> None:
     assert driver.post_queries == 2
 
 
+def test_recommendations_covering_follow_required_profile_scroll_once() -> None:
+    driver = RecommendationsCoveredPrivateProfileDriver()
+    device = AppiumTikTokDevice(driver, metric_read_attempts=20, poll_interval=0)
+    device._confirmed_profile_username = "sample"
+
+    observation = device.read_profile_observation()
+
+    assert observation.access_state is ProfileAccessState.PRIVATE
+    assert observation.metrics is None
+    assert driver.swipe_calls == 1
+    assert driver.post_queries == 1
+
+
+def test_recommendations_covering_posts_reuse_grid_found_after_scroll() -> None:
+    driver = RecommendationsCoveredPostsDriver()
+    device = AppiumTikTokDevice(driver, metric_read_attempts=20, poll_interval=0)
+
+    observation = device.read_profile_observation()
+
+    assert observation.metrics == ProfileMetrics(12, 10, 2)
+    assert device.list_video_keys() == ("0", "1")
+    assert driver.swipe_calls == 1
+    assert driver.post_queries == 2
+
+
 def test_zero_parsed_posts_accept_current_semantic_container_in_one_query() -> None:
     driver = CurrentSemanticOnlyVideoDriver()
     device = AppiumTikTokDevice(driver, metric_read_attempts=2, poll_interval=0)
@@ -1135,6 +1275,35 @@ def test_cached_post_requires_visible_share_control_after_click() -> None:
 
     with pytest.raises(RuntimeError, match="video controls did not become visible"):
         device.open_and_confirm_video("2")
+
+
+def test_default_video_wait_accepts_control_visible_on_sixth_poll() -> None:
+    driver = SixthPollVideoControlDriver()
+    ticks = iter(float(value) for value in range(20))
+    device = AppiumTikTokDevice(
+        driver,
+        poll_interval=0,
+        clock=ticks.__next__,
+        sleeper=lambda _: None,
+    )
+
+    assert device.list_video_keys() == ("0", "1", "2", "3")
+
+    device.open_and_confirm_video("2")
+
+    assert driver.video_control_queries == 6
+
+
+def test_video_confirmation_uses_fast_semantic_selector_instead_of_xpath() -> None:
+    driver = FastVideoControlDriver()
+    device = AppiumTikTokDevice(driver, action_timeout=0)
+
+    assert device.list_video_keys() == ("0", "1", "2", "3")
+
+    device.open_and_confirm_video("2")
+
+    assert driver.share_uiautomator_queries == 2
+    assert driver.share_xpath_queries == 0
 
 
 @pytest.mark.parametrize("invalidate", ["route", "back", "restart", "consume"])

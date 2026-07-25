@@ -6,6 +6,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Protocol
 
+from appium.webdriver.common.appiumby import AppiumBy
 from PIL import Image, UnidentifiedImageError
 from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.common.by import By
@@ -25,6 +26,8 @@ from .profile_parser import (
     parse_profile_page,
     parse_profile_username,
     parse_visible_post_keys,
+    private_profile_visible,
+    profile_recommendations_visible,
     profile_surface_visible,
 )
 
@@ -84,6 +87,10 @@ FAVORITE_ACTIVE_XPATH = (
 SHARE_CONTROL_XPATH = (
     '//*[starts-with(@content-desc, "Share video.") or '
     'starts-with(@content-desc, "分享视频。")]'
+)
+SHARE_CONTROL_UIAUTOMATOR_SELECTORS = (
+    'new UiSelector().descriptionStartsWith("分享视频。")',
+    'new UiSelector().descriptionStartsWith("Share video.")',
 )
 REPOST_CONTROL_XPATH = (
     '//*[@text="Repost" or @content-desc="Repost" or '
@@ -157,7 +164,7 @@ class AppiumTikTokDevice:
         metric_read_attempts: int = 20,
         poll_interval: float = 0.5,
         action_delay: float = 1.0,
-        action_timeout: float = 5.0,
+        action_timeout: float = 8.0,
         clock: Callable[[], float] = time.monotonic,
         sleeper: Callable[[float], None] = time.sleep,
         route_opener: Callable[[str], None] | None = None,
@@ -397,18 +404,40 @@ class AppiumTikTokDevice:
             previous = getattr(self, "_profile_before_stable_route", "")
             identity_seen = False
             for attempt in range(self.metric_read_attempts):
-                try:
-                    source = str(self.driver.page_source)
-                    actual = parse_profile_username(source)
-                    ready = profile_surface_visible(source)
-                except Exception:
-                    source = ""
-                    actual = ""
-                    ready = False
-                identity_seen = identity_seen or bool(
-                    actual and (actual == expected or actual != previous)
+                marker_username = self._semantic_profile_username()
+                marker_matches = bool(
+                    marker_username
+                    and (marker_username == expected or marker_username != previous)
                 )
-                if actual and ready and (actual == expected or actual != previous):
+                source = ""
+                source_username = ""
+                ready = False
+                if marker_matches or attempt % 3 == 2:
+                    try:
+                        source = str(self.driver.page_source)
+                        source_username = parse_profile_username(source)
+                        ready = profile_surface_visible(source)
+                    except Exception:
+                        source = ""
+                        source_username = ""
+                        ready = False
+                actual = source_username or marker_username
+                source_matches_marker = not (
+                    source_username
+                    and marker_username
+                    and source_username != marker_username
+                )
+                identity_seen = (
+                    identity_seen
+                    or marker_matches
+                    or bool(actual and (actual == expected or actual != previous))
+                )
+                if (
+                    actual
+                    and ready
+                    and source_matches_marker
+                    and (actual == expected or actual != previous)
+                ):
                     self._profile_source = source
                     self._confirmed_profile_username = actual
                     return
@@ -484,7 +513,7 @@ class AppiumTikTokDevice:
                     private_account=False,
                     access_state=ProfileAccessState.MISSING,
                 )
-            if "this account is private" in lowered or "此帐户为私密帐户" in source:
+            if private_profile_visible(source):
                 return ProfileObservation(
                     observed_username=observed_username,
                     metrics=None,
@@ -510,6 +539,39 @@ class AppiumTikTokDevice:
                         posts=len(semantic_posts),
                     )
                 else:
+                    if profile_recommendations_visible(source):
+                        self._swipe_profile_grid()
+                        self.sleeper(self.poll_interval)
+                        settled_source = str(self.driver.page_source)
+                        self._profile_source = settled_source
+                        if private_profile_visible(settled_source):
+                            return ProfileObservation(
+                                observed_username=observed_username,
+                                metrics=None,
+                                private_account=True,
+                                access_state=ProfileAccessState.PRIVATE,
+                            )
+                        settled_posts = tuple(self._post_elements())
+                        if settled_posts:
+                            self._visible_post_elements = settled_posts
+                            metrics = ProfileMetrics(
+                                following=metrics.following,
+                                followers=metrics.followers,
+                                posts=len(settled_posts),
+                            )
+                            return ProfileObservation(
+                                observed_username=observed_username,
+                                metrics=metrics,
+                                private_account=False,
+                                access_state=ProfileAccessState.PUBLIC,
+                            )
+                        else:
+                            return ProfileObservation(
+                                observed_username=observed_username,
+                                metrics=metrics,
+                                private_account=False,
+                                access_state=ProfileAccessState.PUBLIC,
+                            )
                     if not video_tab_attempted:
                         video_tab = self._first_visible(PROFILE_VIDEO_TAB_XPATH)
                         video_tab_attempted = True
@@ -558,7 +620,7 @@ class AppiumTikTokDevice:
 
     def open_and_confirm_video(self, video_key: str) -> None:
         self.open_post(video_key)
-        if self._wait_for_element(SHARE_CONTROL_XPATH) is None:
+        if self._wait_for_video_control() is None:
             raise RuntimeError("video controls did not become visible")
 
     def capture_diagnostics(self) -> DeviceDiagnostics:
@@ -633,14 +695,20 @@ class AppiumTikTokDevice:
         self.sleeper(self.poll_interval)
 
     def _visible_profile_username(self) -> str:
-        elements = self._profile_username_elements()
-        if elements:
-            try:
-                return str(elements[0].text or "").strip().removeprefix("@").lower()
-            except Exception:
-                pass
+        username = self._semantic_profile_username()
+        if username:
+            return username
         try:
             return parse_profile_page(self.driver.page_source).username
+        except Exception:
+            return ""
+
+    def _semantic_profile_username(self) -> str:
+        elements = self._profile_username_elements()
+        if not elements:
+            return ""
+        try:
+            return str(elements[0].text or "").strip().removeprefix("@").lower()
         except Exception:
             return ""
 
@@ -813,8 +881,11 @@ class AppiumTikTokDevice:
         return " ".join(values).strip().lower()
 
     def _first_visible(self, selector: str):
+        return self._first_visible_by(By.XPATH, selector)
+
+    def _first_visible_by(self, by: str, selector: str):
         try:
-            elements = self.driver.find_elements(By.XPATH, selector)
+            elements = self.driver.find_elements(by, selector)
         except Exception:
             return None
         for element in elements:
@@ -824,6 +895,17 @@ class AppiumTikTokDevice:
             except Exception:
                 continue
         return None
+
+    def _wait_for_video_control(self):
+        deadline = self.clock() + self.action_timeout
+        while True:
+            for selector in SHARE_CONTROL_UIAUTOMATOR_SELECTORS:
+                element = self._first_visible_by(AppiumBy.ANDROID_UIAUTOMATOR, selector)
+                if element is not None:
+                    return element
+            if self.clock() >= deadline:
+                return None
+            self.sleeper(self.poll_interval)
 
     def _share_surface_visible(self) -> bool:
         return (
