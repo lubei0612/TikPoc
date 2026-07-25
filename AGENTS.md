@@ -131,6 +131,8 @@ user-approved document and update this guide in the same change.
 
 ### Browser lead plane
 
+- RoxyBrowser is retired from this project. Do not launch it or use its
+  profiles for browser lead handling, live acceptance, or publishing.
 - Each account uses a dedicated Chrome profile and account mapping.
 - Observe TikTok Activity and Messages through visible DOM state. Perform
   follow-back and message sends through visible UI actions.
