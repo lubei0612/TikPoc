@@ -19,16 +19,20 @@ mkdir -p "$OUT/classes" "$OUT/test-classes"
   -d "$OUT/classes" \
   "$ROOT/src/com/tikpoc/touch/Protocol.java" \
   "$ROOT/src/com/tikpoc/touch/SemanticSnapshot.java" \
-  "$ROOT/src/com/tikpoc/touch/TikTokSemantics.java"
+  "$ROOT/src/com/tikpoc/touch/TikTokSemantics.java" \
+  "$ROOT/src/com/tikpoc/touch/CommandGate.java"
 
 "$JDK/bin/javac" \
   -source 8 -target 8 \
   -classpath "$PLATFORM:$OUT/classes" \
   -d "$OUT/test-classes" \
   "$ROOT/test/com/tikpoc/touch/ProtocolTest.java" \
-  "$ROOT/test/com/tikpoc/touch/TikTokSemanticsTest.java"
+  "$ROOT/test/com/tikpoc/touch/TikTokSemanticsTest.java" \
+  "$ROOT/test/com/tikpoc/touch/CommandGateTest.java"
 
 "$JDK/bin/java" -cp "$PLATFORM:$OUT/classes:$OUT/test-classes" \
   com.tikpoc.touch.ProtocolTest
 "$JDK/bin/java" -cp "$PLATFORM:$OUT/classes:$OUT/test-classes" \
   com.tikpoc.touch.TikTokSemanticsTest
+"$JDK/bin/java" -cp "$PLATFORM:$OUT/classes:$OUT/test-classes" \
+  com.tikpoc.touch.CommandGateTest
