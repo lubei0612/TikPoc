@@ -27,6 +27,12 @@ current fleet configuration schema. Do not store VMOS credentials, proxy
 configuration, TikTok credentials, or target data in the helper APK or a
 committed fleet file.
 
+The helper commands use `adb` from `PATH` when available and otherwise check
+`ANDROID_HOME`, `ANDROID_SDK_ROOT`, and the default macOS Android SDK path.
+Register the tunnel with the same IP-form serial used in the fleet file (for
+example, connect with `127.0.0.1:PORT` when the fleet endpoint uses that form);
+ADB treats `localhost:PORT` as a different serial.
+
 ## Install And Health
 
 Install the APK and inspect service state:

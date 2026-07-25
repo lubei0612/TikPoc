@@ -1,9 +1,11 @@
 import json
+import os
 import socket
 import struct
 import subprocess
 import threading
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Any
 
 MAX_PAYLOAD_BYTES = 262_144
@@ -45,6 +47,7 @@ class DeviceSideTransport:
         self.timeout_seconds = timeout_seconds
         self.max_payload_bytes = max_payload_bytes
         self._runner = runner
+        self._adb_executable = "adb"
         self._started = False
 
     def start(self) -> None:
@@ -112,13 +115,34 @@ class DeviceSideTransport:
         return decoded
 
     def _run_adb(self, *arguments: str) -> None:
-        self._runner(
-            ["adb", "-s", self.adb_endpoint, *arguments],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=10,
+        command = [self._adb_executable, "-s", self.adb_endpoint, *arguments]
+        try:
+            self._run_command(command)
+        except FileNotFoundError:
+            fallback = _android_sdk_adb()
+            if fallback is None or self._adb_executable != "adb":
+                raise
+            self._adb_executable = fallback
+            self._run_command([fallback, "-s", self.adb_endpoint, *arguments])
+
+    def _run_command(self, command: list[str]) -> None:
+        self._runner(command, check=True, capture_output=True, text=True, timeout=10)
+
+
+def _android_sdk_adb() -> str | None:
+    roots = tuple(
+        Path(value)
+        for value in (
+            os.environ.get("ANDROID_HOME"),
+            os.environ.get("ANDROID_SDK_ROOT"),
         )
+        if value
+    ) + (Path.home() / "Library" / "Android" / "sdk",)
+    for root in roots:
+        candidate = root / "platform-tools" / "adb"
+        if candidate.is_file():
+            return str(candidate)
+    return None
 
 
 def _receive_exact(connection: socket.socket, length: int) -> bytes:

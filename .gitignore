@@ -16,6 +16,7 @@ screenshots/
 config/settings.yaml
 config/devices.yaml
 config/web-accounts.yaml
+config/*.local.yaml
 config/secrets/
 var/
 .env.local

@@ -2,6 +2,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import time
 import uuid
@@ -905,10 +906,11 @@ def _run_helper_bootstrap(
         raise ValueError("helper bootstrap requires a device-side backend")
     if not apk_path.is_file():
         raise ValueError("helper APK is missing")
-    _run_adb_checked(["adb", "-s", device.adb_endpoint, "install", "-r", str(apk_path)])
+    adb = _adb_executable()
+    _run_adb_checked([adb, "-s", device.adb_endpoint, "install", "-r", str(apk_path)])
     enabled_services = _run_adb_checked(
         [
-            "adb",
+            adb,
             "-s",
             device.adb_endpoint,
             "shell",
@@ -930,6 +932,25 @@ def _run_helper_bootstrap(
             "visible_enablement_required": True,
         }
     return _run_helper_health(fleet_path=fleet_path, device_id=device_id)
+
+
+def _adb_executable() -> str:
+    executable = shutil.which("adb")
+    if executable:
+        return executable
+    roots = tuple(
+        Path(value)
+        for value in (
+            os.environ.get("ANDROID_HOME"),
+            os.environ.get("ANDROID_SDK_ROOT"),
+        )
+        if value
+    ) + (Path.home() / "Library" / "Android" / "sdk",)
+    for root in roots:
+        candidate = root / "platform-tools" / "adb"
+        if candidate.is_file():
+            return str(candidate)
+    return "adb"
 
 
 def _run_adb_checked(command: list[str]) -> str:

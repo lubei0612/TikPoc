@@ -134,6 +134,7 @@ def test_helper_bootstrap_uses_serial_scoped_adb_arguments(
             commands.append(command) or "com.tikpoc.touch/.TikPocAccessibilityService"
         ),
     )
+    monkeypatch.setattr(cli, "_adb_executable", lambda: "adb")
     monkeypatch.setattr(
         cli,
         "_run_helper_health",
@@ -158,6 +159,17 @@ def test_helper_bootstrap_uses_serial_scoped_adb_arguments(
             "enabled_accessibility_services",
         ],
     ]
+
+
+def test_adb_executable_falls_back_to_android_home(tmp_path: Path, monkeypatch) -> None:
+    android_home = tmp_path / "android-sdk"
+    adb = android_home / "platform-tools" / "adb"
+    adb.parent.mkdir(parents=True)
+    adb.write_bytes(b"")
+    monkeypatch.setenv("ANDROID_HOME", str(android_home))
+    monkeypatch.setattr(cli.shutil, "which", lambda _name: None)
+
+    assert cli._adb_executable() == str(adb)
 
 
 def _empty_database(path: Path) -> None:

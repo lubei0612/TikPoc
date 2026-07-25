@@ -172,3 +172,27 @@ def test_failed_forward_releases_process_claim() -> None:
     )
     replacement.start()
     replacement.close()
+
+
+def test_missing_path_adb_retries_with_android_home(tmp_path, monkeypatch) -> None:
+    adb = tmp_path / "platform-tools" / "adb"
+    adb.parent.mkdir(parents=True)
+    adb.write_bytes(b"")
+    monkeypatch.setenv("ANDROID_HOME", str(tmp_path))
+    commands: list[list[str]] = []
+
+    def runner(command: list[str], **_kwargs: object) -> CompletedProcess[str]:
+        commands.append(command)
+        if command[0] == "adb":
+            raise FileNotFoundError("adb")
+        return CompletedProcess(command, 0, "", "")
+
+    transport = DeviceSideTransport(
+        "ADB_ENDPOINT", host_port=available_port(), device_port=47101, runner=runner
+    )
+    transport.start()
+    transport.close()
+
+    assert commands[0][0] == "adb"
+    assert commands[1][0] == str(adb)
+    assert commands[2][0] == str(adb)
