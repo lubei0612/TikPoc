@@ -105,7 +105,8 @@ Use a small repository-local JSON reader/writer in `Protocol.java`; do not add a
 
 Run: `bash android-touch-executor/build.sh`
 
-Expected: `ProtocolTest PASS`, followed by a signed APK path.
+Expected: `ProtocolTest PASS`. Task 4 adds the manifest, Android service classes,
+DEX packaging, signing, and APK verification after the runnable helper exists.
 
 - [ ] **Step 5: Commit the protocol foundation**
 
