@@ -90,6 +90,22 @@ class DeviceSideTransport:
             raise DeviceSideTransportError("request_not_json") from None
         if not encoded or len(encoded) > self.max_payload_bytes:
             raise DeviceSideTransportError("request_too_large")
+        for attempt in range(2):
+            try:
+                response_bytes = self._exchange(encoded)
+                break
+            except DeviceSideTransportError as error:
+                if error.code != "transport_lost" or attempt == 1:
+                    raise
+        try:
+            decoded: Any = json.loads(response_bytes)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise DeviceSideTransportError("invalid_response_json") from None
+        if not isinstance(decoded, dict):
+            raise DeviceSideTransportError("response_not_object")
+        return decoded
+
+    def _exchange(self, encoded: bytes) -> bytes:
         try:
             with socket.create_connection(
                 ("127.0.0.1", self.host_port), timeout=self.timeout_seconds
@@ -99,20 +115,13 @@ class DeviceSideTransport:
                 response_length = struct.unpack(">I", _receive_exact(connection, 4))[0]
                 if not 1 <= response_length <= self.max_payload_bytes:
                     raise DeviceSideTransportError("response_too_large")
-                response_bytes = _receive_exact(connection, response_length)
+                return _receive_exact(connection, response_length)
         except DeviceSideTransportError:
             raise
         except TimeoutError:
             raise DeviceSideTransportError("transport_timeout") from None
         except (OSError, EOFError, struct.error):
             raise DeviceSideTransportError("transport_lost") from None
-        try:
-            decoded: Any = json.loads(response_bytes)
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            raise DeviceSideTransportError("invalid_response_json") from None
-        if not isinstance(decoded, dict):
-            raise DeviceSideTransportError("response_not_object")
-        return decoded
 
     def _run_adb(self, *arguments: str) -> None:
         command = [self._adb_executable, "-s", self.adb_endpoint, *arguments]

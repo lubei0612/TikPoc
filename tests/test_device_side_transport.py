@@ -118,6 +118,42 @@ def test_request_exchanges_bounded_json_frame() -> None:
         server.join(1)
 
 
+def test_transport_lost_replays_same_command_once() -> None:
+    runner = RecordingRunner()
+    port = available_port()
+    ready = threading.Event()
+    received: list[bytes] = []
+
+    def serve() -> None:
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", port))
+            listener.listen(2)
+            ready.set()
+            for attempt in range(2):
+                connection, _ = listener.accept()
+                with connection:
+                    length = struct.unpack(">I", receive_exact(connection, 4))[0]
+                    received.append(receive_exact(connection, length))
+                    if attempt == 1:
+                        response = b'{"status":"ok"}'
+                        connection.sendall(struct.pack(">I", len(response)) + response)
+
+    server = threading.Thread(target=serve)
+    server.start()
+    assert ready.wait(1)
+    transport = DeviceSideTransport(
+        "ADB_ENDPOINT", host_port=port, device_port=47101, runner=runner
+    )
+    transport.start()
+    try:
+        assert transport.request({"command_id": "stable-command"}) == {"status": "ok"}
+    finally:
+        transport.close()
+        server.join(1)
+
+    assert received[0] == received[1]
+
+
 def test_oversized_response_is_rejected_without_payload_in_error() -> None:
     runner = RecordingRunner()
     port = available_port()
