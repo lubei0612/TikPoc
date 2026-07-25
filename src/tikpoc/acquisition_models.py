@@ -235,3 +235,15 @@ class AssignmentStageTiming:
     stage: AssignmentStage
     duration_ms: int
     recorded_at_ms: int
+
+
+@dataclass(frozen=True)
+class AssignmentCommandMetrics:
+    assignment_id: int
+    stage: AssignmentStage
+    command_count: int
+    command_duration_ms: int
+    page_source_reads: int
+    element_queries: int
+    execute_script_calls: int
+    recorded_at_ms: int

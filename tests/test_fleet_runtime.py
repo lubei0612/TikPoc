@@ -4,13 +4,15 @@ from pathlib import Path
 
 import pytest
 
+from tests.test_fleet import _two_device_config
+from tikpoc.acquisition_db import AcquisitionRepository
 from tikpoc.acquisition_models import (
     AssignmentPhase,
     DeviceDiagnostics,
     OutcomeKind,
     RoundCompletion,
 )
-from tikpoc.acquisition_db import AcquisitionRepository
+from tikpoc.device_performance import DevicePerformanceSnapshot
 from tikpoc.fleet import (
     DeviceWorkerLeaseLost,
     FleetConfig,
@@ -25,8 +27,6 @@ from tikpoc.fleet_runtime import (
 )
 from tikpoc.importer import Target
 from tikpoc.rounds import create_exposure_round
-
-from tests.test_fleet import _two_device_config
 
 
 def test_round_operational_completion_includes_terminal_skips() -> None:
@@ -85,6 +85,9 @@ class ProtocolDevice:
     def recover(self, phase: AssignmentPhase) -> None:
         self.phase = phase
 
+    def performance_snapshot(self) -> DevicePerformanceSnapshot:
+        return DevicePerformanceSnapshot(command_count=3)
+
 
 def test_fenced_device_checks_every_device_side_effect() -> None:
     fence = RecordingFence()
@@ -100,6 +103,7 @@ def test_fenced_device_checks_every_device_side_effect() -> None:
     assert device.reconcile_outcome(OutcomeKind.LIKE) is OutcomeKind.LIKE
     assert device.capture_diagnostics().ui_summary == "visible"
     device.recover(AssignmentPhase.VIDEO_OPENING)
+    assert device.performance_snapshot().command_count == 3
 
     assert fence.operations == [
         "ensure_ready",
@@ -112,6 +116,7 @@ def test_fenced_device_checks_every_device_side_effect() -> None:
         "reconcile_outcome",
         "capture_diagnostics",
         "recover",
+        "performance_snapshot",
     ]
 
 

@@ -1,27 +1,28 @@
+import sqlite3
 from collections import deque
 from pathlib import Path
-import sqlite3
 
 import pytest
 
+from tests.test_appium_device import BoundedVideoDriver
 from tikpoc.acquisition_db import AcquisitionRepository, DeviceWorkerLeaseLost
 from tikpoc.acquisition_models import (
     ActionPlanState,
     ActionResult,
-    AssignmentStage,
     AssignmentPhase,
+    AssignmentStage,
     DeviceDiagnostics,
     OutcomeKind,
     ProfileAccessState,
     ProfileObservation,
 )
-from tikpoc.importer import Target
 from tikpoc.device import AppiumTikTokDevice, ProfileIdentityMismatch
+from tikpoc.device_performance import DevicePerformanceSnapshot
+from tikpoc.importer import Target
 from tikpoc.mobile_worker import MobileAssignmentWorker
 from tikpoc.models import ProfileMetrics
 from tikpoc.outcome_planner import get_or_create_plan
 from tikpoc.rounds import create_exposure_round
-from tests.test_appium_device import BoundedVideoDriver
 
 MANUAL_RETRY_AT_MS = 9_223_372_036_854_775_807
 
@@ -104,23 +105,36 @@ class TimedScriptedDevice(ScriptedVerifiedDevice):
             action_results=[ActionResult.CONFIRMED],
         )
         self.clock = clock
+        self.commands = 0
+
+    def performance_snapshot(self) -> DevicePerformanceSnapshot:
+        return DevicePerformanceSnapshot(
+            command_count=self.commands,
+            command_duration_ms=self.commands * 50,
+            page_source_reads=self.commands,
+        )
 
     def open_target(self, target) -> None:
         super().open_target(target)
+        self.commands += 1
         self.clock.advance(100)
 
     def confirm_profile_identity(self, target) -> None:
+        self.commands += 2
         self.clock.advance(200)
 
     def read_profile_observation(self) -> ProfileObservation:
+        self.commands += 3
         self.clock.advance(300)
         return super().read_profile_observation()
 
     def open_and_confirm_video(self, video_key: str) -> None:
         super().open_and_confirm_video(video_key)
+        self.commands += 4
         self.clock.advance(400)
 
     def execute_outcome(self, outcome: OutcomeKind) -> ActionResult:
+        self.commands += 5
         self.clock.advance(500)
         return super().execute_outcome(outcome)
 
@@ -368,6 +382,14 @@ def test_worker_persists_route_identity_metrics_video_and_action_timings(
         AssignmentStage.METRICS: 300,
         AssignmentStage.VIDEO: 400,
         AssignmentStage.ACTION: 500,
+    }
+    metrics = repository.assignment_command_metrics(assignment.assignment_id)
+    assert {item.stage: item.command_count for item in metrics} == {
+        AssignmentStage.ROUTE: 1,
+        AssignmentStage.IDENTITY: 2,
+        AssignmentStage.METRICS: 3,
+        AssignmentStage.VIDEO: 4,
+        AssignmentStage.ACTION: 5,
     }
 
 

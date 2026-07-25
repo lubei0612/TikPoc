@@ -7,6 +7,7 @@ from typing import Protocol
 from .acquisition_db import AcquisitionRepository, DeviceWorkerLeaseLost
 from .acquisition_models import AssignmentPhase, OutcomeKind, PoolTarget
 from .device import AppiumTikTokDevice
+from .device_performance import DevicePerformanceSnapshot, MeasuredAppiumDriver
 from .fleet import (
     DeviceWorkerFence,
     FleetConfig,
@@ -14,8 +15,8 @@ from .fleet import (
     FleetSupervisor,
     FleetWorkerState,
 )
-from .mobile_worker import MobileAssignmentWorker
 from .mobile_routes import AdbProfileRouter
+from .mobile_worker import MobileAssignmentWorker
 from .proxy_relay import ProxyRelay
 from .runner import create_driver
 
@@ -67,6 +68,12 @@ class FencedVerifiedDevice:
     def recover(self, phase: AssignmentPhase) -> None:
         self.fence.execute(self.device.recover, phase)
 
+    def performance_snapshot(self) -> DevicePerformanceSnapshot:
+        snapshotter = getattr(self.device, "performance_snapshot", None)
+        if snapshotter is None:
+            return DevicePerformanceSnapshot()
+        return self.fence.execute(snapshotter)
+
 
 def run_device_worker(
     database_path: Path,
@@ -88,7 +95,12 @@ def run_device_worker(
     repository = repository_factory(database_path)
     driver = fence.execute(driver_factory, device.appium_url, device.adb_endpoint)
     try:
-        raw_device = device_factory(driver)
+        measured_driver = (
+            MeasuredAppiumDriver(driver)
+            if hasattr(driver, "command_executor")
+            else driver
+        )
+        raw_device = device_factory(measured_driver)
         if hasattr(raw_device, "diagnostics_dir"):
             raw_device.diagnostics_dir = database_path.parent / "screenshots"
         raw_device.route_opener = route_factory(device.adb_endpoint).open

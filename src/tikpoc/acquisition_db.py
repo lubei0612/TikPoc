@@ -9,14 +9,15 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .acquisition_models import (
-    ActionPlan,
     ActionPacingState,
+    ActionPlan,
     ActionPlanState,
     ActionResult,
+    AssignmentCommandMetrics,
     AssignmentPhase,
-    AssignmentTransition,
     AssignmentStage,
     AssignmentStageTiming,
+    AssignmentTransition,
     DeviceDiagnostics,
     OutcomeKind,
     PoolImport,
@@ -34,7 +35,6 @@ from .capacity import AssignmentTiming, RoundCapacityAudit
 from .importer import Target, target_identity_key
 from .models import ProfileMetrics
 from .rules import evaluate_profile
-
 
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 MANUAL_RETRY_AT_MS = 2**63 - 1
@@ -397,6 +397,25 @@ class AcquisitionRepository:
                     assignment_id INTEGER NOT NULL,
                     stage TEXT NOT NULL,
                     duration_ms INTEGER NOT NULL CHECK(duration_ms >= 0),
+                    recorded_at_ms INTEGER NOT NULL,
+                    PRIMARY KEY(assignment_id, stage),
+                    FOREIGN KEY(assignment_id)
+                        REFERENCES round_assignments(assignment_id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS assignment_command_metrics (
+                    assignment_id INTEGER NOT NULL,
+                    stage TEXT NOT NULL,
+                    command_count INTEGER NOT NULL CHECK(command_count >= 0),
+                    command_duration_ms INTEGER NOT NULL
+                        CHECK(command_duration_ms >= 0),
+                    page_source_reads INTEGER NOT NULL CHECK(page_source_reads >= 0),
+                    element_queries INTEGER NOT NULL CHECK(element_queries >= 0),
+                    execute_script_calls INTEGER NOT NULL
+                        CHECK(execute_script_calls >= 0),
                     recorded_at_ms INTEGER NOT NULL,
                     PRIMARY KEY(assignment_id, stage),
                     FOREIGN KEY(assignment_id)
@@ -2184,6 +2203,113 @@ class AcquisitionRepository:
         )
         order = {stage: index for index, stage in enumerate(AssignmentStage)}
         return tuple(sorted(timings, key=lambda timing: order[timing.stage]))
+
+    def record_assignment_command_metrics(
+        self,
+        assignment_id: int,
+        stage: AssignmentStage | str,
+        *,
+        command_count: int,
+        command_duration_ms: int,
+        page_source_reads: int,
+        element_queries: int,
+        execute_script_calls: int,
+        recorded_at_ms: int,
+        worker_owner_id: str | None = None,
+        worker_account_id: str | None = None,
+        worker_fence_token: int | None = None,
+    ) -> AssignmentCommandMetrics:
+        normalized = AssignmentStage(stage)
+        values = (
+            command_count,
+            command_duration_ms,
+            page_source_reads,
+            element_queries,
+            execute_script_calls,
+            recorded_at_ms,
+        )
+        if assignment_id <= 0:
+            raise ValueError("assignment id must be positive")
+        if any(value < 0 for value in values):
+            raise ValueError("assignment command metrics must be nonnegative")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if worker_fence_token is not None:
+                row = connection.execute(
+                    """
+                    SELECT device_id, lease_expires_at_ms FROM round_assignments
+                    WHERE assignment_id = ? AND lease_owner = ?
+                    """,
+                    (assignment_id, worker_owner_id),
+                ).fetchone()
+                if row is None:
+                    raise DeviceWorkerLeaseLost("assignment lease is inactive")
+                self._assert_row_worker_fence(
+                    connection,
+                    device_id=str(row["device_id"]),
+                    lease_expires_at_ms=int(row["lease_expires_at_ms"]),
+                    owner_id=worker_owner_id,
+                    account_id=worker_account_id,
+                    fence_token=worker_fence_token,
+                    now_ms=recorded_at_ms,
+                )
+            connection.execute(
+                """
+                INSERT INTO assignment_command_metrics(
+                    assignment_id, stage, command_count, command_duration_ms,
+                    page_source_reads, element_queries, execute_script_calls,
+                    recorded_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(assignment_id, stage) DO UPDATE SET
+                    command_count=excluded.command_count,
+                    command_duration_ms=excluded.command_duration_ms,
+                    page_source_reads=excluded.page_source_reads,
+                    element_queries=excluded.element_queries,
+                    execute_script_calls=excluded.execute_script_calls,
+                    recorded_at_ms=excluded.recorded_at_ms
+                """,
+                (assignment_id, normalized.value, *values),
+            )
+        return AssignmentCommandMetrics(
+            assignment_id=assignment_id,
+            stage=normalized,
+            command_count=command_count,
+            command_duration_ms=command_duration_ms,
+            page_source_reads=page_source_reads,
+            element_queries=element_queries,
+            execute_script_calls=execute_script_calls,
+            recorded_at_ms=recorded_at_ms,
+        )
+
+    def assignment_command_metrics(
+        self, assignment_id: int
+    ) -> tuple[AssignmentCommandMetrics, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT assignment_id, stage, command_count, command_duration_ms,
+                       page_source_reads, element_queries, execute_script_calls,
+                       recorded_at_ms
+                FROM assignment_command_metrics
+                WHERE assignment_id = ?
+                """,
+                (assignment_id,),
+            ).fetchall()
+        metrics = tuple(
+            AssignmentCommandMetrics(
+                assignment_id=int(row["assignment_id"]),
+                stage=AssignmentStage(str(row["stage"])),
+                command_count=int(row["command_count"]),
+                command_duration_ms=int(row["command_duration_ms"]),
+                page_source_reads=int(row["page_source_reads"]),
+                element_queries=int(row["element_queries"]),
+                execute_script_calls=int(row["execute_script_calls"]),
+                recorded_at_ms=int(row["recorded_at_ms"]),
+            )
+            for row in rows
+        )
+        order = {stage: index for index, stage in enumerate(AssignmentStage)}
+        return tuple(sorted(metrics, key=lambda item: order[item.stage]))
 
     def transition_assignment(
         self,

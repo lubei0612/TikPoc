@@ -17,6 +17,7 @@ from .acquisition_models import (
     ProfileObservation,
     RoundAssignment,
 )
+from .device_performance import DevicePerformanceSnapshot
 from .outcome_planner import get_or_create_plan
 
 
@@ -44,6 +45,8 @@ class VerifiedTikTokDevice(Protocol):
     def capture_diagnostics(self) -> DeviceDiagnostics: ...
 
     def recover(self, phase: AssignmentPhase) -> None: ...
+
+    def performance_snapshot(self) -> DevicePerformanceSnapshot: ...
 
 
 class PlanProvider(Protocol):
@@ -125,6 +128,9 @@ class MobileAssignmentWorker:
         self.max_action_attempts = max_action_attempts
         self.action_timeout_ms = action_timeout_ms
         self.retry_delay_ms = retry_delay_ms
+        self._stage_performance_starts: dict[
+            AssignmentStage, DevicePerformanceSnapshot
+        ] = {}
 
     def run_assignment(self, assignment: RoundAssignment) -> None:
         if assignment.device_id != self.device_id:
@@ -199,13 +205,13 @@ class MobileAssignmentWorker:
             source_line_numbers=(),
             ordinal=0,
         )
-        route_started_at_ms = self.clock_ms()
+        route_started_at_ms = self._begin_stage(AssignmentStage.ROUTE)
         self.device.ensure_ready()
         self.device.open_target(target)
         self._record_stage(
             assignment.assignment_id, AssignmentStage.ROUTE, route_started_at_ms
         )
-        identity_started_at_ms = self.clock_ms()
+        identity_started_at_ms = self._begin_stage(AssignmentStage.IDENTITY)
         try:
             self.device.confirm_profile_identity(target)
         except ValueError as error:
@@ -241,7 +247,7 @@ class MobileAssignmentWorker:
         )
         self._renew_lease(assignment.assignment_id)
 
-        metrics_started_at_ms = self.clock_ms()
+        metrics_started_at_ms = self._begin_stage(AssignmentStage.METRICS)
         snapshot = self.repository.profile_snapshot(
             assignment.round_id, assignment.identity_key
         )
@@ -349,7 +355,7 @@ class MobileAssignmentWorker:
             )
             return
 
-        video_started_at_ms = self.clock_ms()
+        video_started_at_ms = self._begin_stage(AssignmentStage.VIDEO)
         if plan.video_key is None:
             plan = self.repository.set_plan_video(
                 plan.plan_id,
@@ -379,7 +385,7 @@ class MobileAssignmentWorker:
             **self._assignment_fence_kwargs(),
         )
         if plan.effective_outcome is OutcomeKind.TRACE:
-            action_started_at_ms = self.clock_ms()
+            action_started_at_ms = self._begin_stage(AssignmentStage.ACTION)
             self.repository.confirm_trace_plan(
                 plan.plan_id,
                 now_ms=self.clock_ms(),
@@ -401,7 +407,7 @@ class MobileAssignmentWorker:
         self._execute_interaction(assignment.assignment_id, plan)
 
     def _execute_interaction(self, assignment_id: int, plan: ActionPlan) -> None:
-        started_at_ms = self.clock_ms()
+        started_at_ms = self._begin_stage(AssignmentStage.ACTION)
         attempts = 0
         reconciliation_attempts = 0
         self._renew_lease(assignment_id)
@@ -624,6 +630,39 @@ class MobileAssignmentWorker:
             duration_ms=recorded_at_ms - started_at_ms,
             recorded_at_ms=recorded_at_ms,
             **self._action_fence_kwargs(),
+        )
+        started_snapshot = self._stage_performance_starts.pop(
+            stage, DevicePerformanceSnapshot()
+        )
+        delta = self._performance_snapshot() - started_snapshot
+        self.repository.record_assignment_command_metrics(
+            assignment_id,
+            stage,
+            command_count=delta.command_count,
+            command_duration_ms=delta.command_duration_ms,
+            page_source_reads=delta.page_source_reads,
+            element_queries=delta.element_queries,
+            execute_script_calls=delta.execute_script_calls,
+            recorded_at_ms=recorded_at_ms,
+            **self._action_fence_kwargs(),
+        )
+
+    def _begin_stage(self, stage: AssignmentStage) -> int:
+        self._stage_performance_starts[stage] = self._performance_snapshot()
+        return self.clock_ms()
+
+    def _performance_snapshot(self) -> DevicePerformanceSnapshot:
+        snapshotter = getattr(self.device, "performance_snapshot", None)
+        if snapshotter is None:
+            return DevicePerformanceSnapshot()
+        try:
+            snapshot = snapshotter()
+        except (AttributeError, TypeError):
+            return DevicePerformanceSnapshot()
+        return (
+            snapshot
+            if isinstance(snapshot, DevicePerformanceSnapshot)
+            else DevicePerformanceSnapshot()
         )
 
     @staticmethod

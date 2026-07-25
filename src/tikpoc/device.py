@@ -19,6 +19,7 @@ from .acquisition_models import (
     ProfileAccessState,
     ProfileObservation,
 )
+from .device_performance import DevicePerformanceSnapshot
 from .models import ProfileMetrics
 from .profile_parser import (
     parse_profile_page,
@@ -174,6 +175,17 @@ class AppiumTikTokDevice:
         self._profile_source: str | None = None
         self._confirmed_profile_username = ""
         self._visible_post_elements: tuple[object, ...] | None = None
+
+    def performance_snapshot(self) -> DevicePerformanceSnapshot:
+        snapshotter = getattr(self.driver, "performance_snapshot", None)
+        if snapshotter is None:
+            return DevicePerformanceSnapshot()
+        snapshot = snapshotter()
+        return (
+            snapshot
+            if isinstance(snapshot, DevicePerformanceSnapshot)
+            else DevicePerformanceSnapshot()
+        )
 
     def _invalidate_profile_source(self) -> None:
         self._profile_source = None

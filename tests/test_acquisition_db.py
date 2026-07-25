@@ -9,6 +9,7 @@ from tikpoc.acquisition_models import (
     ActionPlanState,
     ActionResult,
     AssignmentPhase,
+    AssignmentStage,
     DeviceDiagnostics,
     OutcomeKind,
     ProfileAccessState,
@@ -1211,3 +1212,39 @@ def test_round_coverage_and_mobile_trace_use_confirmed_assignment_evidence(
             "last_visit_confirmed_at_ms": 2_000,
         },
     ]
+
+
+def test_repository_round_trips_assignment_command_metrics(tmp_path: Path) -> None:
+    repository = AcquisitionRepository(
+        tmp_path / "command-metrics.db", clock_ms=lambda: 1_000
+    )
+    repository.migrate()
+    pool = repository.import_pool("targets.csv", "f" * 64, (_target("sec:metrics"),))
+    round_id = create_exposure_round(
+        repository,
+        pool_id=pool.pool_id,
+        device_seeds={"phone-01": "metrics"},
+        starts_at_ms=1_000,
+        min_inter_device_gap_ms=0,
+        min_repeat_gap_ms=0,
+    )
+    assignment = repository.claim_scheduled_assignment(
+        round_id,
+        "phone-01",
+        "worker-01",
+        now_ms=1_000,
+    )
+    assert assignment is not None
+
+    stored = repository.record_assignment_command_metrics(
+        assignment.assignment_id,
+        AssignmentStage.IDENTITY,
+        command_count=3,
+        command_duration_ms=620,
+        page_source_reads=2,
+        element_queries=1,
+        execute_script_calls=0,
+        recorded_at_ms=1_010,
+    )
+
+    assert repository.assignment_command_metrics(assignment.assignment_id) == (stored,)
