@@ -70,6 +70,50 @@ budget. The next capacity investigation should benchmark a native ADB or Android
 accessibility executor that preserves the same visible identity, action, and
 result evidence.
 
+### 2026-07-25 representative 100-target canary
+
+The deterministic representative sample in
+`var/vmos-representative-100.csv` contained 100 targets, with 36% eligible by
+the imported reference metrics and 30% marked private. The isolated database
+was `/Users/Shared/TikPoc/vmos-rate/vmos-touch-representative-100.db`, round
+`round-b60352d09859dbcebe91`. Exclusive work ran from 22:29:03 CST until the
+VMOS ADB endpoint went offline at 22:55:38 CST.
+
+Before that transport loss, the worker recorded 78 terminal completions and 81
+confirmed visits. The completed rate from first work to the last completion was
+180.4 per hour; confirmed visits through the disconnect were 182.8 per hour,
+projecting only 3,656 confirmed visits in 20 hours. The capacity gate therefore
+failed independently of the later disconnect. Final database state was 78
+completed and 22 deferred. The disconnect first produced one `AdbRouteError`;
+because the worker still consumed the queue with an offline session, the other
+21 pending targets were immediately deferred with `WebDriverException`. Three
+earlier video-opening deferrals were retried successfully before the disconnect.
+
+Recorded stage mean/P90/maximum seconds were:
+
+- route: 0.84 / 1.33 / 2.14 across 100 samples;
+- identity: 8.00 / 9.55 / 37.07 across 82 samples;
+- metrics: 1.39 / 4.28 / 8.03 across 81 samples;
+- video: 8.47 / 9.75 / 19.80 across 41 samples;
+- action: 7.60 / 14.52 / 17.75 across 38 samples.
+
+Identity accounted for 418 commands and 654.01 command-seconds; video for 221
+and 322.09 seconds; action for 798 and 269.37 seconds; metrics for 122 and 96.77
+seconds; route for 104 and 50.31 seconds. Confirmed plans were 41 trace, 26
+like, five favorite, and four repost. Two repost plans ended uncertain, and
+three plans remained planned when the transport disappeared.
+
+The canary exposed two correctness/recovery defects without changing the
+business rules. First, three video pages had a visibly displayed share control
+in the captured hierarchy after the fast UiSelector lookup timed out. Video
+confirmation now performs one XPath visibility fallback only after that fast
+path expires. Second, `AdbRouteError` and Selenium `WebDriverException` are now
+persisted against the current assignment and then propagated so the fleet
+supervisor rebuilds the device worker with backoff instead of consuming the
+remaining queue through a dead session. Both fixes have focused regression
+coverage. A fresh 100-target canary is still required; this interrupted result
+does not satisfy either the 400-per-hour recovery gate or the production gate.
+
 ## Business Invariants
 
 - Eligibility remains `following > followers AND video_count >= 1`.

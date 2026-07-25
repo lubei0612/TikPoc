@@ -561,6 +561,19 @@ Completed on `feat/web-lead-conversion`:
   `uncertain`, and read-only visible evidence on the exact expected account then
   reconciled that same job to `published`. Final durable status is
   `published=1`, `uncertain=0`; no duplicate or automatic retry occurred.
+- A representative 100-target VMOS canary reached 78 completions and 81
+  confirmed visits before its ADB endpoint went offline. Measured throughput
+  was about 183 confirmed visits per hour, below the 400-per-hour recovery gate.
+  The disconnect caused one `AdbRouteError` and 21 immediate
+  `WebDriverException` deferrals; those tail results are transport failures, not
+  target outcomes.
+- Video confirmation now performs one XPath fallback only when the fast
+  semantic share-control lookup expires. Device transport exceptions are
+  durably deferred and then propagated so the fleet supervisor restarts the
+  worker instead of consuming the remaining queue through a dead session.
+  Fresh verification passed Python `959`, Chrome Node `111`, touched-file Ruff
+  and format checks, Android build, and `git diff --check`. Full-repository Ruff
+  still has the existing 143-finding baseline.
 
 Outstanding at the current checkpoint:
 
@@ -582,7 +595,10 @@ Outstanding at the current checkpoint:
    500-target gate only when mean is below 6.5 seconds and P90 is below 8.64
    seconds.
 5. Execute the remaining Mobile Task 10 two-device live gate on slots 1 and 2.
-6. Finish full regression, two-device calibration, four-/eight-hour endurance
+6. Reconnect the VMOS ADB endpoint and run a fresh isolated representative
+   100-target canary. Do not reuse the interrupted database or infer a capacity
+   pass until confirmed throughput reaches the documented gate.
+7. Finish full regression, two-device calibration, four-/eight-hour endurance
    tests, the seven-device benchmark, runbooks, and branch/PR integration.
 
 ## Next Execution Procedure
