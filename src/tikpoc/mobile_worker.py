@@ -131,6 +131,7 @@ class MobileAssignmentWorker:
         self._stage_performance_starts: dict[
             AssignmentStage, DevicePerformanceSnapshot
         ] = {}
+        self._stage_started_at_ms: dict[AssignmentStage, int] = {}
 
     def run_assignment(self, assignment: RoundAssignment) -> None:
         if assignment.device_id != self.device_id:
@@ -146,6 +147,7 @@ class MobileAssignmentWorker:
         except DeviceWorkerLeaseLost:
             raise
         except Exception as error:
+            self._record_open_stages(current.assignment_id)
             stored = self.repository.assignment(current.assignment_id)
             if (
                 type(error) is ProfileUnreachable
@@ -269,6 +271,7 @@ class MobileAssignmentWorker:
                     now_ms=now_ms,
                     **self._assignment_fence_kwargs(),
                 )
+                self._record_open_stages(assignment.assignment_id)
                 self._defer(assignment.assignment_id, "snapshot_pending")
                 return
             observation = self.device.read_profile_observation()
@@ -634,6 +637,7 @@ class MobileAssignmentWorker:
         started_snapshot = self._stage_performance_starts.pop(
             stage, DevicePerformanceSnapshot()
         )
+        self._stage_started_at_ms.pop(stage, None)
         delta = self._performance_snapshot() - started_snapshot
         self.repository.record_assignment_command_metrics(
             assignment_id,
@@ -647,9 +651,15 @@ class MobileAssignmentWorker:
             **self._action_fence_kwargs(),
         )
 
+    def _record_open_stages(self, assignment_id: int) -> None:
+        for stage, started_at_ms in tuple(self._stage_started_at_ms.items()):
+            self._record_stage(assignment_id, stage, started_at_ms)
+
     def _begin_stage(self, stage: AssignmentStage) -> int:
         self._stage_performance_starts[stage] = self._performance_snapshot()
-        return self.clock_ms()
+        started_at_ms = self.clock_ms()
+        self._stage_started_at_ms[stage] = started_at_ms
+        return started_at_ms
 
     def _performance_snapshot(self) -> DevicePerformanceSnapshot:
         snapshotter = getattr(self.device, "performance_snapshot", None)

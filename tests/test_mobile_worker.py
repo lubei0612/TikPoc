@@ -139,6 +139,12 @@ class TimedScriptedDevice(ScriptedVerifiedDevice):
         return super().execute_outcome(outcome)
 
 
+class FailingTimedRouteDevice(TimedScriptedDevice):
+    def open_target(self, target) -> None:
+        super().open_target(target)
+        raise RuntimeError("route unavailable")
+
+
 class SharedSnapshotDelayedGridDevice:
     def __init__(self) -> None:
         class DelayedGridDriver(BoundedVideoDriver):
@@ -391,6 +397,35 @@ def test_worker_persists_route_identity_metrics_video_and_action_timings(
         AssignmentStage.VIDEO: 4,
         AssignmentStage.ACTION: 5,
     }
+
+
+def test_worker_records_command_metrics_for_deferred_route_failure(
+    tmp_path: Path,
+) -> None:
+    repository, assignment = _claimed_assignment(tmp_path)
+    clock = MutableClock()
+    worker = MobileAssignmentWorker(
+        repository,
+        FailingTimedRouteDevice(clock),
+        device_id="phone-01",
+        owner_id="worker-1",
+        clock_ms=clock,
+    )
+
+    worker.run_assignment(assignment)
+
+    assert (
+        repository.assignment(assignment.assignment_id).phase
+        is AssignmentPhase.DEFERRED
+    )
+    assert {
+        timing.stage: timing.duration_ms
+        for timing in repository.assignment_stage_timings(assignment.assignment_id)
+    } == {AssignmentStage.ROUTE: 100}
+    assert {
+        metric.stage: metric.command_count
+        for metric in repository.assignment_command_metrics(assignment.assignment_id)
+    } == {AssignmentStage.ROUTE: 1}
 
 
 def test_assignment_stage_timing_replaces_the_previous_attempt(
