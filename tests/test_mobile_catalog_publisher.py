@@ -264,6 +264,64 @@ def test_reconcile_dismisses_profile_modal_before_reading_visible_post() -> None
     assert driver.close.clicks == 1
 
 
+def test_reconcile_detects_new_zero_play_post_by_visible_grid_position() -> None:
+    class DuplicateCountDriver:
+        def __init__(self) -> None:
+            self.published = False
+
+        @property
+        def page_source(self) -> str:
+            posts = 2 if self.published else 1
+            nodes = "".join(
+                '<node resource-id="x:id/tv_play_count" text="0" />'
+                for _ in range(posts)
+            )
+            return (
+                '<hierarchy><node resource-id="x:id/s7e" text="@expected" />'
+                f"{nodes}</hierarchy>"
+            )
+
+        def execute_script(self, *_args, **_kwargs) -> None:
+            pass
+
+        def find_elements(self, *_args, **_kwargs):
+            return []
+
+    driver = DuplicateCountDriver()
+    ui = AppiumTikTokPhotoUi(driver, timeout=0, sleeper=lambda _: None)
+    ui.expected_username = "expected"
+    before = ui.snapshot_posts()
+    driver.published = True
+    ui._submitted = True
+
+    assert ui.reconcile(before) is not None
+
+
+def test_reconcile_dismisses_post_publish_email_prompt() -> None:
+    dismiss = AppiumElement()
+
+    class EmailPromptDriver:
+        page_source = (
+            '<hierarchy><node resource-id="x:id/s7e" text="@expected" />'
+            '<node resource-id="x:id/tv_play_count" text="0" /></hierarchy>'
+        )
+
+        def execute_script(self, *_args, **_kwargs) -> None:
+            pass
+
+        def find_elements(self, _by, xpath):
+            if "Not now" in xpath or "暂时不要" in xpath:
+                return [dismiss]
+            return []
+
+    ui = AppiumTikTokPhotoUi(EmailPromptDriver(), timeout=0, sleeper=lambda _: None)
+    ui.expected_username = "expected"
+    ui._submitted = True
+
+    assert ui.reconcile(frozenset()) is not None
+    assert dismiss.clicks == 1
+
+
 def test_verification_before_submit_releases_job_for_human_resolution(
     tmp_path: Path,
 ) -> None:
@@ -393,6 +451,8 @@ class AppiumPublishingDriver:
             return [self.next]
         if "EditText" in xpath:
             return [self.caption]
+        if "Publish now" in xpath or "立即发布" in xpath:
+            return []
         if "Post" in xpath or "发布" in xpath:
             return [self.post]
         return []
@@ -424,6 +484,103 @@ def test_appium_photo_ui_selects_exact_job_album_images_and_reconciles() -> None
     assert driver.caption.value == "One product, two views."
     assert driver.post.clicks == 1
     assert ui.reconcile(before).startswith("tiktok-visible://@expected/")
+
+
+def test_appium_photo_ui_opens_tiktok_46_photo_tab_without_legacy_album_control() -> (
+    None
+):
+    class TikTok46CreateDriver(AppiumPublishingDriver):
+        def __init__(self) -> None:
+            super().__init__()
+            self.gallery_open = False
+            self.albums_open = False
+            self.album_launcher = AppiumElement(on_click=self._open_gallery)
+            self.album_title = AppiumElement(on_click=self._open_albums)
+            self.photo_filter = AppiumElement()
+            self.multi_ready = False
+            self.multi = AppiumElement(on_click=self._enable_multi_select)
+            self.final_page = False
+            self.confirmation_visible = False
+            self.post = AppiumElement(on_click=self._show_confirmation)
+            self.confirm_publish = AppiumElement(on_click=self._publish)
+
+        def execute_script(self, name, args) -> None:
+            super().execute_script(name, args)
+            if name == "mobile: clickGesture":
+                self.final_page = True
+
+        def get_window_size(self):
+            return {"width": 720, "height": 1280}
+
+        def find_elements(self, by, xpath):
+            if "Upload" in xpath or "上传" in xpath:
+                return []
+            if "job-1" in xpath and not self.albums_open:
+                return []
+            if ":id/c55" in xpath:
+                return [self.album_launcher]
+            if ":id/cq0" in xpath:
+                return [self.album_title]
+            if ":id/vzq" in xpath and "@text" not in xpath:
+                return [self.photo_filter]
+            if "Recents" in xpath:
+                return [self.photo_filter, self.album_title]
+            if ":id/lz2" in xpath:
+                return [self.multi]
+            if "Select multiple" in xpath or "选择多个" in xpath:
+                return [self.photo_filter]
+            if ":id/sye" in xpath:
+                return [self.next]
+            if ":id/fe7" in xpath:
+                return [self.caption] if self.final_page else []
+            if "Next" in xpath or "下一步" in xpath:
+                return []
+            if "EditText" in xpath:
+                return []
+            if ":id/p3i" in xpath:
+                return [self.post]
+            if "Publish now" in xpath or "立即发布" in xpath:
+                return [self.confirm_publish] if self.confirmation_visible else []
+            if "Post" in xpath or "发布" in xpath:
+                return [self.photo_filter]
+            if "icon_check" in xpath and not self.multi_ready:
+                return []
+            return super().find_elements(by, xpath)
+
+        def _open_gallery(self) -> None:
+            self.gallery_open = True
+
+        def _open_albums(self) -> None:
+            self.albums_open = True
+
+        def _enable_multi_select(self) -> None:
+            self.multi_ready = self.multi.clicks >= 2
+
+        def _show_confirmation(self) -> None:
+            self.confirmation_visible = True
+
+    driver = TikTok46CreateDriver()
+    ui = AppiumTikTokPhotoUi(driver, timeout=0, sleeper=lambda _: None)
+
+    ui.verify_identity("expected")
+    ui.prepare(
+        ("/sdcard/Pictures/TikPoc/job-1/001.jpg",),
+        "One product, one view.",
+    )
+    ui.submit_once()
+
+    assert driver.photos.clicks == 1
+    assert driver.album_launcher.clicks == 1
+    assert driver.album_title.clicks == 1
+    assert driver.photo_filter.clicks == 0
+    assert driver.multi.clicks == 2
+    assert driver.job_album.clicks == 1
+    assert driver.thumbnails[0].clicks == 1
+    assert ("mobile: clickGesture", {"x": 533, "y": 1216}) in driver.scripts
+    assert driver.caption.value == "One product, one view."
+    assert driver.post.clicks == 1
+    assert driver.confirm_publish.clicks == 1
+    assert driver.published is True
 
 
 def test_appium_photo_ui_rejects_identity_mismatch_before_create() -> None:

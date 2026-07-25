@@ -33,21 +33,28 @@ UPLOAD_XPATH = (
 )
 ALBUM_LAUNCH_XPATH = (
     f'//*[@resource-id="{TIKTOK_PACKAGE}:id/cwd" or '
-    f'@resource-id="{TIKTOK_PACKAGE}:id/view_bg2"]'
+    f'@resource-id="{TIKTOK_PACKAGE}:id/view_bg2" or '
+    f'@resource-id="{TIKTOK_PACKAGE}:id/c55"]'
 )
 PHOTOS_XPATH = (
     '//*[@text="Photos" or @content-desc="Photos" or @text="照片" '
     'or @content-desc="照片"]'
 )
 ALBUM_XPATH = (
-    f'//*[@resource-id="{TIKTOK_PACKAGE}:id/dna" or @text="All" '
+    '//*[@text="All" '
     'or @text="Recents" or @text="Albums" or @text="相册" '
     'or @content-desc="All" or @content-desc="Recents"]'
+)
+ALBUM_TITLE_XPATH = (
+    f'//*[@resource-id="{TIKTOK_PACKAGE}:id/cq0" or '
+    f'@resource-id="{TIKTOK_PACKAGE}:id/dna" or '
+    f'@resource-id="{TIKTOK_PACKAGE}:id/vzq"]'
 )
 MULTI_SELECT_XPATH = (
     '//*[@text="Select multiple" or @content-desc="Select multiple" '
     'or @text="选择多个" or @content-desc="选择多个"]'
 )
+MULTI_SELECT_CONTROL_XPATH = f'//*[@resource-id="{TIKTOK_PACKAGE}:id/lz2"]'
 THUMBNAIL_CHECK_XPATH = (
     f'//*[@resource-id="{TIKTOK_PACKAGE}:id/ken" or '
     '@resource-id="com.android.providers.media.module:id/icon_check" '
@@ -60,13 +67,20 @@ NEXT_XPATH = (
     'or @content-desc="Next" or @text="下一步" '
     'or @content-desc="下一步"]'
 )
+GALLERY_NEXT_XPATH = f'//*[@resource-id="{TIKTOK_PACKAGE}:id/sye"]'
 EDITOR_NEXT_XPATH = (
     f'//*[@resource-id="{TIKTOK_PACKAGE}:id/p8v" or '
     f'@resource-id="{TIKTOK_PACKAGE}:id/p8x" or @text="Next"]'
 )
 CAPTION_XPATH = "//android.widget.EditText"
+FINAL_CAPTION_XPATH = f'//*[@resource-id="{TIKTOK_PACKAGE}:id/fe7"]'
 POST_XPATH = (
     '//*[@text="Post" or @content-desc="Post" or @text="发布" or @content-desc="发布"]'
+)
+FINAL_POST_XPATH = f'//*[@resource-id="{TIKTOK_PACKAGE}:id/p3i"]'
+PUBLISH_CONFIRM_XPATH = (
+    '//*[@text="Publish now" or @content-desc="Publish now" '
+    'or @text="立即发布" or @content-desc="立即发布"]'
 )
 VERIFICATION_MARKERS = (
     "verify to continue",
@@ -124,7 +138,7 @@ class AppiumTikTokPhotoUi:
         self.expected_username = expected
 
     def snapshot_posts(self) -> frozenset[str]:
-        return frozenset(parse_visible_post_keys(str(self.driver.page_source)))
+        return self._visible_post_keys(str(self.driver.page_source))
 
     def prepare(self, remote_paths: tuple[str, ...], caption: str) -> None:
         if not self.expected_username:
@@ -156,12 +170,14 @@ class AppiumTikTokPhotoUi:
             if photos is not None:
                 photos.click()
         else:
+            photos = self._first_now(PHOTOS_XPATH)
+            if photos is not None:
+                photos.click()
             self._click_required(ALBUM_LAUNCH_XPATH, "photo album control")
         self._allow_permissions()
-        photos = self._first_now(PHOTOS_XPATH)
-        if photos is not None:
-            photos.click()
-        album = self._first(ALBUM_XPATH)
+        album = self._first(ALBUM_TITLE_XPATH)
+        if album is None:
+            album = self._first(ALBUM_XPATH)
         if album is not None:
             album.click()
         escaped_album = album_name.replace('"', "")
@@ -169,9 +185,19 @@ class AppiumTikTokPhotoUi:
             f'//*[@text="{escaped_album}" or @content-desc="{escaped_album}"]',
             "isolated job album",
         )
-        multi = self._first(MULTI_SELECT_XPATH)
+        multi = self._first(MULTI_SELECT_CONTROL_XPATH)
+        if multi is None:
+            multi = self._first(MULTI_SELECT_XPATH)
         if multi is not None:
             multi.click()
+            self.sleeper(0.5)
+            if self._first_now(THUMBNAIL_CHECK_XPATH) is None:
+                multi = self._first(MULTI_SELECT_CONTROL_XPATH)
+                if multi is None:
+                    multi = self._first(MULTI_SELECT_XPATH)
+                if multi is not None:
+                    multi.click()
+                    self.sleeper(0.5)
         thumbnails = self._wait_elements(THUMBNAIL_CHECK_XPATH)
         if len(thumbnails) < len(remote_paths):
             raise RuntimeError(
@@ -182,11 +208,28 @@ class AppiumTikTokPhotoUi:
             thumbnail.click()
             self.sleeper(0.3)
         self.sleeper(1.0)
-        self._click_required(NEXT_XPATH, "Next control")
-        caption_input = self._first_now(CAPTION_XPATH)
+        gallery_next = self._first(GALLERY_NEXT_XPATH)
+        if gallery_next is not None:
+            gallery_next.click()
+        else:
+            self._click_required(NEXT_XPATH, "Next control")
+        caption_input = self._first_now(FINAL_CAPTION_XPATH)
         if caption_input is None:
-            self._click_required(EDITOR_NEXT_XPATH, "photo editor Next control")
-            caption_input = self._first(CAPTION_XPATH)
+            editor_next = self._first(EDITOR_NEXT_XPATH)
+            if editor_next is not None:
+                editor_next.click()
+            else:
+                size = self.driver.get_window_size()
+                self.driver.execute_script(
+                    "mobile: clickGesture",
+                    {
+                        "x": round(int(size["width"]) * 0.74),
+                        "y": round(int(size["height"]) * 0.95),
+                    },
+                )
+            caption_input = self._first(FINAL_CAPTION_XPATH)
+            if caption_input is None:
+                caption_input = self._first(CAPTION_XPATH)
         if caption_input is None:
             raise RuntimeError("caption input is not visible")
         caption_input.clear()
@@ -197,11 +240,17 @@ class AppiumTikTokPhotoUi:
             raise RuntimeError("publishing submission was already attempted")
         if self._verification_visible():
             raise VerificationRequired("TikTok verification challenge is visible")
-        post = self._first(POST_XPATH)
+        post = self._first(FINAL_POST_XPATH)
+        if post is None:
+            post = self._first(POST_XPATH)
         if post is None:
             raise RuntimeError("Post control is not visible")
         self._submitted = True
         post.click()
+        self.sleeper(0.5)
+        confirmation = self._first_now(PUBLISH_CONFIRM_XPATH)
+        if confirmation is not None:
+            confirmation.click()
 
     def reconcile(self, before: frozenset[str]) -> str | None:
         if not self._submitted:
@@ -218,7 +267,7 @@ class AppiumTikTokPhotoUi:
             self._dismiss_profile_modal()
             source = str(self.driver.page_source)
             if parse_profile_username(source) == self.expected_username:
-                added = set(parse_visible_post_keys(source)) - set(before)
+                added = set(self._visible_post_keys(source)) - set(before)
                 if added:
                     signature = hashlib.sha256(
                         "\n".join(sorted(added)).encode()
@@ -227,6 +276,13 @@ class AppiumTikTokPhotoUi:
             if time.monotonic() >= deadline:
                 return None
             self.sleeper(self.poll_interval)
+
+    @staticmethod
+    def _visible_post_keys(source: str) -> frozenset[str]:
+        return frozenset(
+            f"{index}:{value}"
+            for index, value in enumerate(parse_visible_post_keys(source))
+        )
 
     def close(self) -> None:
         self.driver.quit()
@@ -300,6 +356,12 @@ class AppiumTikTokPhotoUi:
         )
         if close is not None:
             close.click()
+        dismiss = self._first_now(
+            '//*[@text="Not now" or @content-desc="Not now" '
+            'or @text="暂时不要" or @content-desc="暂时不要"]'
+        )
+        if dismiss is not None:
+            dismiss.click()
 
 
 def start_publish_activity(
