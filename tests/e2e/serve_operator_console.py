@@ -103,6 +103,9 @@ database.upsert_browser_health(
     observed_at_ms=11_500,
     detail="synthetic ready",
     observed_username="synthetic_shop_account_with_a_long_username",
+    last_scan_at_ms=11_400,
+    last_success_at_ms=11_400,
+    scan_state="idle",
 )
 database.upsert_browser_health(
     "account-01",
@@ -112,6 +115,9 @@ database.upsert_browser_health(
     observed_at_ms=11_500,
     detail="synthetic ready",
     observed_username="synthetic_shop_account_with_a_long_username",
+    last_scan_at_ms=11_400,
+    last_success_at_ms=11_400,
+    scan_state="idle",
 )
 participant = "buyer_with_a_very_long_synthetic_username_for_overflow_testing"
 for index, text in enumerate(("Interested", "Please share the details"), start=1):
