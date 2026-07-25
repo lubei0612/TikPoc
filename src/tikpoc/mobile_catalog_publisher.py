@@ -82,6 +82,7 @@ PUBLISH_CONFIRM_XPATH = (
     '//*[@text="Publish now" or @content-desc="Publish now" '
     'or @text="立即发布" or @content-desc="立即发布"]'
 )
+PROFILE_TILE_XPATH = f'//*[@resource-id="{TIKTOK_PACKAGE}:id/dp6"]'
 VERIFICATION_MARKERS = (
     "verify to continue",
     "verification required",
@@ -138,7 +139,7 @@ class AppiumTikTokPhotoUi:
         self.expected_username = expected
 
     def snapshot_posts(self) -> frozenset[str]:
-        return self._visible_post_keys(str(self.driver.page_source))
+        return self._visible_post_keys(str(self.driver.page_source)) | self._tile_keys()
 
     def prepare(self, remote_paths: tuple[str, ...], caption: str) -> None:
         if not self.expected_username:
@@ -267,7 +268,8 @@ class AppiumTikTokPhotoUi:
             self._dismiss_profile_modal()
             source = str(self.driver.page_source)
             if parse_profile_username(source) == self.expected_username:
-                added = set(self._visible_post_keys(source)) - set(before)
+                current = self._visible_post_keys(source) | self._tile_keys()
+                added = set(current) - set(before)
                 if added:
                     signature = hashlib.sha256(
                         "\n".join(sorted(added)).encode()
@@ -283,6 +285,18 @@ class AppiumTikTokPhotoUi:
             f"{index}:{value}"
             for index, value in enumerate(parse_visible_post_keys(source))
         )
+
+    def _tile_keys(self) -> frozenset[str]:
+        keys = set()
+        for tile in self.driver.find_elements(By.XPATH, PROFILE_TILE_XPATH):
+            try:
+                if tile.is_displayed():
+                    content = bytes(tile.screenshot_as_png)
+                    if content:
+                        keys.add(f"tile:{hashlib.sha256(content).hexdigest()}")
+            except Exception:
+                continue
+        return frozenset(keys)
 
     def close(self) -> None:
         self.driver.quit()

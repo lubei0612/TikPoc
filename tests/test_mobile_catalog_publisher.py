@@ -297,6 +297,42 @@ def test_reconcile_detects_new_zero_play_post_by_visible_grid_position() -> None
     assert ui.reconcile(before) is not None
 
 
+def test_reconcile_detects_new_tile_when_visible_grid_size_stays_constant() -> None:
+    class Tile:
+        def __init__(self, content: bytes) -> None:
+            self.screenshot_as_png = content
+
+        def is_displayed(self) -> bool:
+            return True
+
+    class FixedGridDriver:
+        page_source = (
+            '<hierarchy><node resource-id="x:id/s7e" text="@expected" />'
+            + '<node resource-id="x:id/tv_play_count" text="0" />' * 3
+            + "</hierarchy>"
+        )
+
+        def __init__(self) -> None:
+            self.tiles = (b"old-a", b"old-b", b"old-c")
+
+        def execute_script(self, *_args, **_kwargs) -> None:
+            pass
+
+        def find_elements(self, _by, xpath):
+            if ":id/dp6" in xpath:
+                return [Tile(value) for value in self.tiles]
+            return []
+
+    driver = FixedGridDriver()
+    ui = AppiumTikTokPhotoUi(driver, timeout=0, sleeper=lambda _: None)
+    ui.expected_username = "expected"
+    before = ui.snapshot_posts()
+    driver.tiles = (b"new", b"old-a", b"old-b")
+    ui._submitted = True
+
+    assert ui.reconcile(before) is not None
+
+
 def test_reconcile_dismisses_post_publish_email_prompt() -> None:
     dismiss = AppiumElement()
 
