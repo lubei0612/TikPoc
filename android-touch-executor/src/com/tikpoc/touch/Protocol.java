@@ -91,6 +91,20 @@ public final class Protocol {
             return new Response(values);
         }
 
+        public static Response uncertain(
+                Request request, long elapsedMs, String packageName, String activityName,
+                long eventSequence, String evidenceDigest, Map<String, Object> evidence) {
+            Map<String, Object> values = base(request);
+            values.put("status", "uncertain");
+            values.put("elapsed_ms", elapsedMs);
+            values.put("package_name", packageName);
+            values.put("activity_name", activityName);
+            values.put("event_sequence", eventSequence);
+            values.put("evidence_digest", evidenceDigest);
+            values.put("evidence", new LinkedHashMap<String, Object>(evidence));
+            return new Response(values);
+        }
+
         private static Map<String, Object> base(Request request) {
             Map<String, Object> values = new LinkedHashMap<String, Object>();
             values.put("version", VERSION);

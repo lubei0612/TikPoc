@@ -113,6 +113,39 @@ public final class TikTokSemantics {
         return "off";
     }
 
+    public static SemanticSnapshot.Node postControl(
+            SemanticSnapshot snapshot, String videoKey) throws SemanticException {
+        if (videoKey == null || !videoKey.startsWith("post:")) {
+            throw new SemanticException("invalid_post_handle");
+        }
+        int expectedIndex;
+        try {
+            expectedIndex = Integer.parseInt(videoKey.substring(5));
+        } catch (NumberFormatException error) {
+            throw new SemanticException("invalid_post_handle");
+        }
+        if (expectedIndex < 0) throw new SemanticException("invalid_post_handle");
+        int observedIndex = 0;
+        for (SemanticSnapshot.Node node : snapshot.nodes) {
+            if (node.visible && node.enabled && node.clickable && node.bounds.hasArea()
+                    && node.resourceId.toLowerCase(Locale.ROOT).contains("video_item")) {
+                if (observedIndex == expectedIndex) return node;
+                observedIndex++;
+            }
+        }
+        throw new SemanticException("missing_post_handle");
+    }
+
+    public static boolean hasVideoControls(SemanticSnapshot snapshot) {
+        for (SemanticSnapshot.Node node : snapshot.nodes) {
+            if (!node.visible || !node.enabled || !node.bounds.hasArea()) continue;
+            String resource = node.resourceId.toLowerCase(Locale.ROOT);
+            if (resource.contains("like") || resource.contains("favorite")
+                    || resource.contains("share")) return true;
+        }
+        return false;
+    }
+
     private static SemanticSnapshot.Node uniqueByResource(
             SemanticSnapshot snapshot, String fragment) throws SemanticException {
         SemanticSnapshot.Node found = null;
