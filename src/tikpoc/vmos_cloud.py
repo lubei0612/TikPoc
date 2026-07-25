@@ -7,7 +7,6 @@ import os
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from urllib.request import Request, urlopen
 
@@ -134,19 +133,27 @@ class VmosCloudClient:
         *,
         transport: VmosTransport | None = None,
         clock: Callable[[], float] = time.time,
+        sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
         self._credentials = credentials
         self._transport = transport or _send_request
         self._clock = clock
+        self._sleeper = sleeper
 
     def list_instances(self) -> tuple[VmosInstance, ...]:
-        data = self._post("/vcpcloud/api/padApi/infos", {"page": 1, "rows": 100})
+        data = self._post(
+            "/vcpcloud/api/padApi/infos",
+            {"page": 1, "rows": 100},
+            retry_busy=True,
+        )
         if isinstance(data, dict):
-            rows = data.get("rows") or data.get("list") or ()
+            rows = data.get("pageData") or data.get("rows") or data.get("list") or ()
         else:
             rows = data
         if not isinstance(rows, list):
-            raise RuntimeError("VMOS instance response has no bounded row list")
+            raise RuntimeError(  # noqa: TRY004 - malformed external response
+                "VMOS instance response has no bounded row list"
+            )
         return tuple(_parse_instance(row) for row in rows if isinstance(row, dict))
 
     def open_adb(self, pad_code: str, *, expire_minutes: int = 1440) -> VmosAdbLease:
@@ -164,7 +171,9 @@ class VmosCloudClient:
             },
         )
         if not isinstance(data, dict):
-            raise RuntimeError("VMOS ADB response is incomplete")
+            raise RuntimeError(  # noqa: TRY004 - malformed external response
+                "VMOS ADB response is incomplete"
+            )
         adb_command = str(data.get("adb") or "").strip()
         endpoint = adb_command.removeprefix("adb connect ").strip()
         if not endpoint or not str(data.get("command") or "").strip():
@@ -187,25 +196,37 @@ class VmosCloudClient:
             raise RuntimeError("VMOS start-app response is incomplete")
         return str(first["taskId"])
 
-    def _post(self, path: str, payload: Mapping[str, object]) -> object:
-        x_date = datetime.fromtimestamp(self._clock(), UTC).strftime("%Y%m%dT%H%M%SZ")
-        request = sign_vmos_v4_request(
-            access_key=self._credentials.access_key,
-            secret_key=self._credentials.secret_key,
-            path=path,
-            payload=payload,
-            x_date=x_date,
-        )
-        try:
-            response = json.loads(self._transport(request))
-        except (json.JSONDecodeError, OSError) as error:
-            raise RuntimeError("VMOS API returned an invalid response") from error
-        if not isinstance(response, dict):
-            raise RuntimeError("VMOS API returned an invalid response")
-        code = int(response.get("code") or 0)
-        if code != 200:
-            raise RuntimeError(f"VMOS API request failed with code {code}")
-        return response.get("data")
+    def _post(
+        self,
+        path: str,
+        payload: Mapping[str, object],
+        *,
+        retry_busy: bool = False,
+    ) -> object:
+        attempts = 3 if retry_busy else 1
+        for attempt in range(attempts):
+            request = sign_vmos_request(
+                access_key=self._credentials.access_key,
+                secret_key=self._credentials.secret_key,
+                path=path,
+                payload=payload,
+                timestamp=str(int(self._clock())),
+            )
+            try:
+                response = json.loads(self._transport(request))
+            except (json.JSONDecodeError, OSError) as error:
+                raise RuntimeError("VMOS API returned an invalid response") from error
+            if not isinstance(response, dict):
+                raise RuntimeError(  # noqa: TRY004 - malformed external response
+                    "VMOS API returned an invalid response"
+                )
+            code = int(response.get("code") or 0)
+            if code == 200:
+                return response.get("data")
+            if code != 500 or attempt + 1 == attempts:
+                raise RuntimeError(f"VMOS API request failed with code {code}")
+            self._sleeper(0.5 * (2**attempt))
+        raise AssertionError("unreachable")
 
 
 def _parse_instance(row: Mapping[str, object]) -> VmosInstance:

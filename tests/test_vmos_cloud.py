@@ -62,7 +62,7 @@ def test_vmos_client_parses_instances_and_adb_lease() -> None:
         requests.append(request)
         if request.path.endswith("/infos"):
             data = {
-                "rows": [
+                "pageData": [
                     {
                         "padCode": "ACP250625501MXP",
                         "online": 1,
@@ -96,6 +96,9 @@ def test_vmos_client_parses_instances_and_adb_lease() -> None:
     assert lease.adb_endpoint == "localhost:57203"
     assert lease.command.startswith("ssh ")
     assert "PRIVATE-CONNECTION-KEY" not in repr(lease)
+    assert requests[0].headers["X-Timestamp"] == "1784919000"
+    assert "X-Sign" in requests[0].headers
+    assert "authorization" not in requests[0].headers
     assert requests[1].body == (
         '{"padCode":"ACP250625501MXP","enable":true,"expireMinutes":2880}'
     )
@@ -115,3 +118,55 @@ def test_vmos_client_rejects_error_response_without_exposing_credentials() -> No
         client.list_instances()
 
     assert "SECRET" not in str(error.value)
+
+
+def test_vmos_client_retries_temporary_system_busy_response() -> None:
+    responses = iter(
+        (
+            {"code": 500, "msg": "System is busy"},
+            {"code": 500, "msg": "System is busy"},
+            {
+                "code": 200,
+                "msg": "success",
+                "data": {
+                    "pageData": [
+                        {
+                            "padCode": "ACP250625501MXP",
+                            "online": 1,
+                            "brandModel": "SM-G996U1(8G)",
+                        }
+                    ]
+                },
+            },
+        )
+    )
+    sleeps: list[float] = []
+    client = VmosCloudClient(
+        VmosCredentials("ACCESS", "SECRET"),
+        transport=lambda _request: json.dumps(next(responses)),
+        clock=lambda: 1784919000,
+        sleeper=sleeps.append,
+    )
+
+    assert client.list_instances()[0].pad_code == "ACP250625501MXP"
+    assert sleeps == [0.5, 1.0]
+
+
+def test_vmos_client_does_not_retry_side_effect_after_system_busy() -> None:
+    requests: list[VmosSignedRequest] = []
+
+    def transport(request: VmosSignedRequest) -> str:
+        requests.append(request)
+        return json.dumps({"code": 500, "msg": "System is busy"})
+
+    client = VmosCloudClient(
+        VmosCredentials("ACCESS", "SECRET"),
+        transport=transport,
+        clock=lambda: 1784919000,
+        sleeper=lambda _delay: None,
+    )
+
+    with pytest.raises(RuntimeError, match="VMOS API request failed with code 500"):
+        client.start_app("ACP250625501MXP", "com.zhiliaoapp.musically")
+
+    assert len(requests) == 1
