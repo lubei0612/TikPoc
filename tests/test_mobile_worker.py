@@ -1054,7 +1054,7 @@ def test_third_device_readiness_value_error_remains_deferred(tmp_path: Path) -> 
 
 def test_ineligible_profile_completes_without_opening_video(tmp_path: Path) -> None:
     repository, assignment = _claimed_assignment(tmp_path)
-    device = ScriptedVerifiedDevice(metrics=ProfileMetrics(10, 20, 5))
+    device = ScriptedVerifiedDevice(metrics=ProfileMetrics(10, 20, 0))
     worker = MobileAssignmentWorker(
         repository,
         device,

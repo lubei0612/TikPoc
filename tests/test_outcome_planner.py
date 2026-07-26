@@ -66,7 +66,7 @@ def _eligible_repository(
             repository.release_assignment_lease(
                 assignment.assignment_id, f"worker-{device_id}"
             )
-    metrics = ProfileMetrics(20, 10, 5) if eligible else ProfileMetrics(10, 20, 5)
+    metrics = ProfileMetrics(20, 10, 5) if eligible else ProfileMetrics(10, 20, 0)
     for target in targets:
         assert repository.claim_snapshot_lease(
             round_id,
@@ -87,11 +87,11 @@ def _eligible_repository(
     return repository, round_id, tuple(target.identity_key for target in targets)
 
 
-def test_search_policy_ignores_ratio_and_never_draws_trace(tmp_path: Path) -> None:
+def test_search_policy_with_posts_never_draws_trace(tmp_path: Path) -> None:
     repository, round_id, identities = _eligible_repository(
         tmp_path,
         target_count=12,
-        eligible=False,
+        eligible=True,
         navigation_mode="search",
     )
 

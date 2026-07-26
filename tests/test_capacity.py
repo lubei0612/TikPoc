@@ -152,8 +152,8 @@ def seed_completed_round(repository: AcquisitionRepository, round_id: str) -> No
                     observed_username, following_count, followers_count,
                     post_count, private_account, access_state, eligible,
                     reason, observed_at_ms
-                ) VALUES (?, ?, ?, ?, 10, 20, 5, 0, 'public', 0,
-                          'following_not_greater_than_followers', ?)
+                ) VALUES (?, ?, ?, ?, 10, 20, 0, 0, 'public', 0,
+                          'insufficient_posts', ?)
                 """,
                 (
                     round_id,
@@ -653,7 +653,7 @@ def test_round_capacity_recomputes_eligibility_from_raw_snapshot_metrics(
 @pytest.mark.parametrize(
     ("private_account", "access_state", "reason"),
     (
-        (0, "public", "following_not_greater_than_followers"),
+        (0, "public", "insufficient_posts"),
         (1, "private", "private_account"),
     ),
 )
@@ -670,10 +670,11 @@ def test_round_capacity_accepts_username_drift_for_stable_identity(
             """
             UPDATE profile_snapshots
             SET observed_username = 'different_user', private_account = ?,
-                access_state = ?, eligible = 0, reason = ?
+                access_state = ?, post_count = CASE WHEN ? = 0 THEN 0 ELSE post_count END,
+                eligible = 0, reason = ?
             WHERE round_id = ?
             """,
-            (private_account, access_state, reason, round_id),
+            (private_account, access_state, private_account, reason, round_id),
         )
 
     audit = repository.capacity_audit(round_id, expected_devices=2)
