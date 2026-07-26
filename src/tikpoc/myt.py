@@ -1,3 +1,9 @@
+"""Retired MYT adapter retained for historical configuration compatibility.
+
+Production mobile execution uses VMOS and the autonomous HTTPS APK. New runtime
+code must not import this module.
+"""
+
 import json
 from dataclasses import dataclass
 from typing import Protocol
