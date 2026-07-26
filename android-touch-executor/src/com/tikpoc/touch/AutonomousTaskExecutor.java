@@ -16,10 +16,21 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
     public static final class Profile {
         public final String username;
         public final boolean publicProfile;
+        public final long following;
+        public final long followers;
+        public final long videoCount;
 
         public Profile(String username, boolean publicProfile) {
+            this(username, publicProfile, 0L, 0L, 0L);
+        }
+
+        public Profile(String username, boolean publicProfile, long following,
+                long followers, long videoCount) {
             this.username = username;
             this.publicProfile = publicProfile;
+            this.following = following;
+            this.followers = followers;
+            this.videoCount = videoCount;
         }
     }
 
@@ -47,7 +58,7 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
             if (!profile.publicProfile) {
                 return result(task, "deferred", phase, "profile_unavailable");
             }
-            if (mode == Mode.SHADOW) return result(task, "completed", phase, "shadow_observed");
+            if (mode == Mode.SHADOW) return profileResult(task, profile, phase, "shadow_observed");
             if (!(target.get("video_key") instanceof String)
                     || !(target.get("action") instanceof String)) {
                 return result(task, "deferred", phase, "missing_action_plan");
@@ -59,6 +70,28 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
             return result(task, "completed", "action_confirmed", "action_applied");
         } catch (Exception error) {
             return result(task, "deferred", phase, "executor_error");
+        }
+    }
+
+    private static DeviceTaskStore.Result profileResult(DeviceTaskStore.Task task,
+            Profile profile, String phase, String code) {
+        Map<String, Object> payload = new LinkedHashMap<String, Object>();
+        payload.put("lease_id", task.leaseId);
+        payload.put("state", "completed");
+        payload.put("phase", phase);
+        Map<String, Object> evidence = new LinkedHashMap<String, Object>();
+        evidence.put("code", code);
+        evidence.put("observed_username", profile.username);
+        evidence.put("access_state", profile.publicProfile ? "available" : "unavailable");
+        evidence.put("following", profile.following);
+        evidence.put("followers", profile.followers);
+        evidence.put("video_count", profile.videoCount);
+        payload.put("evidence", evidence);
+        try {
+            return new DeviceTaskStore.Result(
+                    task.taskId + ":" + phase, task.taskId, Protocol.encodeObject(payload));
+        } catch (Protocol.ProtocolException error) {
+            throw new IllegalStateException("result encoding failed");
         }
     }
 

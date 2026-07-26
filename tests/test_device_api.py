@@ -12,7 +12,9 @@ from tikpoc.rounds import create_exposure_round
 def repository(tmp_path: Path) -> AcquisitionRepository:
     tokens = iter(("token-one", "token-two", "token-three"))
     result = AcquisitionRepository(
-        tmp_path / "acquisition.db", token_factory=tokens.__next__
+        tmp_path / "acquisition.db",
+        clock_ms=lambda: 0,
+        token_factory=tokens.__next__,
     )
     result.migrate()
     return result
@@ -117,9 +119,20 @@ def test_mobile_claim_is_bounded_and_result_upload_is_idempotent(
         task_id=task.task_id,
         lease_id=task.lease_id,
         idempotency_key="result-1",
-        state="deferred",
-        phase="profile_opening",
-        evidence={"error_code": "network_lost"},
+        state="completed",
+        phase="identity_confirmed",
+        evidence={
+            "observed_username": "target_user",
+            "access_state": "available",
+            "following": 10,
+            "followers": 2,
+            "video_count": 4,
+        },
     )
     assert repo.record_mobile_result(result, now_ms=3_000) == "accepted"
     assert repo.record_mobile_result(result, now_ms=4_000) == "duplicate"
+    assignment = repo.assignment(task.assignment_id)
+    assert assignment.visit_confirmed_at_ms == 3_000
+    snapshot = repo.profile_snapshot(round_id, assignment.identity_key)
+    assert snapshot is not None
+    assert snapshot.observed_username == "target_user"

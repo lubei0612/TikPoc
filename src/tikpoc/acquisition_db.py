@@ -849,7 +849,50 @@ class AcquisitionRepository:
                 )
             except sqlite3.IntegrityError:
                 return "duplicate"
+        if result.phase == AssignmentPhase.IDENTITY_CONFIRMED.value:
+            self._apply_mobile_profile_result(result, now_ms=now_ms)
         return "accepted"
+
+    def _apply_mobile_profile_result(
+        self, result: MobileTaskResult, *, now_ms: int
+    ) -> None:
+        try:
+            assignment_id = int(result.task_id)
+            observed_username = str(result.evidence["observed_username"])
+            access_state = str(result.evidence["access_state"])
+            following = int(result.evidence["following"])
+            followers = int(result.evidence["followers"])
+            video_count = int(result.evidence["video_count"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("mobile profile evidence is incomplete") from error
+        if access_state != "available" or min(following, followers, video_count) < 0:
+            raise ValueError("mobile profile evidence is invalid")
+        assignment = self.assignment(assignment_id)
+        if assignment.device_id != result.device_id:
+            raise ValueError("mobile result device mismatch")
+        owner_id = f"mobile:{result.device_id}:{result.session_epoch}"
+        self.record_visit_confirmed(assignment_id, owner_id, now_ms=now_ms)
+        self.claim_snapshot_lease(
+            assignment.round_id,
+            assignment.identity_key,
+            assignment.device_id,
+            now_ms=now_ms,
+            ttl_ms=30_000,
+        )
+        self.publish_profile_snapshot(
+            assignment.round_id,
+            assignment.identity_key,
+            device_id=assignment.device_id,
+            observed_username=observed_username,
+            metrics=ProfileMetrics(
+                following=following,
+                followers=followers,
+                posts=video_count,
+            ),
+            private_account=False,
+            observed_at_ms=now_ms,
+            access_state=ProfileAccessState.PUBLIC,
+        )
 
     def claim_device_worker_lease(
         self,

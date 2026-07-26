@@ -44,7 +44,9 @@ public class AccessibilityUiAdapter implements AutonomousTaskExecutor.Ui {
         Map<String, Object> evidence = evidence(response);
         return new AutonomousTaskExecutor.Profile(
                 string(evidence, "username"),
-                "available".equals(string(evidence, "access_state")));
+                "available".equals(string(evidence, "access_state")),
+                number(evidence, "following"), number(evidence, "followers"),
+                number(evidence, "video_count"));
     }
 
     @Override
@@ -114,5 +116,10 @@ public class AccessibilityUiAdapter implements AutonomousTaskExecutor.Ui {
     private static String string(Map<String, Object> values, String key) {
         Object value = values.get(key);
         return value instanceof String ? (String) value : "";
+    }
+
+    private static long number(Map<String, Object> values, String key) {
+        Object value = values.get(key);
+        return value instanceof Long ? (Long) value : 0L;
     }
 }
