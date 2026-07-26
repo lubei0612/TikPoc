@@ -90,6 +90,8 @@ class FleetDevice:
     helper_device_port: int | None = None
     proxy_port: int | None = None
     startup_offset_ms: int = 0
+    provider: str = "myt"
+    provider_instance_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -102,6 +104,7 @@ class FleetConfig:
     relay_upstream_port: int
     relay_allowed_sources: frozenset[str]
     devices: tuple[FleetDevice, ...]
+    relay_source_probe_host: str = ""
 
     @classmethod
     def from_path(cls, path: Path) -> "FleetConfig":
@@ -109,16 +112,25 @@ class FleetConfig:
         if not isinstance(payload, dict):
             raise ValueError("fleet configuration must be a mapping")
         myt = payload.get("myt") or {}
+        network = payload.get("network") or {}
         relay = payload.get("proxy_relay") or {}
         raw_devices = payload.get("devices") or []
         if (
             not isinstance(myt, dict)
+            or not isinstance(network, dict)
             or not isinstance(relay, dict)
             or not isinstance(raw_devices, list)
         ):
             raise ValueError("fleet configuration sections are invalid")
-        myt_host = _configured_ip(myt.get("host"), "MYT host")
-        myt_sdk_port = _configured_port(myt.get("sdk_port"), 8000, "MYT SDK port")
+        legacy_myt = bool(myt)
+        myt_host = (
+            _configured_ip(myt.get("host"), "MYT host") if legacy_myt else ""
+        )
+        myt_sdk_port = (
+            _configured_port(myt.get("sdk_port"), 8000, "MYT SDK port")
+            if legacy_myt
+            else 0
+        )
         relay_bind_host = _configured_ip(relay.get("bind_host"), "relay bind host")
         relay_upstream_host = _configured_ip(
             relay.get("upstream_host", "127.0.0.1"),
@@ -130,6 +142,10 @@ class FleetConfig:
         )
         relay_upstream_port = _configured_port(
             relay.get("upstream_port"), 7897, "relay upstream port"
+        )
+        relay_source_probe_host = _configured_ip(
+            network.get("relay_source_probe_host", myt_host),
+            "relay source probe host",
         )
         if any(not isinstance(item, dict) for item in raw_devices):
             raise ValueError("device entry must be a mapping")
@@ -164,12 +180,22 @@ class FleetConfig:
                 startup_offset_ms=_configured_nonnegative_int(
                     item.get("startup_offset_ms"), 0, "startup offset"
                 ),
+                provider=str(
+                    item.get("provider") or ("myt" if legacy_myt else "vmos")
+                )
+                .strip()
+                .lower(),
+                provider_instance_id=str(
+                    item.get("provider_instance_id") or item.get("myt_slot") or ""
+                ).strip(),
             )
             for item in raw_devices
         )
         if not devices:
             raise ValueError("fleet must contain at least one device")
-        if any(device.myt_slot <= 0 for device in devices):
+        if any(
+            device.provider == "myt" and device.myt_slot <= 0 for device in devices
+        ):
             raise ValueError("MYT slot must be positive")
         for device in devices:
             _validate_adb_endpoint(device.adb_endpoint)
@@ -179,10 +205,16 @@ class FleetConfig:
                 _validate_appium_url(device.appium_url)
             elif device.helper_host_port is None or device.helper_device_port is None:
                 raise ValueError("device-side helper ports are required")
+        provider_instance_label = (
+            "MYT slot" if all(device.provider == "myt" for device in devices)
+            else "provider instance id"
+        )
         fields = {
             "device id": [device.device_id for device in devices],
             "account id": [device.account_id for device in devices],
-            "MYT slot": [device.myt_slot for device in devices],
+            provider_instance_label: [
+                device.provider_instance_id for device in devices
+            ],
             "ADB endpoint": [device.adb_endpoint for device in devices],
             "order seed": [device.order_seed for device in devices],
         }
@@ -195,6 +227,8 @@ class FleetConfig:
             device.backend == "appium" and not device.appium_url for device in devices
         ):
             raise ValueError("Appium URL is required")
+        if any(not device.provider for device in devices):
+            raise ValueError("device provider is required")
         helper_ports = [
             device.helper_host_port
             for device in devices
@@ -209,8 +243,9 @@ class FleetConfig:
             relay_bind_port=relay_bind_port,
             relay_upstream_host=relay_upstream_host,
             relay_upstream_port=relay_upstream_port,
-            relay_allowed_sources=frozenset({myt_host}),
+            relay_allowed_sources=frozenset({relay_source_probe_host}),
             devices=devices,
+            relay_source_probe_host=relay_source_probe_host,
         )
 
 

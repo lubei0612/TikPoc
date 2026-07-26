@@ -1,0 +1,54 @@
+myt:
+  host: 192.0.2.10
+  sdk_port: 8000
+
+proxy_relay:
+  bind_host: 192.0.2.20
+  bind_port: 7898
+  upstream_host: 127.0.0.1
+  upstream_port: 7897
+
+devices:
+  - device_id: phone-01
+    account_id: account-01
+    myt_slot: 1
+    adb_endpoint: 192.0.2.10:30000
+    appium_url: http://127.0.0.1:4723
+    order_seed: replace-with-unique-seed-01
+    backend: appium
+  - device_id: phone-02
+    account_id: account-02
+    myt_slot: 2
+    adb_endpoint: 192.0.2.10:30100
+    appium_url: http://127.0.0.1:4723
+    order_seed: replace-with-unique-seed-02
+  - device_id: phone-03
+    account_id: account-03
+    myt_slot: 3
+    adb_endpoint: 192.0.2.10:30200
+    appium_url: http://127.0.0.1:4723
+    order_seed: replace-with-unique-seed-03
+  - device_id: phone-04
+    account_id: account-04
+    myt_slot: 4
+    adb_endpoint: 192.0.2.10:30300
+    appium_url: http://127.0.0.1:4723
+    order_seed: replace-with-unique-seed-04
+  - device_id: phone-05
+    account_id: account-05
+    myt_slot: 5
+    adb_endpoint: 192.0.2.10:30400
+    appium_url: http://127.0.0.1:4723
+    order_seed: replace-with-unique-seed-05
+  - device_id: phone-06
+    account_id: account-06
+    myt_slot: 6
+    adb_endpoint: 192.0.2.10:30500
+    appium_url: http://127.0.0.1:4723
+    order_seed: replace-with-unique-seed-06
+  - device_id: phone-07
+    account_id: account-07
+    myt_slot: 7
+    adb_endpoint: 192.0.2.10:30600
+    appium_url: http://127.0.0.1:4723
+    order_seed: replace-with-unique-seed-07

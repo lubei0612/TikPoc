@@ -90,7 +90,9 @@ class ProxyGuard:
         proxy_host = None
         if legacy_devices:
             try:
-                proxy_host = self.source_address(self.config.myt_host)
+                proxy_host = self.source_address(
+                    self.config.relay_source_probe_host
+                )
             except (OSError, ValueError):
                 proxy_host = None
         default_proxy_port = self.config.relay_upstream_port

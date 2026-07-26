@@ -1,6 +1,8 @@
-myt:
-  host: 192.0.2.10
-  sdk_port: 8000
+# Production VMOS fleet. Secrets and live endpoints belong in an ignored local file.
+network:
+  # Used only by the legacy host-relay proxy guard. VMOS instances normally use
+  # their own device VPN/proxy configuration.
+  relay_source_probe_host: 192.0.2.20
 
 proxy_relay:
   bind_host: 192.0.2.20
@@ -9,46 +11,22 @@ proxy_relay:
   upstream_port: 7897
 
 devices:
-  - device_id: phone-01
+  - device_id: vmos-01
     account_id: account-01
-    myt_slot: 1
-    adb_endpoint: 192.0.2.10:30000
-    appium_url: http://127.0.0.1:4723
+    provider: vmos
+    provider_instance_id: ACP-SYNTHETIC-01
+    backend: device-side
+    adb_endpoint: 127.0.0.1:54178
+    helper_host_port: 47101
+    helper_device_port: 47101
     order_seed: replace-with-unique-seed-01
-    backend: appium
-  - device_id: phone-02
+
+  - device_id: vmos-02
     account_id: account-02
-    myt_slot: 2
-    adb_endpoint: 192.0.2.10:30100
-    appium_url: http://127.0.0.1:4723
+    provider: vmos
+    provider_instance_id: ACP-SYNTHETIC-02
+    backend: device-side
+    adb_endpoint: 127.0.0.1:58659
+    helper_host_port: 47102
+    helper_device_port: 47101
     order_seed: replace-with-unique-seed-02
-  - device_id: phone-03
-    account_id: account-03
-    myt_slot: 3
-    adb_endpoint: 192.0.2.10:30200
-    appium_url: http://127.0.0.1:4723
-    order_seed: replace-with-unique-seed-03
-  - device_id: phone-04
-    account_id: account-04
-    myt_slot: 4
-    adb_endpoint: 192.0.2.10:30300
-    appium_url: http://127.0.0.1:4723
-    order_seed: replace-with-unique-seed-04
-  - device_id: phone-05
-    account_id: account-05
-    myt_slot: 5
-    adb_endpoint: 192.0.2.10:30400
-    appium_url: http://127.0.0.1:4723
-    order_seed: replace-with-unique-seed-05
-  - device_id: phone-06
-    account_id: account-06
-    myt_slot: 6
-    adb_endpoint: 192.0.2.10:30500
-    appium_url: http://127.0.0.1:4723
-    order_seed: replace-with-unique-seed-06
-  - device_id: phone-07
-    account_id: account-07
-    myt_slot: 7
-    adb_endpoint: 192.0.2.10:30600
-    appium_url: http://127.0.0.1:4723
-    order_seed: replace-with-unique-seed-07

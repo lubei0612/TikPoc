@@ -1,7 +1,7 @@
-from pathlib import Path
 import sqlite3
 import threading
 import time
+from pathlib import Path
 
 import pytest
 import yaml
@@ -34,6 +34,48 @@ devices:
         encoding="utf-8",
     )
     return path
+
+
+def test_fleet_parses_vmos_without_legacy_myt_fields(tmp_path: Path) -> None:
+    path = tmp_path / "devices.yaml"
+    path.write_text(
+        """
+network:
+  relay_source_probe_host: 192.0.2.20
+proxy_relay:
+  bind_host: 192.0.2.20
+  bind_port: 7898
+  upstream_host: 127.0.0.1
+  upstream_port: 7897
+devices:
+  - device_id: vmos-01
+    account_id: account-01
+    provider: vmos
+    provider_instance_id: ACP-SYNTHETIC-01
+    backend: device-side
+    adb_endpoint: 127.0.0.1:54178
+    helper_host_port: 47101
+    helper_device_port: 47101
+    order_seed: seed-a
+""",
+        encoding="utf-8",
+    )
+
+    config = FleetConfig.from_path(path)
+
+    assert config.relay_source_probe_host == "192.0.2.20"
+    assert config.devices[0].provider == "vmos"
+    assert config.devices[0].provider_instance_id == "ACP-SYNTHETIC-01"
+
+
+def test_committed_device_example_is_vmos_native() -> None:
+    path = Path(__file__).parents[1] / "config" / "devices.example.yaml"
+    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+
+    assert "myt" not in payload
+    assert all("myt_slot" not in device for device in payload["devices"])
+    assert all(device["provider"] == "vmos" for device in payload["devices"])
+    FleetConfig.from_path(path)
 
 
 def test_fleet_requires_unique_device_account_slot_endpoint_and_seed(
