@@ -22,6 +22,7 @@ public final class TouchCommandDispatcherTest {
         searchAcceptsAnAlreadyLoadedExactProfile();
         searchNoMatchIsTerminalEvidence();
         actionClicksOnceAndVerifiesResult();
+        actionWaitsPastAStalePostClickSnapshot();
         alreadySelectedActionIsConfirmedWithoutClick();
         repostUsesShareSurfaceAndVerifiesResult();
         missingFinalEvidenceIsUncertainWithoutSecondClick();
@@ -199,6 +200,21 @@ public final class TouchCommandDispatcherTest {
         check(evidence.get("before").equals("off"), "before");
         check(evidence.get("after").equals("on"), "after");
         check(evidence.get("control_resource_id").equals("like_button"), "control");
+    }
+
+    private static void actionWaitsPastAStalePostClickSnapshot() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.source.snapshots = Arrays.asList(
+                actionSnapshot(false, 1),
+                actionSnapshot(false, 1),
+                actionSnapshot(true, 2));
+
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("apply_action", map("action", "like")));
+
+        check(response.values.get("status").equals("ok"), "delayed action verified");
+        check(fixture.actuator.clicks == 1, "delayed action clicked once");
+        check(fixture.source.index == 3, "stale action snapshot polled once");
     }
 
     private static void alreadySelectedActionIsConfirmedWithoutClick() throws Exception {

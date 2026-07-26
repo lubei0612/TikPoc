@@ -133,21 +133,26 @@ public final class TouchCommandDispatcher {
         if (!actuator.click(control)) {
             return Protocol.Response.error(request, "click_rejected", "control rejected click");
         }
-        SemanticSnapshot after = snapshots.current();
+        SemanticSnapshot after = before;
         Map<String, Object> evidence = new LinkedHashMap<String, Object>();
         evidence.put("action", action);
         evidence.put("before", beforeState);
         evidence.put("control_resource_id", control.resourceId);
-        try {
-            String afterState = TikTokSemantics.actionState(
-                    TikTokSemantics.uniqueControl(after, action));
-            evidence.put("after", afterState);
-            if (after.eventSequence > before.eventSequence && !afterState.equals(beforeState)) {
-                return success(request, startedAt, after, evidence);
+        for (int attempt = 0; attempt < 5; attempt++) {
+            after = snapshots.awaitAfter(after.eventSequence, 400L);
+            try {
+                String afterState = TikTokSemantics.actionState(
+                        TikTokSemantics.uniqueControl(after, action));
+                evidence.put("after", afterState);
+                if (after.eventSequence > before.eventSequence
+                        && !afterState.equals(beforeState)) {
+                    return success(request, startedAt, after, evidence);
+                }
+            } catch (TikTokSemantics.SemanticException missingFinalEvidence) {
+                evidence.put("after", "unknown");
             }
-        } catch (TikTokSemantics.SemanticException missingFinalEvidence) {
-            evidence.put("after", "unknown");
         }
+        if (!evidence.containsKey("after")) evidence.put("after", "unknown");
         return Protocol.Response.uncertain(
                 request, elapsed(startedAt), surface.packageName(), surface.activityName(),
                 after.eventSequence,
