@@ -1,5 +1,8 @@
 # MYT Proxy Guard Implementation Plan
 
+> **历史文档：** MYT 已退出当前生产运行。本文只保留为实测、回滚和兼容证据；新设备与任务使用 VMOS 自主 HTTPS APK 路径。
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Keep every configured MYT device on the existing Clash Verge subscription by continuously reconciling the Mac LAN endpoint and Android global proxy state.

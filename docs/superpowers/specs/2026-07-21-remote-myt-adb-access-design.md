@@ -1,5 +1,8 @@
 # Remote MYT ADB Access Design
 
+> **历史文档：** MYT 已退出当前生产运行。本文只保留为实测、回滚和兼容证据；新设备与任务使用 VMOS 自主 HTTPS APK 路径。
+
+
 **Date:** 2026-07-21  
 **Status:** Implemented through remote Fleet canary; independent-network handoff remains  
 **Scope:** Keep TikPoc running when the operator Mac leaves the MYT LAN

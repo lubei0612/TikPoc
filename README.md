@@ -24,7 +24,7 @@ CSV / live collector
         │                 │                  │
         └─────────────────┴──────────────────┘
                           ▼
-              Mobile Fleet / Appium
+          VMOS Fleet / Autonomous APK
               device ↔ account (1:1)
                           │
                           ▼
@@ -66,9 +66,12 @@ CSV / live collector
 
 - Python 3.12+
 - [`uv`](https://docs.astral.sh/uv/)
-- Node.js（Chrome 扩展测试与 Appium）
+- Node.js（Chrome 扩展测试）
 - Android SDK Platform Tools / ADB
-- Appium 3 与 UiAutomator2 Driver
+- VMOS 账号与 OpenAPI 配置
+
+生产移动执行不要求 Mac、ADB 或 Appium 常驻。APK 通过 HTTPS 主动拉取任务；
+ADB 只用于首次安装、升级和故障诊断。MYT/Appium 配置只保留为历史兼容。
 
 ## 安装
 
@@ -78,7 +81,6 @@ cd TikPoc
 
 uv sync --extra test
 npm install
-npm run appium -- --version
 ```
 
 检查 CLI：
@@ -100,10 +102,14 @@ cp config/web-accounts.example.yaml config/web-accounts.yaml
 
 ```yaml
 devices:
-  - device_id: device-01
+  - device_id: vmos-01
     account_id: account-01
-    adb_endpoint: HOST:PORT
-    appium_url: http://127.0.0.1:4723
+    provider: vmos
+    provider_instance_id: ACP-SYNTHETIC-01
+    backend: device-side
+    adb_endpoint: 127.0.0.1:PORT
+    helper_host_port: 47101
+    helper_device_port: 47101
 ```
 
 实际字段以 [`config/devices.example.yaml`](config/devices.example.yaml) 为准。账号凭据、代理订阅、API Key、Cookie、数据库和真实目标文件都应保存在本地忽略文件中。
@@ -127,21 +133,19 @@ uv run tikpoc round-create \
   --starts-at 2026-07-23T20:00:00+08:00
 ```
 
-### 2. 启动 Appium 与设备任务
+### 2. 启动服务端与自主设备任务
 
 ```bash
-export ANDROID_HOME="$HOME/Library/Android/sdk"
-export ANDROID_SDK_ROOT="$ANDROID_HOME"
-
-npm run appium
-
-uv run tikpoc fleet-run \
+export TIKPOC_MOBILE_BOOTSTRAP_TOKEN='LOCAL_SECRET'
+uv run tikpoc dashboard \
   --db runtime/tikpoc.db \
-  --round ROUND_ID \
-  --devices config/devices.yaml
+  --host 127.0.0.1 \
+  --port 8765
 ```
 
-多 Appium 实例应使用不同端口，并在设备配置中分别指定，避免所有设备共享单个命令队列。
+安装并一次性配置 APK 后，每台 VMOS 设备独立注册、拉取、保存断点和回传结果。
+生产部署步骤见 [VMOS 自主执行手册](docs/runbooks/vmos-device-side-touch.md)。
+`fleet-run` 是旧 Appium 兼容入口，不是新的生产启动方式。
 
 ### 3. 导入直播兴趣用户插队批次
 
@@ -178,8 +182,8 @@ uv run tikpoc dashboard \
 
 容量推广门槛：
 
-- 单设备平均耗时低于 `6.5 s/target`；
-- 单设备 p90 低于 `8.64 s/target`；
+- 完整目标混合下单设备总体平均不高于 `8.64 s/target`；
+- p50、p90 和各动作耗时作为诊断指标单独报告；
 - 身份、路由、动作核验和 N/N 覆盖检查全部通过；
 - 使用长时间实机数据报告吞吐，不用短时合成测试代替。
 
@@ -199,7 +203,8 @@ git diff --check
 ## 文档导航
 
 - [业务逻辑](docs/tikpoc-business-logic.md)
-- [移动设备运行手册](docs/mobile-fleet-runbook.md)
+- [VMOS 自主执行手册](docs/runbooks/vmos-device-side-touch.md)
+- [历史移动 Fleet 手册](docs/mobile-fleet-runbook.md)
 - [策略 A/B](docs/acquisition-strategy-a-b.md)
 - [直播插队 CLI](docs/priority-live-batch-cli.md)
 - [运营控制台](docs/operator-console-runbook.md)
