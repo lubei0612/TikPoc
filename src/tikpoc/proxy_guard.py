@@ -87,12 +87,13 @@ class ProxyGuard:
             for device in self.config.devices
             if device_states[device.device_id] == ("device", None)
         )
+        relay_probe_host = (
+            self.config.relay_source_probe_host or self.config.myt_host
+        )
         proxy_host = None
-        if legacy_devices:
+        if legacy_devices and relay_probe_host:
             try:
-                proxy_host = self.source_address(
-                    self.config.relay_source_probe_host
-                )
+                proxy_host = self.source_address(relay_probe_host)
             except (OSError, ValueError):
                 proxy_host = None
         default_proxy_port = self.config.relay_upstream_port

@@ -131,7 +131,9 @@ class FleetConfig:
             if legacy_myt
             else 0
         )
-        relay_bind_host = _configured_ip(relay.get("bind_host"), "relay bind host")
+        relay_bind_host = _configured_ip(
+            relay.get("bind_host", "127.0.0.1"), "relay bind host"
+        )
         relay_upstream_host = _configured_ip(
             relay.get("upstream_host", "127.0.0.1"),
             "relay upstream host",
@@ -143,9 +145,11 @@ class FleetConfig:
         relay_upstream_port = _configured_port(
             relay.get("upstream_port"), 7897, "relay upstream port"
         )
-        relay_source_probe_host = _configured_ip(
-            network.get("relay_source_probe_host", myt_host),
-            "relay source probe host",
+        raw_probe_host = network.get("relay_source_probe_host", myt_host)
+        relay_source_probe_host = (
+            _configured_ip(raw_probe_host, "relay source probe host")
+            if str(raw_probe_host or "").strip()
+            else ""
         )
         if any(not isinstance(item, dict) for item in raw_devices):
             raise ValueError("device entry must be a mapping")
@@ -243,7 +247,11 @@ class FleetConfig:
             relay_bind_port=relay_bind_port,
             relay_upstream_host=relay_upstream_host,
             relay_upstream_port=relay_upstream_port,
-            relay_allowed_sources=frozenset({relay_source_probe_host}),
+            relay_allowed_sources=(
+                frozenset({relay_source_probe_host})
+                if relay_source_probe_host
+                else frozenset()
+            ),
             devices=devices,
             relay_source_probe_host=relay_source_probe_host,
         )

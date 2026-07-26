@@ -1,15 +1,4 @@
 # Production VMOS fleet. Secrets and live endpoints belong in an ignored local file.
-network:
-  # Used only by the legacy host-relay proxy guard. VMOS instances normally use
-  # their own device VPN/proxy configuration.
-  relay_source_probe_host: 192.0.2.20
-
-proxy_relay:
-  bind_host: 192.0.2.20
-  bind_port: 7898
-  upstream_host: 127.0.0.1
-  upstream_port: 7897
-
 devices:
   - device_id: vmos-01
     account_id: account-01

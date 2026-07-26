@@ -40,13 +40,6 @@ def test_fleet_parses_vmos_without_legacy_myt_fields(tmp_path: Path) -> None:
     path = tmp_path / "devices.yaml"
     path.write_text(
         """
-network:
-  relay_source_probe_host: 192.0.2.20
-proxy_relay:
-  bind_host: 192.0.2.20
-  bind_port: 7898
-  upstream_host: 127.0.0.1
-  upstream_port: 7897
 devices:
   - device_id: vmos-01
     account_id: account-01
@@ -63,7 +56,7 @@ devices:
 
     config = FleetConfig.from_path(path)
 
-    assert config.relay_source_probe_host == "192.0.2.20"
+    assert config.relay_source_probe_host == ""
     assert config.devices[0].provider == "vmos"
     assert config.devices[0].provider_instance_id == "ACP-SYNTHETIC-01"
 
