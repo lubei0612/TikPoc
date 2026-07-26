@@ -99,6 +99,10 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
                 return actionResult(task, target, "action_reconciling",
                         error.code, "uncertain", "action_executing");
             }
+            if ("action_reconciling".equals(phase) && target != null) {
+                return actionResult(task, target, "action_reconciling",
+                        error.code, "deferred");
+            }
             return result(task, "deferred", phase, error.code);
         } catch (Exception error) {
             return result(task, "deferred", phase, "executor_error");

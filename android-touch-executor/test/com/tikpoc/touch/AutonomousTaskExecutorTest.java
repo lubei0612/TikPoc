@@ -12,6 +12,7 @@ public final class AutonomousTaskExecutorTest {
         preservesDeviceEvidenceErrorCode();
         activeModeVerifiesVideoAndAction();
         actionFailureUsesActionPhaseIdempotencyKey();
+        reconciliationFailureRetainsActionPlan();
         System.out.println("AutonomousTaskExecutorTest PASS");
     }
 
@@ -54,6 +55,28 @@ public final class AutonomousTaskExecutorTest {
                 "action evidence failure enters reconciliation");
         check(result.payload.contains("\"plan_id\":42"),
                 "action evidence failure retains its immutable plan");
+    }
+
+    private static void reconciliationFailureRetainsActionPlan() throws Exception {
+        FakeUi ui = new FakeUi("target_user", true);
+        ui.reconciliationError = new AccessibilityUiAdapter.UiException(
+                "missing_control");
+        AutonomousTaskExecutor executor = new AutonomousTaskExecutor(ui,
+                AutonomousTaskExecutor.Mode.ACTIVE);
+        DeviceTaskStore.Task task = new DeviceTaskStore.Task(
+                "task-reconcile", "lease-reconcile", 7L, 9_000L,
+                "action_reconciling",
+                "{\"username\":\"target_user\",\"plan_id\":43,"
+                + "\"video_key\":\"video-1\",\"action\":\"repost\"}");
+
+        DeviceTaskStore.Result result = executor.execute(task);
+
+        check(result.idempotencyKey.equals("task-reconcile:action_reconciling"),
+                "reconciliation failure has reconciliation idempotency key");
+        check(result.payload.contains("\"state\":\"deferred\""),
+                "reconciliation failure is terminal after one read");
+        check(result.payload.contains("\"plan_id\":43"),
+                "reconciliation failure retains its immutable plan");
     }
 
     private static void shadowModeConfirmsIdentityWithoutAction() throws Exception {
@@ -144,6 +167,7 @@ public final class AutonomousTaskExecutorTest {
         int videos;
         RuntimeException observeError;
         RuntimeException actionError;
+        RuntimeException reconciliationError;
 
         FakeUi(String observedUsername, boolean publicProfile) {
             this.observedUsername = observedUsername;
@@ -170,7 +194,10 @@ public final class AutonomousTaskExecutorTest {
         }
 
         @Override
-        public boolean observeAction(String action) { return true; }
+        public boolean observeAction(String action) {
+            if (reconciliationError != null) throw reconciliationError;
+            return true;
+        }
     }
 
     private static void check(boolean condition, String label) {
