@@ -67,7 +67,7 @@ public final class AutonomousTaskRunner {
             state = State.HEALTHY;
         } catch (Exception error) {
             consecutiveFailures++;
-            state = consecutiveFailures >= 2 ? State.PAUSED : State.DEGRADED;
+            state = State.DEGRADED;
         }
         return state;
     }

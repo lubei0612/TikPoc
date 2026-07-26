@@ -7,7 +7,7 @@ public final class AutonomousTaskRunnerTest {
     public static void main(String[] args) throws Exception {
         pullsTasksAndFlushesIdempotentOutbox();
         executesOnePersistedTaskAndQueuesResult();
-        opensCircuitAfterTwoConsecutiveFailures();
+        transientFailuresRemainDegradedAndRecover();
         System.out.println("AutonomousTaskRunnerTest PASS");
     }
 
@@ -44,7 +44,7 @@ public final class AutonomousTaskRunnerTest {
         check(store.next(7L, 1_000L).taskId.equals("task-1"), "task persisted");
     }
 
-    private static void opensCircuitAfterTwoConsecutiveFailures() throws Exception {
+    private static void transientFailuresRemainDegradedAndRecover() throws Exception {
         FakeClient client = new FakeClient();
         client.fail = true;
         AutonomousTaskRunner runner = new AutonomousTaskRunner(
@@ -53,9 +53,12 @@ public final class AutonomousTaskRunnerTest {
 
         check(runner.runOnce(1_000L) == AutonomousTaskRunner.State.DEGRADED,
                 "first failure degraded");
-        check(runner.runOnce(2_000L) == AutonomousTaskRunner.State.PAUSED,
-                "second failure paused");
-        check(client.pulls == 0, "no claim after failed heartbeat");
+        check(runner.runOnce(2_000L) == AutonomousTaskRunner.State.DEGRADED,
+                "repeated transient failure stays retryable");
+        client.fail = false;
+        check(runner.runOnce(3_000L) == AutonomousTaskRunner.State.HEALTHY,
+                "network recovery resumes work");
+        check(client.pulls == 1, "claims resume after recovery");
     }
 
     private static final class FakeClient implements AutonomousTaskRunner.Client {
