@@ -4,11 +4,32 @@ import java.util.List;
 
 public final class DeviceApiClientTest {
     public static void main(String[] args) throws Exception {
+        registersAndReturnsScopedSession();
         requiresHttpsBaseUrl();
         pullsTypedTasksWithBearerAuthentication();
         postsHeartbeatAndIdempotentResult();
         redactsTokenFromTransportErrors();
         System.out.println("DeviceApiClientTest PASS");
+    }
+
+    private static void registersAndReturnsScopedSession() throws Exception {
+        RecordingExchange exchange = new RecordingExchange();
+        exchange.response = new DeviceApiClient.HttpResponse(200,
+                "{\"device_id\":\"device-1\",\"account_id\":\"account-1\","
+                + "\"session_epoch\":2,\"access_token\":\"scoped-token\"}");
+
+        DeviceApiClient.Registration registration = DeviceApiClient.register(
+                "https://api.example.test/root", "device-1", "account-1",
+                "bootstrap-token", exchange);
+
+        check(registration.deviceId.equals("device-1"), "registration device");
+        check(registration.accountId.equals("account-1"), "registration account");
+        check(registration.sessionEpoch == 2L, "registration epoch");
+        check(registration.accessToken.equals("scoped-token"), "registration token");
+        check(exchange.path.equals("/api/mobile/register"), "registration path");
+        check(exchange.bearer.equals("bootstrap-token"), "registration bearer");
+        check(exchange.baseUrl.equals("https://api.example.test/root"),
+                "registration base URL");
     }
 
     private static void postsHeartbeatAndIdempotentResult() throws Exception {
@@ -77,6 +98,7 @@ public final class DeviceApiClientTest {
     }
 
     private static final class RecordingExchange implements DeviceApiClient.Exchange {
+        String baseUrl = "";
         String path = "";
         String bearer = "";
         String body = "";
@@ -86,6 +108,7 @@ public final class DeviceApiClientTest {
         @Override
         public DeviceApiClient.HttpResponse post(
                 String baseUrl, String path, String bearer, String body) throws Exception {
+            this.baseUrl = baseUrl;
             this.path = path;
             this.bearer = bearer;
             this.body = body;

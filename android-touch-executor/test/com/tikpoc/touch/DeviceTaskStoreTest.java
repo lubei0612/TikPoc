@@ -7,7 +7,19 @@ public final class DeviceTaskStoreTest {
         skipsExpiredAndStaleTasks();
         checkpointsSurviveStoreRecreation();
         collapsesDuplicateOutboxResults();
+        explicitReprovisioningClearsQueueAndOutbox();
         System.out.println("DeviceTaskStoreTest PASS");
+    }
+
+    private static void explicitReprovisioningClearsQueueAndOutbox() {
+        DeviceTaskStore store = new DeviceTaskStore(new DeviceTaskStore.MemoryBackend());
+        store.enqueue(task("task-1", 7L, 1_000L));
+        store.enqueueResult(new DeviceTaskStore.Result("result-1", "task-1", "{}"));
+
+        store.clear();
+
+        check(store.next(7L, 1L) == null, "queue cleared");
+        check(store.pendingResults().isEmpty(), "outbox cleared");
     }
 
     private static void skipsExpiredAndStaleTasks() throws Exception {

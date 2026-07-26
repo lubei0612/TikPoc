@@ -90,14 +90,16 @@ public final class TikPocAccessibilityService extends AccessibilityService
                     settings.sessionEpoch, new DeviceApiClient.HttpsExchange());
             AccessibilityUiAdapter ui = new AccessibilityUiAdapter(
                     settings.deviceId, settings.accountId, settings.sessionEpoch,
-                    elapsedRealtimeMs(), dispatcher::dispatch);
+                    this::elapsedRealtimeMs, dispatcher::dispatch);
             AutonomousTaskExecutor executor = new AutonomousTaskExecutor(
-                    ui, AutonomousTaskExecutor.Mode.SHADOW);
+                    ui, settings.workerMode == DeviceProvisioning.WorkerMode.ACTIVE
+                            ? AutonomousTaskExecutor.Mode.ACTIVE
+                            : AutonomousTaskExecutor.Mode.SHADOW);
             AutonomousTaskRunner runner = new AutonomousTaskRunner(
                     client, store, settings.roundId, settings.sessionEpoch, executor);
             autonomousThread = new Thread(() -> {
                 while (!Thread.currentThread().isInterrupted()) {
-                    AutonomousTaskRunner.State state = runner.runOnce(elapsedRealtimeMs());
+                    AutonomousTaskRunner.State state = runner.runOnce(System.currentTimeMillis());
                     if (state == AutonomousTaskRunner.State.PAUSED) return;
                     try {
                         Thread.sleep(1_000L);

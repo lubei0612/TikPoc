@@ -10,6 +10,7 @@ public final class AndroidProvisioningStore implements DeviceProvisioning.Store 
     private static final String ACCOUNT_ID = "account_id";
     private static final String ROUND_ID = "round_id";
     private static final String SESSION_EPOCH = "session_epoch";
+    private static final String WORKER_MODE = "worker_mode";
     private final SharedPreferences preferences;
 
     public AndroidProvisioningStore(Context context) {
@@ -18,7 +19,9 @@ public final class AndroidProvisioningStore implements DeviceProvisioning.Store 
     }
 
     public static String[] preferenceKeys() {
-        return new String[] {BASE_URL, DEVICE_ID, ACCOUNT_ID, ROUND_ID, SESSION_EPOCH};
+        return new String[] {
+            BASE_URL, DEVICE_ID, ACCOUNT_ID, ROUND_ID, SESSION_EPOCH, WORKER_MODE
+        };
     }
 
     @Override
@@ -29,6 +32,7 @@ public final class AndroidProvisioningStore implements DeviceProvisioning.Store 
                 .putString(ACCOUNT_ID, settings.accountId)
                 .putString(ROUND_ID, settings.roundId)
                 .putLong(SESSION_EPOCH, settings.sessionEpoch)
+                .putString(WORKER_MODE, settings.workerMode.name())
                 .commit()) {
             throw new IllegalStateException("device settings persistence failed");
         }
@@ -44,6 +48,8 @@ public final class AndroidProvisioningStore implements DeviceProvisioning.Store 
                 preferences.getString(ACCOUNT_ID, ""),
                 preferences.getString(ROUND_ID, ""),
                 preferences.getLong(SESSION_EPOCH, 0L),
+                DeviceProvisioning.WorkerMode.valueOf(
+                        preferences.getString(WORKER_MODE, "SHADOW")),
                 "");
     }
 }

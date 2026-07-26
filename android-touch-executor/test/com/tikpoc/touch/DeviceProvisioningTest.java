@@ -4,6 +4,8 @@ public final class DeviceProvisioningTest {
     public static void main(String[] args) throws Exception {
         rejectsCleartextApi();
         storesScopedTokenOnlyInVault();
+        defaultsToShadowMode();
+        persistsActiveMode();
         androidPreferencesExcludeTokenMaterial();
         System.out.println("DeviceProvisioningTest PASS");
     }
@@ -42,6 +44,30 @@ public final class DeviceProvisioningTest {
         check(settings.roundId.equals("round-1"), "round restored");
     }
 
+    private static void defaultsToShadowMode() throws Exception {
+        MemoryStore store = new MemoryStore();
+        MemoryVault vault = new MemoryVault();
+
+        DeviceProvisioning.save(
+                store, vault, "https://api.example.test", "device-1", "account-1",
+                "round-1", 7L, "scoped-token");
+
+        check(DeviceProvisioning.load(store, vault).workerMode
+                == DeviceProvisioning.WorkerMode.SHADOW, "shadow is default");
+    }
+
+    private static void persistsActiveMode() throws Exception {
+        MemoryStore store = new MemoryStore();
+        MemoryVault vault = new MemoryVault();
+
+        DeviceProvisioning.save(
+                store, vault, "https://api.example.test", "device-1", "account-1",
+                "round-1", 7L, DeviceProvisioning.WorkerMode.ACTIVE, "scoped-token");
+
+        check(DeviceProvisioning.load(store, vault).workerMode
+                == DeviceProvisioning.WorkerMode.ACTIVE, "active mode restored");
+    }
+
     private static final class MemoryStore implements DeviceProvisioning.Store {
         DeviceProvisioning.Settings settings;
         String tokenMaterial;
@@ -50,7 +76,7 @@ public final class DeviceProvisioningTest {
         public void save(DeviceProvisioning.Settings value) {
             settings = new DeviceProvisioning.Settings(
                     value.baseUrl, value.deviceId, value.accountId,
-                    value.roundId, value.sessionEpoch, "");
+                    value.roundId, value.sessionEpoch, value.workerMode, "");
         }
 
         @Override

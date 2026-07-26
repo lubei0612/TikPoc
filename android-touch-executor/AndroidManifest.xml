@@ -6,6 +6,10 @@
         android:allowBackup="false"
         android:label="TikPoc Touch Executor"
         android:usesCleartextTraffic="true">
+        <activity
+            android:name=".ProvisioningActivity"
+            android:exported="false"
+            android:excludeFromRecents="true" />
         <service
             android:name=".TikPocAccessibilityService"
             android:exported="true"

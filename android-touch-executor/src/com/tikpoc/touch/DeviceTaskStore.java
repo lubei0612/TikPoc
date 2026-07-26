@@ -14,6 +14,7 @@ public final class DeviceTaskStore {
         void saveResult(Result result);
         List<Result> loadResults();
         void deleteResult(String idempotencyKey);
+        void clear();
     }
 
     public static final class Task {
@@ -113,6 +114,10 @@ public final class DeviceTaskStore {
         backend.deleteResult(idempotencyKey);
     }
 
+    public synchronized void clear() {
+        backend.clear();
+    }
+
     public synchronized int queueDepth(long sessionEpoch, long nowMs) {
         int count = 0;
         for (Task task : backend.loadTasks()) {
@@ -142,5 +147,11 @@ public final class DeviceTaskStore {
 
         @Override
         public void deleteResult(String idempotencyKey) { results.remove(idempotencyKey); }
+
+        @Override
+        public void clear() {
+            tasks.clear();
+            results.clear();
+        }
     }
 }

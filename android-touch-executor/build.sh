@@ -29,6 +29,7 @@ mkdir -p "$OUT/classes" "$OUT/test-classes" "$OUT/dex" "$OUT/compiled-res"
   "$ROOT/src/com/tikpoc/touch/DeviceProvisioning.java" \
   "$ROOT/src/com/tikpoc/touch/AndroidProvisioningStore.java" \
   "$ROOT/src/com/tikpoc/touch/AndroidTokenVault.java" \
+  "$ROOT/src/com/tikpoc/touch/ProvisioningActivity.java" \
   "$ROOT/src/com/tikpoc/touch/AutonomousTaskRunner.java" \
   "$ROOT/src/com/tikpoc/touch/AutonomousTaskExecutor.java" \
   "$ROOT/src/com/tikpoc/touch/AccessibilityUiAdapter.java" \

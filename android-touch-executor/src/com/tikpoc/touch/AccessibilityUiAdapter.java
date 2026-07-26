@@ -7,6 +7,10 @@ import java.util.List;
 import java.util.UUID;
 
 public class AccessibilityUiAdapter implements AutonomousTaskExecutor.Ui {
+    public interface ElapsedClock {
+        long nowMs();
+    }
+
     public interface Invoker {
         Protocol.Response invoke(Protocol.Request request) throws Exception;
     }
@@ -14,16 +18,22 @@ public class AccessibilityUiAdapter implements AutonomousTaskExecutor.Ui {
     private final String deviceId;
     private final String accountId;
     private final long fenceToken;
-    private final long nowMs;
+    private final ElapsedClock clock;
     private final Invoker invoker;
     private Map<String, Object> target = new LinkedHashMap<String, Object>();
 
     public AccessibilityUiAdapter(String deviceId, String accountId, long fenceToken,
             long nowMs, Invoker invoker) {
+        this(deviceId, accountId, fenceToken, () -> nowMs, invoker);
+    }
+
+    public AccessibilityUiAdapter(String deviceId, String accountId, long fenceToken,
+            ElapsedClock clock, Invoker invoker) {
         this.deviceId = deviceId;
         this.accountId = accountId;
         this.fenceToken = fenceToken;
-        this.nowMs = nowMs;
+        if (clock == null) throw new IllegalArgumentException("clock required");
+        this.clock = clock;
         this.invoker = invoker;
     }
 
@@ -88,6 +98,7 @@ public class AccessibilityUiAdapter implements AutonomousTaskExecutor.Ui {
         values.put("fence_token", fenceToken);
         values.put("assignment_id", assignmentId());
         values.put("phase", phase);
+        long nowMs = clock.nowMs();
         values.put("deadline_elapsed_ms", nowMs + 10_000L);
         values.put("arguments", arguments);
         Protocol.Request request = Protocol.parseRequest(Protocol.encodeObject(values), nowMs);
@@ -131,6 +142,6 @@ public class AccessibilityUiAdapter implements AutonomousTaskExecutor.Ui {
 
     private static long number(Map<String, Object> values, String key) {
         Object value = values.get(key);
-        return value instanceof Long ? (Long) value : 0L;
+        return value instanceof Number ? ((Number) value).longValue() : 0L;
     }
 }

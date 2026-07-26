@@ -99,6 +99,19 @@ public final class AndroidTaskBackend implements DeviceTaskStore.Backend {
                 "results", "idempotency_key = ?", new String[] {idempotencyKey});
     }
 
+    @Override
+    public synchronized void clear() {
+        SQLiteDatabase writable = database.getWritableDatabase();
+        writable.beginTransaction();
+        try {
+            writable.delete("tasks", null, null);
+            writable.delete("results", null, null);
+            writable.setTransactionSuccessful();
+        } finally {
+            writable.endTransaction();
+        }
+    }
+
     private static final class QueueDatabase extends SQLiteOpenHelper {
         QueueDatabase(Context context) { super(context, DB_NAME, null, 1); }
 

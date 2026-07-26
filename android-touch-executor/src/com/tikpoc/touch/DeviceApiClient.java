@@ -32,6 +32,60 @@ public final class DeviceApiClient implements AutonomousTaskRunner.Client {
         public ApiException(String code) { super(code); }
     }
 
+    public static final class Registration {
+        public final String deviceId;
+        public final String accountId;
+        public final long sessionEpoch;
+        public final String accessToken;
+
+        private Registration(String deviceId, String accountId,
+                long sessionEpoch, String accessToken) {
+            this.deviceId = deviceId;
+            this.accountId = accountId;
+            this.sessionEpoch = sessionEpoch;
+            this.accessToken = accessToken;
+        }
+    }
+
+    public static Registration register(String baseUrl, String deviceId,
+            String accountId, String bootstrapToken, Exchange exchange) throws ApiException {
+        if (baseUrl == null || !baseUrl.startsWith("https://"))
+            throw new IllegalArgumentException("https base URL required");
+        if (deviceId == null || deviceId.trim().isEmpty()
+                || accountId == null || accountId.trim().isEmpty()
+                || bootstrapToken == null || bootstrapToken.trim().isEmpty()
+                || exchange == null) {
+            throw new IllegalArgumentException("invalid mobile registration");
+        }
+        Map<String, Object> request = new LinkedHashMap<String, Object>();
+        request.put("device_id", deviceId);
+        request.put("account_id", accountId);
+        final String body;
+        try {
+            body = Protocol.encodeObject(request);
+        } catch (Protocol.ProtocolException error) {
+            throw new ApiException("mobile_api_payload");
+        }
+        final HttpResponse response;
+        try {
+            response = exchange.post(trimTrailingSlash(baseUrl), "/api/mobile/register",
+                    bootstrapToken, body);
+        } catch (Exception error) {
+            throw new ApiException("mobile_api_transport");
+        }
+        if (response.status < 200 || response.status >= 300)
+            throw new ApiException(response.status == 409
+                    ? "mobile_registration_conflict" : "mobile_registration_rejected");
+        try {
+            Map<String, Object> values = Protocol.decodeObject(response.body);
+            return new Registration(string(values, "device_id"),
+                    string(values, "account_id"), positive(values, "session_epoch"),
+                    string(values, "access_token"));
+        } catch (Protocol.ProtocolException error) {
+            throw new ApiException("mobile_api_invalid_response");
+        }
+    }
+
     private final String baseUrl;
     private final String deviceId;
     private final String bearer;
