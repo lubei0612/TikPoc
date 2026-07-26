@@ -162,14 +162,17 @@ uv run tikpoc priority-import \
   --db runtime/tikpoc.db \
   --devices config/devices.yaml \
   --file runtime/live-batch.jsonl \
-  --source-live LIVE_SOURCE_ID
+  --source-id LIVE_SOURCE_ID \
+  --navigation-mode search \
+  --json
 
 uv run tikpoc priority-status --db runtime/tikpoc.db
 ```
 
-`priority-import` 会快照提交时控制状态为 `running` 的设备。输出中的 `batch_class` 为 `live_interrupt`；暂停设备不参加该批，相同文件与 `source-live` 重放仍返回第一次的参与快照。
+`priority-import` 会快照提交时控制状态为 `running` 的设备。输出中的 `batch_class` 为 `live_interrupt`；暂停设备不参加该批，相同文件与 `source-id` 重放仍返回第一次的参与快照。
 
 详细机器合同见 [直播插队 CLI](docs/priority-live-batch-cli.md)。
+搜索触达验收见 [搜索触达 Canary](docs/runbooks/search-touch-canary.md)。
 
 ### 4. 启动本地运营控制台
 

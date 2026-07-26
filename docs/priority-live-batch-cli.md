@@ -14,7 +14,7 @@
 文件使用 UTF-8 JSONL，每行一个对象：
 
 ```json
-{"username":"buyer.one","user_id":"123456","sec_uid":"MS4w...","profile_url":"https://www.tiktok.com/@buyer.one","source_video_id":"746...","source_live_id":"live-20260722-01","collected_at":"2026-07-22T20:00:00+08:00"}
+{"username":"buyer.one","user_id":"123456","sec_uid":"MS4w...","profile_url":"https://www.tiktok.com/@buyer.one","source_video_id":"746...","source_type":"live_followers","source_id":"live-20260722-01","collected_at":"2026-07-22T20:00:00+08:00"}
 ```
 
 字段规则：
@@ -26,7 +26,8 @@
 | `sec_uid` | 否 | 平台 sec UID，优先级最高 |
 | `profile_url` | 否 | 必须是与 username 一致的 TikTok HTTPS 主页地址 |
 | `source_video_id` | 否 | 来源视频 ID |
-| `source_live_id` | 否 | 如填写，必须与命令参数一致 |
+| `source_type` | 否 | 来源类型，例如 `live_followers` |
+| `source_id` | 否 | 来源标识；如填写，必须与命令参数一致 |
 | `collected_at` | 否 | 采集时间字符串，仅保留来源语义 |
 
 所有字段只能是字符串或 `null`。同一提交按 `sec_uid`、真实 `user_id`、规范化 username 合并；稳定 ID 冲突会拒绝整次导入。
@@ -40,7 +41,9 @@ uv run tikpoc priority-import \
   --db /path/to/tikpoc.db \
   --devices /path/to/devices.yaml \
   --file /path/to/live-users.jsonl \
-  --source-live live-20260722-01
+  --source-id live-20260722-01 \
+  --navigation-mode search \
+  --json
 ```
 
 成功时 stdout 只输出一行 JSON：
@@ -49,7 +52,9 @@ uv run tikpoc priority-import \
 {"batch_class":"live_interrupt","batch_id":"priority-0123456789abcdef","device_count":4,"parent_round_id":"round-0123456789abcdef0123","skipped_duplicates":3,"skipped_invalid":1,"unique_targets":246}
 ```
 
-相同普通轮次、文件 SHA-256 和 `source-live` 会得到相同 batch ID。批次完成且进程重启后再次执行同一命令，也会返回原 batch ID。若已有新的活动普通轮次，同一来源会为新轮次创建独立批次。
+相同普通轮次、文件 SHA-256 和 `source-id` 会得到相同 batch ID。批次完成且进程重启后再次执行同一命令，也会返回原 batch ID。若已有新的活动普通轮次，同一来源会为新轮次创建独立批次。
+
+`navigation_mode=search` 是批次不可变字段。APK 只点击唯一、规范化后完全相等的可见 username；没有完全匹配、出现多个完全匹配或最终主页身份不一致时记录明确未触达结果，不点击相似账号，也不回退 Deeplink。
 
 参与设备快照是不可变的。相同命令重放时，即使设备暂停/运行状态已经变化，也返回第一次导入的 batch ID 和参与设备数量。
 
