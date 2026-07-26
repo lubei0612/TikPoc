@@ -254,6 +254,12 @@ def test_mobile_profile_result_creates_video_bound_follow_up_plan(
     assert plan is not None and plan.video_key in {"post:0", "post:1"}
     assert plan.effective_outcome is OutcomeKind.TRACE
     assert plan.state is ActionPlanState.PLANNED
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "UPDATE round_assignments SET lease_expires_at_ms=1 "
+            "WHERE assignment_id=?",
+            (int(task["task_id"]),),
+        )
 
     follow_up = api.post(
         "/api/mobile/pull",
@@ -269,6 +275,7 @@ def test_mobile_profile_result_creates_video_bound_follow_up_plan(
     assert follow_up[0]["task_id"] == task["task_id"]
     assert follow_up[0]["video_key"] == plan.video_key
     assert follow_up[0]["action"] == "trace"
+    assert repo.assignment(int(task["task_id"])).phase is AssignmentPhase.VIDEO_OPENING
 
     completed = api.post(
         "/api/mobile/results",

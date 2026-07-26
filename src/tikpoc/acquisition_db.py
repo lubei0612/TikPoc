@@ -834,6 +834,52 @@ class AcquisitionRepository:
                     session_epoch=session_epoch,
                 ),
             )
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            recoverable = connection.execute(
+                """
+                SELECT assignment.assignment_id
+                FROM round_assignments AS assignment
+                JOIN device_action_plans AS plan
+                  ON plan.round_id = assignment.round_id
+                 AND plan.identity_key = assignment.identity_key
+                 AND plan.device_id = assignment.device_id
+                WHERE assignment.round_id = ? AND assignment.device_id = ?
+                  AND assignment.visit_confirmed_at_ms IS NOT NULL
+                  AND assignment.completed_at_ms IS NULL
+                  AND assignment.phase NOT IN ('completed', 'skipped')
+                  AND plan.video_key IS NOT NULL
+                  AND plan.state IN ('planned', 'executing', 'uncertain')
+                  AND (
+                    assignment.lease_owner = ?
+                    OR assignment.lease_owner IS NULL
+                    OR assignment.lease_expires_at_ms <= ?
+                  )
+                ORDER BY assignment.assignment_id
+                LIMIT 1
+                """,
+                (round_id, device_id, owner_id, now_ms),
+            ).fetchone()
+            if recoverable is not None:
+                assignment_id = int(recoverable["assignment_id"])
+                connection.execute(
+                    """
+                    UPDATE round_assignments
+                    SET phase = 'video_opening',
+                        attempt_count = attempt_count + 1,
+                        lease_owner = ?, lease_expires_at_ms = ?
+                    WHERE assignment_id = ?
+                    """,
+                    (owner_id, now_ms + lease_ttl_ms, assignment_id),
+                )
+                assignment = self._assignment_by_id(connection, assignment_id)
+                return (
+                    self._mobile_task_envelope(
+                        assignment,
+                        account_id=account_id,
+                        session_epoch=session_epoch,
+                    ),
+                )
         claimed: list[MobileTaskEnvelope] = []
         for _ in range(limit):
             assignment = self.claim_scheduled_assignment(
