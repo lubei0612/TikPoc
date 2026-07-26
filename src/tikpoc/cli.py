@@ -629,6 +629,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             webhook_max_age_seconds=int(
                 os.getenv("TIKPOC_WEBHOOK_MAX_AGE_SECONDS", "300")
             ),
+            mobile_bootstrap_token=os.getenv("TIKPOC_MOBILE_BOOTSTRAP_TOKEN", ""),
         )
         if args.with_web_worker:
             if registry is None:

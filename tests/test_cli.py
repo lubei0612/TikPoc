@@ -1281,6 +1281,7 @@ def test_cli_serve_starts_uvicorn_console(tmp_path: Path, monkeypatch) -> None:
         captured.update(app=app, host=host, port=port)
 
     monkeypatch.setattr(uvicorn, "run", fake_uvicorn_run)
+    monkeypatch.setenv("TIKPOC_MOBILE_BOOTSTRAP_TOKEN", "bootstrap-secret")
 
     result = main(
         [
@@ -1296,6 +1297,7 @@ def test_cli_serve_starts_uvicorn_console(tmp_path: Path, monkeypatch) -> None:
     assert captured["host"] == "127.0.0.1"
     assert captured["port"] == 8877
     assert captured["app"].state.database.path == tmp_path / "tasks.db"
+    assert captured["app"].state.mobile_bootstrap_token == "bootstrap-secret"
 
 
 def test_cli_serve_rejects_non_loopback_host(tmp_path: Path) -> None:
