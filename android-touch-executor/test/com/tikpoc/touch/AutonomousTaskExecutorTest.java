@@ -6,7 +6,10 @@ public final class AutonomousTaskExecutorTest {
     public static void main(String[] args) throws Exception {
         shadowModeConfirmsIdentityWithoutAction();
         identityMismatchBecomesDeferredResult();
-        activeModeRequiresImmutableActionPlan();
+        activeModePublishesProfileBeforeActionPlanExists();
+        activeModeTreatsEmptyEnvelopePlanFieldsAsUnplanned();
+        activeTraceOpensVideoWithoutApplyingAnInteraction();
+        preservesDeviceEvidenceErrorCode();
         activeModeVerifiesVideoAndAction();
         System.out.println("AutonomousTaskExecutorTest PASS");
     }
@@ -17,12 +20,14 @@ public final class AutonomousTaskExecutorTest {
                 AutonomousTaskExecutor.Mode.ACTIVE);
         DeviceTaskStore.Task planned = new DeviceTaskStore.Task(
                 "task-2", "lease-2", 7L, 9_000L, "pending",
-                "{\"username\":\"target_user\",\"video_key\":\"video-1\","
+                "{\"username\":\"target_user\",\"plan_id\":42,"
+                + "\"video_key\":\"video-1\","
                 + "\"action\":\"like\"}");
 
         DeviceTaskStore.Result result = executor.execute(planned);
 
         check(result.payload.contains("action_confirmed"), "action confirmed");
+        check(result.payload.contains("\"plan_id\":42"), "action plan identified");
         check(ui.videos == 1, "video verified");
         check(ui.actions == 1, "one action");
     }
@@ -47,14 +52,60 @@ public final class AutonomousTaskExecutorTest {
         check(ui.actions == 0, "mismatch has no action");
     }
 
-    private static void activeModeRequiresImmutableActionPlan() throws Exception {
+    private static void activeModePublishesProfileBeforeActionPlanExists() throws Exception {
         FakeUi ui = new FakeUi("target_user", true);
         AutonomousTaskExecutor executor = new AutonomousTaskExecutor(ui,
                 AutonomousTaskExecutor.Mode.ACTIVE);
         DeviceTaskStore.Result result = executor.execute(task("target_user", "{}"));
 
-        check(result.payload.contains("missing_action_plan"), "plan required");
+        check(result.payload.contains("profile_observed"), "profile evidence published");
+        check(result.payload.contains("\"video_count\":0"), "profile metrics included");
         check(ui.actions == 0, "no action without plan");
+    }
+
+    private static void activeModeTreatsEmptyEnvelopePlanFieldsAsUnplanned()
+            throws Exception {
+        FakeUi ui = new FakeUi("target_user", true);
+        AutonomousTaskExecutor executor = new AutonomousTaskExecutor(ui,
+                AutonomousTaskExecutor.Mode.ACTIVE);
+        DeviceTaskStore.Task task = new DeviceTaskStore.Task(
+                "task-empty", "lease-empty", 7L, 9_000L, "pending",
+                "{\"username\":\"target_user\",\"video_key\":\"\",\"action\":\"\"}");
+
+        DeviceTaskStore.Result result = executor.execute(task);
+
+        check(result.payload.contains("profile_observed"), "empty plan awaits server plan");
+        check(ui.videos == 0 && ui.actions == 0, "empty plan performs no action");
+    }
+
+    private static void activeTraceOpensVideoWithoutApplyingAnInteraction()
+            throws Exception {
+        FakeUi ui = new FakeUi("target_user", true);
+        AutonomousTaskExecutor executor = new AutonomousTaskExecutor(ui,
+                AutonomousTaskExecutor.Mode.ACTIVE);
+        DeviceTaskStore.Task trace = new DeviceTaskStore.Task(
+                "task-trace", "lease-trace", 7L, 9_000L, "pending",
+                "{\"username\":\"target_user\",\"plan_id\":43,"
+                + "\"video_key\":\"post:0\","
+                + "\"action\":\"trace\"}");
+
+        DeviceTaskStore.Result result = executor.execute(trace);
+
+        check(result.payload.contains("trace_confirmed"), "trace confirmed");
+        check(result.payload.contains("\"plan_id\":43"), "trace plan identified");
+        check(ui.videos == 1, "trace opens one video");
+        check(ui.actions == 0, "trace applies no interaction");
+    }
+
+    private static void preservesDeviceEvidenceErrorCode() throws Exception {
+        FakeUi ui = new FakeUi("target_user", true);
+        ui.observeError = new AccessibilityUiAdapter.UiException("stale_tree");
+        AutonomousTaskExecutor executor = new AutonomousTaskExecutor(ui,
+                AutonomousTaskExecutor.Mode.ACTIVE);
+
+        DeviceTaskStore.Result result = executor.execute(task("target_user", "{}"));
+
+        check(result.payload.contains("stale_tree"), "semantic failure preserved");
     }
 
     private static DeviceTaskStore.Task task(String username, String payload) {
@@ -67,6 +118,7 @@ public final class AutonomousTaskExecutorTest {
         final boolean publicProfile;
         int actions;
         int videos;
+        RuntimeException observeError;
 
         FakeUi(String observedUsername, boolean publicProfile) {
             this.observedUsername = observedUsername;
@@ -78,6 +130,7 @@ public final class AutonomousTaskExecutorTest {
 
         @Override
         public AutonomousTaskExecutor.Profile observeProfile() {
+            if (observeError != null) throw observeError;
             return new AutonomousTaskExecutor.Profile(observedUsername, publicProfile);
         }
 

@@ -7,6 +7,15 @@ import java.util.List;
 import java.util.UUID;
 
 public class AccessibilityUiAdapter implements AutonomousTaskExecutor.Ui {
+    public static final class UiException extends RuntimeException {
+        public final String code;
+
+        public UiException(String code) {
+            super(code);
+            this.code = code;
+        }
+    }
+
     public interface ElapsedClock {
         long nowMs();
     }
@@ -104,7 +113,14 @@ public class AccessibilityUiAdapter implements AutonomousTaskExecutor.Ui {
         Protocol.Request request = Protocol.parseRequest(Protocol.encodeObject(values), nowMs);
         Protocol.Response response = invoke(request);
         if (!"ok".equals(response.values.get("status"))) {
-            throw new IllegalStateException("device evidence unavailable");
+            Object rawError = response.values.get("error");
+            if (rawError instanceof Map) {
+                Object code = ((Map<?, ?>) rawError).get("code");
+                if (code instanceof String && !((String) code).isEmpty()) {
+                    throw new UiException((String) code);
+                }
+            }
+            throw new UiException("device_evidence_unavailable");
         }
         return response;
     }

@@ -997,7 +997,7 @@ class AcquisitionRepository:
             now_ms=now_ms,
             ttl_ms=30_000,
         )
-        self.publish_profile_snapshot(
+        snapshot = self.publish_profile_snapshot(
             assignment.round_id,
             assignment.identity_key,
             device_id=assignment.device_id,
@@ -1019,11 +1019,26 @@ class AcquisitionRepository:
             now_ms=now_ms,
             hourly_limits=_CAPACITY_QUOTA_LIMITS,
         )
-        if plan.effective_outcome is not OutcomeKind.TRACE:
-            if not post_handles:
-                raise ValueError("mobile profile post handles are incomplete")
-            selected = post_handles[assignment.assignment_id % len(post_handles)]
-            self.set_plan_video(plan.plan_id, selected)
+        if not snapshot.eligible:
+            self.confirm_trace_plan(plan.plan_id, now_ms=now_ms)
+            self.complete_assignment(
+                assignment_id,
+                owner_id,
+                AssignmentPhase.IDENTITY_CONFIRMED,
+                now_ms=now_ms,
+            )
+            return
+        if not post_handles:
+            raise ValueError("mobile profile post handles are incomplete")
+        selected = post_handles[assignment.assignment_id % len(post_handles)]
+        self.set_plan_video(plan.plan_id, selected)
+        self.transition_assignment(
+            assignment_id,
+            owner_id,
+            AssignmentPhase.IDENTITY_CONFIRMED,
+            AssignmentPhase.VIDEO_OPENING,
+            now_ms=now_ms,
+        )
 
     def claim_device_worker_lease(
         self,

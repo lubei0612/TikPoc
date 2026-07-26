@@ -69,15 +69,20 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
                 return result(task, "deferred", phase, "profile_unavailable");
             }
             if (mode == Mode.SHADOW) return profileResult(task, profile, phase, "shadow_observed");
-            if (!(target.get("video_key") instanceof String)
-                    || !(target.get("action") instanceof String)) {
-                return result(task, "deferred", phase, "missing_action_plan");
+            if (!nonemptyString(target.get("video_key"))
+                    || !nonemptyString(target.get("action"))) {
+                return profileResult(task, profile, phase, "profile_observed");
             }
             ui.openAndConfirmVideo((String) target.get("video_key"));
+            if ("trace".equals(target.get("action"))) {
+                return actionResult(task, target, "trace_confirmed");
+            }
             if (!ui.applyAndConfirmAction((String) target.get("action"))) {
                 return result(task, "uncertain", "action_reconciling", "action_unverified");
             }
-            return result(task, "completed", "action_executing", "action_confirmed");
+            return actionResult(task, target, "action_confirmed");
+        } catch (AccessibilityUiAdapter.UiException error) {
+            return result(task, "deferred", phase, error.code);
         } catch (Exception error) {
             return result(task, "deferred", phase, "executor_error");
         }
@@ -127,11 +132,34 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
         }
     }
 
+    private static DeviceTaskStore.Result actionResult(DeviceTaskStore.Task task,
+            Map<String, Object> target, String code) {
+        Map<String, Object> payload = new LinkedHashMap<String, Object>();
+        payload.put("lease_id", task.leaseId);
+        payload.put("state", "completed");
+        payload.put("phase", "action_executing");
+        Map<String, Object> evidence = new LinkedHashMap<String, Object>();
+        evidence.put("code", code);
+        evidence.put("plan_id", target.get("plan_id"));
+        payload.put("evidence", evidence);
+        try {
+            return new DeviceTaskStore.Result(
+                    task.taskId + ":action_executing", task.taskId,
+                    Protocol.encodeObject(payload));
+        } catch (Protocol.ProtocolException error) {
+            throw new IllegalStateException("result encoding failed");
+        }
+    }
+
     private static String requiredString(Map<String, Object> values, String key)
             throws Protocol.ProtocolException {
         Object value = values.get(key);
         if (!(value instanceof String) || ((String) value).trim().isEmpty())
             throw new Protocol.ProtocolException("missing_" + key);
         return (String) value;
+    }
+
+    private static boolean nonemptyString(Object value) {
+        return value instanceof String && !((String) value).trim().isEmpty();
     }
 }
