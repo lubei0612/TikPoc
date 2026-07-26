@@ -248,9 +248,9 @@ public final class TikPocAccessibilityService extends AccessibilityService
             AccessibilityNodeInfo node, String... labels) {
         String text = (string(node.getText()) + " " + string(node.getContentDescription()))
                 .toLowerCase(java.util.Locale.ROOT);
-        if (node.isVisibleToUser() && node.isClickable()) {
+        if (node.isVisibleToUser()) {
             for (String label : labels) if (text.contains(label)) {
-                return AccessibilityNodeInfo.obtain(node);
+                return clickableAncestor(node);
             }
         }
         for (int index = 0; index < node.getChildCount(); index++) {

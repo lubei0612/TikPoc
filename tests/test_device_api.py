@@ -203,3 +203,53 @@ def test_mobile_task_envelope_carries_round_navigation_mode(tmp_path: Path) -> N
     )[0]
 
     assert task.navigation_mode == "search"
+
+
+@pytest.mark.parametrize(
+    ("state", "expected_phase"),
+    (("deferred", "deferred"), ("skipped", "skipped")),
+)
+def test_profile_opening_result_releases_mobile_lease(
+    tmp_path: Path, state: str, expected_phase: str
+) -> None:
+    repo = repository(tmp_path)
+    target = Target(
+        target_id="target-search",
+        username="target_search",
+        profile_url="https://www.tiktok.com/@target_search",
+        source_video_id="video-1",
+        sec_uid="sec-search",
+        identity_key="sec:sec-search",
+        source_line_numbers=(2,),
+    )
+    pool = repo.import_pool("search.jsonl", "f" * 64, (target,))
+    round_id = create_exposure_round(
+        repo,
+        pool_id=pool.pool_id,
+        device_seeds={"device-1": "seed-1"},
+        starts_at_ms=0,
+        min_inter_device_gap_ms=0,
+        min_repeat_gap_ms=0,
+        navigation_mode="search",
+    )
+    repo.register_mobile_device("device-1", "account-1", now_ms=1_000)
+    task = repo.claim_mobile_tasks(
+        round_id, "device-1", session_epoch=1, limit=1, now_ms=2_000
+    )[0]
+
+    result = MobileTaskResult(
+        device_id="device-1",
+        session_epoch=1,
+        task_id=task.task_id,
+        lease_id=task.lease_id,
+        idempotency_key=f"profile-{state}",
+        state=state,
+        phase="profile_opening",
+        evidence={"code": "search_no_exact_match"},
+    )
+
+    assert repo.record_mobile_result(result, now_ms=3_000) == "accepted"
+    assignment = repo.assignment(task.assignment_id)
+    assert assignment.phase.value == expected_phase
+    assert assignment.lease_owner is None
+    assert assignment.last_error_code == "search_no_exact_match"

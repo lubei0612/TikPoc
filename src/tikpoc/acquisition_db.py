@@ -1040,6 +1040,11 @@ class AcquisitionRepository:
                 return "duplicate"
         if result.phase == AssignmentPhase.IDENTITY_CONFIRMED.value:
             self._apply_mobile_profile_result(result, now_ms=now_ms)
+        elif result.phase == AssignmentPhase.PROFILE_OPENING.value and result.state in {
+            "deferred",
+            "skipped",
+        }:
+            self._apply_mobile_profile_opening_result(result, now_ms=now_ms)
         elif (
             result.phase == AssignmentPhase.ACTION_EXECUTING.value
             and result.state == "completed"
@@ -1061,6 +1066,35 @@ class AcquisitionRepository:
         ):
             self._complete_mobile_unresolved_action(result, now_ms=now_ms)
         return "accepted"
+
+    def _apply_mobile_profile_opening_result(
+        self, result: MobileTaskResult, *, now_ms: int
+    ) -> None:
+        assignment_id = int(result.task_id)
+        assignment = self.assignment(assignment_id)
+        if assignment.device_id != result.device_id:
+            raise ValueError("mobile result device mismatch")
+        owner_id = f"mobile:{result.device_id}:{result.session_epoch}"
+        error_code = str(result.evidence.get("code") or "mobile_profile_unavailable")
+        if result.state == "skipped":
+            self.skip_unreachable_assignment(
+                assignment_id,
+                owner_id,
+                now_ms=now_ms,
+                error_code=error_code,
+                original_error_code=error_code,
+                failure_stage="route",
+                diagnostics=DeviceDiagnostics(),
+            )
+            return
+        self.defer_assignment(
+            assignment_id,
+            owner_id,
+            now_ms=now_ms,
+            retry_delay_ms=1_000,
+            error_code=error_code,
+            diagnostics=DeviceDiagnostics(),
+        )
 
     def _mobile_action_result_identity(
         self, result: MobileTaskResult
