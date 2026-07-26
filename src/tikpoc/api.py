@@ -1,3 +1,4 @@
+import hmac
 import json
 import os
 import re
@@ -20,8 +21,8 @@ from .acquisition_service import (
     merge_browser_health_rows,
 )
 from .api_models import (
-    AccountEnableCommand,
     AccountAutomationSettingsCommand,
+    AccountEnableCommand,
     BrowserActionClaimRequest,
     BrowserActionResultRequest,
     BrowserEventRequest,
@@ -36,6 +37,8 @@ from .api_models import (
     LeadSaleCommand,
     LeadTakeoverCommand,
     ManualReplyPlanCommand,
+    MobileHeartbeatRequest,
+    MobileRegisterRequest,
     OperatorCommand,
     PoolImportRequest,
     ProviderSettingsCommand,
@@ -58,7 +61,6 @@ from .webhooks import (
     parse_business_message_webhook,
     verify_tiktok_signature,
 )
-
 
 _BROWSER_PATHS = {
     "/api/browser-bindings",
@@ -174,6 +176,7 @@ def create_app(
     import_roots: Iterable[Path] | None = None,
     runtime_settings: RuntimeSettingsStore | None = None,
     provider_tester: Callable[[ProviderCredentials], tuple[bool, int]] | None = None,
+    mobile_bootstrap_token: str = "",
 ) -> FastAPI:
     database = Database(database_path)
     database.migrate()
@@ -242,6 +245,14 @@ def create_app(
     app.state.tiktok_app_secret = tiktok_app_secret
     app.state.webhook_max_age_seconds = webhook_max_age_seconds
     app.state.clock = clock
+    app.state.mobile_bootstrap_token = mobile_bootstrap_token
+
+    def bearer_token(request: Request) -> str:
+        authorization = request.headers.get("authorization", "")
+        scheme, separator, token = authorization.partition(" ")
+        if separator != " " or scheme.casefold() != "bearer" or not token.strip():
+            return ""
+        return token.strip()
 
     @app.middleware("http")
     async def browser_request_gate(request: Request, call_next: Callable):
@@ -337,6 +348,61 @@ def create_app(
         except (KeyError, TypeError, ValueError, ValidationError):
             return _json({"error": "invalid device event"}, 400)
         return _json({"accepted": accepted})
+
+    @app.post("/api/mobile/register")
+    async def mobile_register(request: Request) -> JSONResponse:
+        supplied = bearer_token(request)
+        if (
+            not supplied
+            or not mobile_bootstrap_token
+            or not hmac.compare_digest(supplied, mobile_bootstrap_token)
+        ):
+            return _json({"error": "invalid_bootstrap_token"}, 401)
+        try:
+            body = MobileRegisterRequest.model_validate(await _json_object(request))
+            session = acquisition.register_mobile_device(
+                body.device_id, body.account_id, now_ms=int(clock() * 1_000)
+            )
+        except ValidationError:
+            return _json({"error": "invalid_mobile_registration"}, 400)
+        except ValueError as error:
+            return _json({"error": str(error)}, 409)
+        return _json(
+            {
+                "device_id": session.device_id,
+                "account_id": session.account_id,
+                "session_epoch": session.session_epoch,
+                "access_token": session.access_token,
+            }
+        )
+
+    @app.post("/api/mobile/heartbeat")
+    async def mobile_heartbeat(request: Request) -> JSONResponse:
+        try:
+            body = MobileHeartbeatRequest.model_validate(await _json_object(request))
+        except (TypeError, ValueError, ValidationError):
+            return _json({"error": "invalid_mobile_heartbeat"}, 400)
+        session = acquisition.authenticate_mobile_device(
+            body.device_id,
+            bearer_token(request),
+            now_ms=int(clock() * 1_000),
+        )
+        if session is None:
+            return _json({"error": "invalid_mobile_token"}, 401)
+        if session.session_epoch != body.session_epoch:
+            return _json({"error": "stale_session"}, 409)
+        accepted = acquisition.record_mobile_heartbeat(
+            body.device_id,
+            body.session_epoch,
+            app_version=body.app_version,
+            phase=body.phase,
+            queue_depth=body.queue_depth,
+            client_timestamp_ms=body.client_timestamp_ms,
+            now_ms=int(clock() * 1_000),
+        )
+        if not accepted:
+            return _json({"error": "stale_session"}, 409)
+        return _json({"accepted": True, "server_time_ms": int(clock() * 1_000)})
 
     @app.post("/api/browser-events")
     async def browser_event(request: Request) -> JSONResponse:

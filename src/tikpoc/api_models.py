@@ -2,7 +2,6 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-
 BoundedText = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=500),
@@ -102,6 +101,34 @@ class DeviceEventRequest(ApiRequest):
     event_type: Identifier
     dedup_key: Identifier
     payload: dict[str, object] = Field(default_factory=dict)
+
+
+class MobileRegisterRequest(ApiRequest):
+    device_id: Identifier
+    account_id: Identifier
+
+
+class MobileHeartbeatRequest(ApiRequest):
+    device_id: Identifier
+    session_epoch: int = Field(gt=0)
+    app_version: Identifier
+    phase: Literal[
+        "idle",
+        "pending",
+        "profile_opening",
+        "identity_confirmed",
+        "waiting_snapshot",
+        "video_opening",
+        "video_confirmed",
+        "quota_reserved",
+        "action_executing",
+        "action_reconciling",
+        "completed",
+        "deferred",
+        "skipped",
+    ]
+    queue_depth: int = Field(ge=0, le=50)
+    client_timestamp_ms: int = Field(ge=0)
 
 
 CommandId = Annotated[

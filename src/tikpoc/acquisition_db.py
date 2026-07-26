@@ -559,6 +559,20 @@ class AcquisitionRepository:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS mobile_heartbeats (
+                    device_id TEXT PRIMARY KEY,
+                    session_epoch INTEGER NOT NULL,
+                    app_version TEXT NOT NULL,
+                    phase TEXT NOT NULL,
+                    queue_depth INTEGER NOT NULL CHECK(queue_depth BETWEEN 0 AND 50),
+                    client_timestamp_ms INTEGER NOT NULL,
+                    received_at_ms INTEGER NOT NULL,
+                    FOREIGN KEY(device_id) REFERENCES mobile_devices(device_id)
+                )
+                """
+            )
 
     def register_mobile_device(
         self, device_id: str, account_id: str, *, now_ms: int
@@ -650,6 +664,71 @@ class AcquisitionRepository:
                 """,
                 (now_ms, now_ms, device_id),
             )
+
+    def record_mobile_heartbeat(
+        self,
+        device_id: str,
+        session_epoch: int,
+        *,
+        app_version: str,
+        phase: str,
+        queue_depth: int,
+        client_timestamp_ms: int,
+        now_ms: int,
+    ) -> bool:
+        device_id = str(device_id).strip()
+        app_version = str(app_version).strip()
+        phase = str(phase).strip()
+        if (
+            not device_id
+            or not app_version
+            or not phase
+            or session_epoch <= 0
+            or not 0 <= queue_depth <= 50
+            or min(client_timestamp_ms, now_ms) < 0
+        ):
+            raise ValueError("invalid mobile heartbeat")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            device = connection.execute(
+                "SELECT session_epoch, state FROM mobile_devices WHERE device_id = ?",
+                (device_id,),
+            ).fetchone()
+            if (
+                device is None
+                or str(device["state"]) != "active"
+                or int(device["session_epoch"]) != session_epoch
+            ):
+                return False
+            connection.execute(
+                """
+                INSERT INTO mobile_heartbeats(
+                    device_id, session_epoch, app_version, phase, queue_depth,
+                    client_timestamp_ms, received_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(device_id) DO UPDATE SET
+                    session_epoch = excluded.session_epoch,
+                    app_version = excluded.app_version,
+                    phase = excluded.phase,
+                    queue_depth = excluded.queue_depth,
+                    client_timestamp_ms = excluded.client_timestamp_ms,
+                    received_at_ms = excluded.received_at_ms
+                """,
+                (
+                    device_id,
+                    session_epoch,
+                    app_version,
+                    phase,
+                    queue_depth,
+                    client_timestamp_ms,
+                    now_ms,
+                ),
+            )
+            connection.execute(
+                "UPDATE mobile_devices SET last_seen_at_ms = ? WHERE device_id = ?",
+                (now_ms, device_id),
+            )
+        return True
 
     def claim_device_worker_lease(
         self,
