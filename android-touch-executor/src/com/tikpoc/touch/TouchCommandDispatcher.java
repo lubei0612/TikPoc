@@ -243,7 +243,7 @@ public final class TouchCommandDispatcher {
         }
         boolean observedNewEvent = false;
         long observedSequence = before.eventSequence;
-        for (int attempt = 0; attempt < 15; attempt++) {
+        for (int attempt = 0; attempt < 25; attempt++) {
             SemanticSnapshot snapshot = snapshots.awaitAfter(observedSequence, 400L);
             if (snapshot.eventSequence > before.eventSequence) {
                 observedNewEvent = true;
@@ -281,27 +281,39 @@ public final class TouchCommandDispatcher {
                             ? "search_no_exact_match" : "search_surface_timeout";
             return Protocol.Response.error(request, code, "exact search result unavailable");
         }
-        long observedSequence = snapshots.current().eventSequence;
+        SemanticSnapshot initial = snapshots.current();
+        Protocol.Response verified = verifiedSearchProfile(
+                request, startedAt, initial, expectedUsername);
+        if (verified != null) return verified;
+        long observedSequence = initial.eventSequence;
         for (int attempt = 0; attempt < 15; attempt++) {
             SemanticSnapshot snapshot = snapshots.awaitAfter(observedSequence, 400L);
             observedSequence = snapshot.eventSequence;
-            try {
-                TikTokSemantics.Profile profile = TikTokSemantics.parseProfile(
-                        snapshot, clock.elapsedRealtimeMs(), 500L, expectedUsername);
-                if (TikTokSearchSemantics.normalizeUsername(profile.username).equals(
-                        TikTokSearchSemantics.normalizeUsername(expectedUsername))) {
-                    Map<String, Object> evidence = new LinkedHashMap<String, Object>();
-                    evidence.put("route_opened", true);
-                    evidence.put("navigation_mode", "search");
-                    evidence.put("username", profile.username);
-                    return success(request, startedAt, snapshot, evidence);
-                }
-            } catch (TikTokSemantics.SemanticException intermediate) {
-                // Search and profile surfaces emit several intermediate trees.
-            }
+            verified = verifiedSearchProfile(request, startedAt, snapshot, expectedUsername);
+            if (verified != null) return verified;
         }
         return Protocol.Response.error(
                 request, "profile_identity_mismatch", "visible username does not match");
+    }
+
+    private Protocol.Response verifiedSearchProfile(
+            Protocol.Request request, long startedAt, SemanticSnapshot snapshot,
+            String expectedUsername) {
+        try {
+            TikTokSemantics.Profile profile = TikTokSemantics.parseProfile(
+                    snapshot, clock.elapsedRealtimeMs(), 500L, expectedUsername);
+            if (!TikTokSearchSemantics.normalizeUsername(profile.username).equals(
+                    TikTokSearchSemantics.normalizeUsername(expectedUsername))) {
+                return null;
+            }
+            Map<String, Object> evidence = new LinkedHashMap<String, Object>();
+            evidence.put("route_opened", true);
+            evidence.put("navigation_mode", "search");
+            evidence.put("username", profile.username);
+            return success(request, startedAt, snapshot, evidence);
+        } catch (TikTokSemantics.SemanticException intermediate) {
+            return null;
+        }
     }
 
     private Protocol.Response openVideo(Protocol.Request request, long startedAt)

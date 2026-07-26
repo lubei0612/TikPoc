@@ -179,35 +179,54 @@ public final class TikPocAccessibilityService extends AccessibilityService
         } else if (!TIKTOK_PACKAGE.equals(packageName)) {
             return "search_launch_unavailable";
         }
-        AccessibilityNodeInfo root = waitForRoot(4_000L);
-        if (root == null) return "search_root_unavailable";
-        Rect searchBounds = new Rect();
-        try {
-            AccessibilityNodeInfo search = firstClickableByLabel(root, "search", "搜索");
-            if (search == null) {
-                recycle(search);
-                return "search_button_missing";
-            }
-            search.getBoundsInScreen(searchBounds);
-            search.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-            recycle(search);
-        } finally {
-            root.recycle();
-        }
-        AccessibilityNodeInfo input = waitForEditable(3_000L);
-        if (input == null && tapCenter(searchBounds)) input = waitForEditable(3_000L);
+        AccessibilityNodeInfo input = openSearchInput();
         if (input == null) return "search_input_missing";
+        boolean submitted = false;
         try {
+            input.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
             Bundle text = new Bundle();
             text.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
                     username);
             boolean entered = input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, text);
             if (!entered) return "search_text_rejected";
+            SystemClock.sleep(200L);
+            submitted = input.performAction(
+                    AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.getId());
         } finally {
             input.recycle();
         }
-        if (!clickSearchSubmit(3_000L)) return "search_submit_missing";
-        return waitForAndClickExactUsername(username, 4_000L);
+        if (!submitted && !clickSearchSubmit(3_000L)) return "search_submit_missing";
+        return waitForAndClickExactUsername(username, 8_000L);
+    }
+
+    private AccessibilityNodeInfo openSearchInput() {
+        for (int attempt = 0; attempt < 4; attempt++) {
+            AccessibilityNodeInfo root = waitForRoot(2_000L);
+            if (root == null) continue;
+            Rect searchBounds = new Rect();
+            try {
+                AccessibilityNodeInfo input = firstEditable(root);
+                if (input != null) return input;
+                AccessibilityNodeInfo search = firstClickableByLabel(root, "search", "搜索");
+                if (search != null) {
+                    search.getBoundsInScreen(searchBounds);
+                    search.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                    input = waitForEditable(2_000L);
+                    if (input == null && tapCenter(searchBounds)) {
+                        input = waitForEditable(2_000L);
+                    }
+                    recycle(search);
+                    search = null;
+                    if (input != null) return input;
+                }
+                recycle(search);
+            } finally {
+                root.recycle();
+            }
+            performGlobalAction(GLOBAL_ACTION_BACK);
+            SystemClock.sleep(300L);
+        }
+        return null;
     }
 
     private AccessibilityNodeInfo waitForRoot(long timeoutMs) {
@@ -220,6 +239,7 @@ public final class TikPocAccessibilityService extends AccessibilityService
 
     private boolean tapCenter(Rect bounds) {
         if (bounds == null || bounds.isEmpty()) return false;
+        if (bounds.exactCenterX() < 0 || bounds.exactCenterY() < 0) return false;
         Path path = new Path();
         path.moveTo(bounds.exactCenterX(), bounds.exactCenterY());
         GestureDescription gesture = new GestureDescription.Builder()
@@ -260,8 +280,17 @@ public final class TikPocAccessibilityService extends AccessibilityService
                         AccessibilityNodeInfo candidate = matches.get(0);
                         AccessibilityNodeInfo clickable = clickableAncestor(candidate);
                         Rect bounds = new Rect();
-                        if (clickable != null) clickable.getBoundsInScreen(bounds);
-                        boolean clicked = clickable != null && tapCenter(bounds);
+                        candidate.getBoundsInScreen(bounds);
+                        boolean clicked = tapCenter(bounds);
+                        if (clicked) {
+                            SystemClock.sleep(600L);
+                            AccessibilityNodeInfo stillSearching = waitForEditable(200L);
+                            if (stillSearching != null) {
+                                stillSearching.recycle();
+                                clicked = (clickable != null && clickable.performAction(
+                                        AccessibilityNodeInfo.ACTION_CLICK)) || clicked;
+                            }
+                        }
                         if (!clicked && clickable != null) {
                             clicked = clickable.performAction(
                                     AccessibilityNodeInfo.ACTION_CLICK);
@@ -285,6 +314,9 @@ public final class TikPocAccessibilityService extends AccessibilityService
             if (root != null) {
                 try {
                     AccessibilityNodeInfo submit = firstClickableByExactText(root, "搜索");
+                    if (submit == null) {
+                        submit = firstClickableByLabel(root, "search", "搜索");
+                    }
                     if (submit != null) {
                         Rect bounds = new Rect();
                         submit.getBoundsInScreen(bounds);

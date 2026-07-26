@@ -18,6 +18,7 @@ public final class TouchCommandDispatcherTest {
         waitsForProfileEventBeforeVerifyingIdentity();
         waitsThroughSlowProfileIntermediateEvents();
         searchRequiresExactProfileEvidence();
+        searchAcceptsAnAlreadyLoadedExactProfile();
         searchNoMatchIsTerminalEvidence();
         actionClicksOnceAndVerifiesResult();
         alreadySelectedActionIsConfirmedWithoutClick();
@@ -44,6 +45,18 @@ public final class TouchCommandDispatcherTest {
         @SuppressWarnings("unchecked") Map<String, Object> error =
                 (Map<String, Object>) response.values.get("error");
         check(error.get("code").equals("search_no_exact_match"), "no exact match code");
+    }
+
+    private static void searchAcceptsAnAlreadyLoadedExactProfile() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.actuator.searchResult = "exact";
+        fixture.source.snapshots = Collections.singletonList(profileSnapshot(2));
+
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("open_profile_search", map("expected_username", "target_user")));
+
+        check(response.values.get("status").equals("ok"), "loaded search profile verified");
+        check(fixture.source.index == 1, "loaded profile accepted without waiting for new event");
     }
 
     private static void opensProfileOnlyAfterExactNewIdentity() throws Exception {
