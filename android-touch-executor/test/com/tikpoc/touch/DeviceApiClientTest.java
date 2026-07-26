@@ -7,9 +7,27 @@ public final class DeviceApiClientTest {
         registersAndReturnsScopedSession();
         requiresHttpsBaseUrl();
         pullsTypedTasksWithBearerAuthentication();
+        preservesSearchNavigationModeInDurablePayload();
         postsHeartbeatAndIdempotentResult();
         redactsTokenFromTransportErrors();
         System.out.println("DeviceApiClientTest PASS");
+    }
+
+    private static void preservesSearchNavigationModeInDurablePayload() throws Exception {
+        RecordingExchange exchange = new RecordingExchange();
+        exchange.response = new DeviceApiClient.HttpResponse(200,
+                "{\"tasks\":[{\"task_id\":\"20\",\"lease_id\":\"lease-20\","
+                + "\"session_epoch\":7,\"lease_expires_at_ms\":9000,"
+                + "\"phase\":\"pending\",\"navigation_mode\":\"search\","
+                + "\"username\":\"target_user\"}]}");
+        DeviceApiClient client = new DeviceApiClient(
+                "https://api.example.test", "device-1", "secret", 7L, exchange);
+
+        DeviceTaskStore.Task task = client.pull("round-1", 20).get(0);
+        check(task.payload.contains("\"navigation_mode\":\"search\""),
+                "search mode retained in durable payload");
+        check(task.withPhase("profile_opening").payload.equals(task.payload),
+                "search mode survives checkpoint");
     }
 
     private static void registersAndReturnsScopedSession() throws Exception {

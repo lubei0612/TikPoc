@@ -14,6 +14,12 @@ public final class AccessibilityUiAdapterTest {
         target.put("profile_url", "https://www.tiktok.com/@target_user");
 
         adapter.openProfile(target);
+        check(adapter.last.command.equals("open_profile"), "deeplink command");
+        target.put("navigation_mode", "search");
+        adapter.openProfile(target);
+        check(adapter.last.command.equals("open_profile_search"), "search command");
+        check(adapter.last.arguments.get("expected_username").equals("target_user"),
+                "search exact username bound");
         adapter.clock.nowMs = 3_000L;
         AutonomousTaskExecutor.Profile profile = adapter.observeProfile();
 

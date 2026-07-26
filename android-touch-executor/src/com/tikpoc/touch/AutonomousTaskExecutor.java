@@ -103,10 +103,19 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
                 return actionResult(task, target, "action_reconciling",
                         error.code, "deferred");
             }
+            if (isTerminalSearchResolution(error.code)) {
+                return result(task, "skipped", phase, error.code);
+            }
             return result(task, "deferred", phase, error.code);
         } catch (Exception error) {
             return result(task, "deferred", phase, "executor_error");
         }
+    }
+
+    private static boolean isTerminalSearchResolution(String code) {
+        return "search_no_exact_match".equals(code)
+                || "search_ambiguous_exact_match".equals(code)
+                || "profile_identity_mismatch".equals(code);
     }
 
     private static DeviceTaskStore.Result profileResult(DeviceTaskStore.Task task,

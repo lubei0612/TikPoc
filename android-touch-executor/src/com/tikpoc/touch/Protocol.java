@@ -14,7 +14,7 @@ public final class Protocol {
     public static final int MAX_REQUEST_BYTES = 262_144;
     private static final int MAX_JSON_DEPTH = 12;
     private static final List<String> COMMANDS = Collections.unmodifiableList(Arrays.asList(
-            "health", "open_profile", "observe_profile", "open_video",
+            "health", "open_profile", "open_profile_search", "observe_profile", "open_video",
             "observe_action", "apply_action", "diagnostics"));
     private static final List<String> PHASES = Collections.unmodifiableList(Arrays.asList(
             "pending", "profile_opening", "identity_confirmed", "waiting_snapshot",

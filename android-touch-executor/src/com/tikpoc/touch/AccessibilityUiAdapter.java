@@ -49,6 +49,15 @@ public class AccessibilityUiAdapter implements AutonomousTaskExecutor.Ui {
     @Override
     public void openProfile(Map<String, Object> target) throws Exception {
         this.target = new LinkedHashMap<String, Object>(target);
+        String navigationMode = string(target, "navigation_mode");
+        if ("search".equals(navigationMode)) {
+            request("open_profile_search", "profile_opening",
+                    map("expected_username", string(target, "username")));
+            return;
+        }
+        if (!navigationMode.isEmpty() && !"deeplink".equals(navigationMode)) {
+            throw new UiException("invalid_navigation_mode");
+        }
         String targetId = string(target, "target_id");
         String route = targetId.isEmpty()
                 ? string(target, "profile_url")

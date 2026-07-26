@@ -17,12 +17,33 @@ public final class TouchCommandDispatcherTest {
         alreadyOpenExactProfileDoesNotRequireANavigationEvent();
         waitsForProfileEventBeforeVerifyingIdentity();
         waitsThroughSlowProfileIntermediateEvents();
+        searchRequiresExactProfileEvidence();
+        searchNoMatchIsTerminalEvidence();
         actionClicksOnceAndVerifiesResult();
         alreadySelectedActionIsConfirmedWithoutClick();
         repostUsesShareSurfaceAndVerifiesResult();
         missingFinalEvidenceIsUncertainWithoutSecondClick();
         diagnosticsContainsNoVisibleText();
         System.out.println("TouchCommandDispatcherTest PASS");
+    }
+
+    private static void searchRequiresExactProfileEvidence() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.actuator.searchResult = "exact";
+        fixture.source.snapshots = Arrays.asList(actionSnapshot(false, 1), profileSnapshot(2));
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("open_profile_search", map("expected_username", "target_user")));
+        check(response.values.get("status").equals("ok"), "search profile verified");
+    }
+
+    private static void searchNoMatchIsTerminalEvidence() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.actuator.searchResult = "no_match";
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("open_profile_search", map("expected_username", "target_user")));
+        @SuppressWarnings("unchecked") Map<String, Object> error =
+                (Map<String, Object>) response.values.get("error");
+        check(error.get("code").equals("search_no_exact_match"), "no exact match code");
     }
 
     private static void opensProfileOnlyAfterExactNewIdentity() throws Exception {
@@ -237,6 +258,7 @@ public final class TouchCommandDispatcherTest {
         int clicks;
         int profileOpens;
         RuntimeException failure;
+        String searchResult = "timeout";
 
         @Override
         public boolean click(SemanticSnapshot.Node node) {
@@ -250,6 +272,9 @@ public final class TouchCommandDispatcherTest {
             profileOpens++;
             return true;
         }
+
+        @Override
+        public String searchProfile(String username) { return searchResult; }
     }
 
     private static SemanticSnapshot actionSnapshot(boolean selected, long sequence) {
@@ -335,6 +360,10 @@ public final class TouchCommandDispatcherTest {
         if (arguments.containsKey("route")) {
             argumentsJson = "{\"route\":\"https://www.tiktok.com/@target_user\","
                     + "\"expected_username\":\"target_user\"}";
+        }
+        if (arguments.containsKey("expected_username")
+                && !arguments.containsKey("route")) {
+            argumentsJson = "{\"expected_username\":\"target_user\"}";
         }
         return Protocol.parseRequest(
                 "{\"version\":1,\"command_id\":\"cmd-" + command + "\","

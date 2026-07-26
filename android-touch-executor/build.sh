@@ -20,6 +20,7 @@ mkdir -p "$OUT/classes" "$OUT/test-classes" "$OUT/dex" "$OUT/compiled-res"
   "$ROOT/src/com/tikpoc/touch/Protocol.java" \
   "$ROOT/src/com/tikpoc/touch/SemanticSnapshot.java" \
   "$ROOT/src/com/tikpoc/touch/TikTokSemantics.java" \
+  "$ROOT/src/com/tikpoc/touch/TikTokSearchSemantics.java" \
   "$ROOT/src/com/tikpoc/touch/CommandGate.java" \
   "$ROOT/src/com/tikpoc/touch/TouchCommandDispatcher.java" \
   "$ROOT/src/com/tikpoc/touch/LoopbackCommandServer.java" \
@@ -41,6 +42,7 @@ mkdir -p "$OUT/classes" "$OUT/test-classes" "$OUT/dex" "$OUT/compiled-res"
   -d "$OUT/test-classes" \
   "$ROOT/test/com/tikpoc/touch/ProtocolTest.java" \
   "$ROOT/test/com/tikpoc/touch/TikTokSemanticsTest.java" \
+  "$ROOT/test/com/tikpoc/touch/TikTokSearchSemanticsTest.java" \
   "$ROOT/test/com/tikpoc/touch/CommandGateTest.java" \
   "$ROOT/test/com/tikpoc/touch/TouchCommandDispatcherTest.java" \
   "$ROOT/test/com/tikpoc/touch/LoopbackCommandServerTest.java" \
@@ -56,6 +58,8 @@ mkdir -p "$OUT/classes" "$OUT/test-classes" "$OUT/dex" "$OUT/compiled-res"
   com.tikpoc.touch.ProtocolTest
 "$JDK/bin/java" -cp "$PLATFORM:$OUT/classes:$OUT/test-classes" \
   com.tikpoc.touch.TikTokSemanticsTest
+"$JDK/bin/java" -cp "$PLATFORM:$OUT/classes:$OUT/test-classes" \
+  com.tikpoc.touch.TikTokSearchSemanticsTest
 "$JDK/bin/java" -cp "$PLATFORM:$OUT/classes:$OUT/test-classes" \
   com.tikpoc.touch.CommandGateTest
 "$JDK/bin/java" -cp "$PLATFORM:$OUT/classes:$OUT/test-classes" \

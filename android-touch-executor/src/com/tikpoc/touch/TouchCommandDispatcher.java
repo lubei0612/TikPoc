@@ -15,6 +15,7 @@ public final class TouchCommandDispatcher {
     public interface Actuator {
         boolean click(SemanticSnapshot.Node node) throws Exception;
         boolean openProfile(String route) throws Exception;
+        default String searchProfile(String username) throws Exception { return "timeout"; }
     }
 
     public interface Clock {
@@ -60,6 +61,9 @@ public final class TouchCommandDispatcher {
         if (request.command.equals("observe_action")) return observeAction(request, startedAt);
         if (request.command.equals("observe_profile")) return observeProfile(request, startedAt);
         if (request.command.equals("open_profile")) return openProfile(request, startedAt);
+        if (request.command.equals("open_profile_search")) {
+            return openProfileSearch(request, startedAt);
+        }
         if (request.command.equals("open_video")) return openVideo(request, startedAt);
         return Protocol.Response.error(request, "unsupported_command", "command unavailable");
     }
@@ -264,6 +268,40 @@ public final class TouchCommandDispatcher {
                 observedNewEvent
                         ? "visible username does not match"
                         : "profile evidence did not change");
+    }
+
+    private Protocol.Response openProfileSearch(Protocol.Request request, long startedAt)
+            throws Exception {
+        String expectedUsername = requiredArgument(request, "expected_username");
+        String result = actuator.searchProfile(expectedUsername);
+        if (!"exact".equals(result)) {
+            String code = "ambiguous".equals(result)
+                    ? "search_ambiguous_exact_match"
+                    : "no_match".equals(result)
+                            ? "search_no_exact_match" : "search_surface_timeout";
+            return Protocol.Response.error(request, code, "exact search result unavailable");
+        }
+        long observedSequence = snapshots.current().eventSequence;
+        for (int attempt = 0; attempt < 15; attempt++) {
+            SemanticSnapshot snapshot = snapshots.awaitAfter(observedSequence, 400L);
+            observedSequence = snapshot.eventSequence;
+            try {
+                TikTokSemantics.Profile profile = TikTokSemantics.parseProfile(
+                        snapshot, clock.elapsedRealtimeMs(), 500L, expectedUsername);
+                if (TikTokSearchSemantics.normalizeUsername(profile.username).equals(
+                        TikTokSearchSemantics.normalizeUsername(expectedUsername))) {
+                    Map<String, Object> evidence = new LinkedHashMap<String, Object>();
+                    evidence.put("route_opened", true);
+                    evidence.put("navigation_mode", "search");
+                    evidence.put("username", profile.username);
+                    return success(request, startedAt, snapshot, evidence);
+                }
+            } catch (TikTokSemantics.SemanticException intermediate) {
+                // Search and profile surfaces emit several intermediate trees.
+            }
+        }
+        return Protocol.Response.error(
+                request, "profile_identity_mismatch", "visible username does not match");
     }
 
     private Protocol.Response openVideo(Protocol.Request request, long startedAt)
