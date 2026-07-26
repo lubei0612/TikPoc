@@ -103,6 +103,7 @@ def test_each_device_persists_an_independent_paced_plan(tmp_path: Path) -> None:
 
     assert len({plan.plan_id for plan in plans}) == 3
     assert all(plan.requested_outcome in set(OutcomeKind) for plan in plans)
+    assert all(plan.requested_outcome is draw_outcome(plan.seed) for plan in plans)
     assert (
         get_or_create_plan(
             repository,
@@ -115,7 +116,7 @@ def test_each_device_persists_an_independent_paced_plan(tmp_path: Path) -> None:
     )
 
 
-def test_dense_eligible_traffic_paces_every_limit_across_the_hour(
+def test_dense_eligible_traffic_draws_all_outcomes_without_action_pacing(
     tmp_path: Path,
 ) -> None:
     repository, round_id, identities = _eligible_repository(tmp_path, target_count=202)
@@ -130,18 +131,16 @@ def test_dense_eligible_traffic_paces_every_limit_across_the_hour(
         )
         for index, identity_key in enumerate(identities)
     ]
-    timestamps = {
-        outcome: [
-            plan.created_at_ms for plan in plans if plan.effective_outcome is outcome
-        ]
-        for outcome in HOURLY_LIMITS
-    }
+    requested = Counter(plan.requested_outcome for plan in plans)
 
-    assert {outcome: len(values) for outcome, values in timestamps.items()} == dict(
-        HOURLY_LIMITS
+    assert set(requested) == set(OutcomeKind)
+    assert all(35 <= requested[outcome] <= 65 for outcome in OutcomeKind)
+    assert all(plan.requested_outcome is draw_outcome(plan.seed) for plan in plans)
+    assert any(
+        plan.requested_outcome is not OutcomeKind.TRACE
+        and plan.effective_outcome is OutcomeKind.TRACE
+        for plan in plans
     )
-    assert all(values[-1] - values[0] > 3_000_000 for values in timestamps.values())
-    assert sum(plan.effective_outcome is OutcomeKind.TRACE for plan in plans) == 63
 
 
 @pytest.mark.parametrize(

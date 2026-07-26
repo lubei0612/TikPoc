@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 import math
+import random
 import re
 import secrets
 import sqlite3
@@ -4273,43 +4274,26 @@ class AcquisitionRepository:
 
             requested = OutcomeKind.TRACE
             effective = OutcomeKind.TRACE
-            quota_reason = (
-                "profile_ineligible" if not snapshot.eligible else "pacing_not_due"
-            )
+            quota_reason = "profile_ineligible" if not snapshot.eligible else None
             quota_window_start_ms: int | None = None
-            selected_state: ActionPacingState | None = None
             if snapshot.eligible:
-                candidates: list[ActionPacingState] = []
-                for outcome in (
+                outcomes = (
                     OutcomeKind.LIKE,
                     OutcomeKind.FAVORITE,
                     OutcomeKind.REPOST,
-                ):
-                    limit = int(hourly_limits[outcome])
-                    if limit <= 0:
-                        raise ValueError("hourly limits must be positive")
-                    state = self._action_pacing_state(
-                        connection,
-                        device_id,
-                        outcome,
-                        now_ms=now_ms,
-                        limit=limit,
-                    )
-                    if state.ready:
-                        candidates.append(state)
-                if candidates:
-                    total_weight = sum(state.limit for state in candidates)
-                    selected_weight = int(seed[:16], 16) % total_weight
-                    for state in candidates:
-                        if selected_weight < state.limit:
-                            selected_state = state
-                            break
-                        selected_weight -= state.limit
-                    if selected_state is None:
-                        raise RuntimeError("paced outcome selection failed")
-                    requested = selected_state.outcome
-                    effective = requested
-                    quota_reason = None
+                    OutcomeKind.TRACE,
+                )
+                requested = outcomes[random.Random(seed).randrange(len(outcomes))]
+                effective = requested
+                if requested is not OutcomeKind.TRACE:
+                    try:
+                        limit = int(hourly_limits[requested])
+                    except KeyError as error:
+                        raise ValueError(
+                            f"missing hourly limit for {requested.value}"
+                        ) from error
+                    if limit < 0:
+                        raise ValueError("hourly limits must be nonnegative")
                     quota_window_start_ms = now_ms - now_ms % 3_600_000
                     connection.execute(
                         """
@@ -4330,24 +4314,12 @@ class AcquisitionRepository:
                             device_id,
                             requested.value,
                             quota_window_start_ms,
-                            selected_state.limit,
+                            limit,
                         ),
                     )
                     if reserved.rowcount != 1:
-                        requested = OutcomeKind.TRACE
                         effective = OutcomeKind.TRACE
-                        quota_reason = f"{selected_state.outcome.value}_limit_reached"
-                        quota_window_start_ms = None
-                        selected_state = None
-
-            if selected_state is not None:
-                connection.execute(
-                    """
-                    UPDATE action_pacing_state SET tokens = tokens - 1
-                    WHERE device_id = ? AND outcome = ? AND tokens >= 1
-                    """,
-                    (device_id, selected_state.outcome.value),
-                )
+                        quota_reason = f"{requested.value}_limit_reached"
             cursor = connection.execute(
                 """
                 INSERT INTO device_action_plans(

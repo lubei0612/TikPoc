@@ -33,6 +33,117 @@ def _target(identity: str, *, lines: tuple[int, ...] = (2,)) -> Target:
     )
 
 
+def _prepare_action_plan_subject(
+    repository: AcquisitionRepository,
+    *,
+    metrics: ProfileMetrics | None = None,
+) -> tuple[str, str]:
+    if metrics is None:
+        metrics = ProfileMetrics(following=20, followers=10, posts=1)
+    imported = repository.import_pool("comments.csv", "e" * 64, (_target("sec:s1"),))
+    round_id = create_exposure_round(
+        repository,
+        pool_id=imported.pool_id,
+        device_seeds={"phone-01": "seed-01"},
+        starts_at_ms=1_000,
+        min_inter_device_gap_ms=0,
+        min_repeat_gap_ms=0,
+    )
+    assignment = repository.claim_next_assignment(
+        round_id, "phone-01", "worker-01", now_ms=1_000
+    )
+    assert assignment is not None
+    repository.record_visit_confirmed(
+        assignment.assignment_id, "worker-01", now_ms=1_000
+    )
+    assert repository.claim_snapshot_lease(
+        round_id,
+        assignment.identity_key,
+        "phone-01",
+        now_ms=1_000,
+        ttl_ms=100,
+    )
+    repository.publish_profile_snapshot(
+        round_id,
+        assignment.identity_key,
+        device_id="phone-01",
+        observed_username="buyer_s1",
+        metrics=metrics,
+        private_account=False,
+        observed_at_ms=1_000,
+    )
+    return round_id, assignment.identity_key
+
+
+@pytest.mark.parametrize(
+    ("seed", "expected"),
+    (
+        ("mobile:assignment-5", OutcomeKind.LIKE),
+        ("mobile:assignment-0", OutcomeKind.FAVORITE),
+        ("mobile:assignment-1", OutcomeKind.REPOST),
+        ("mobile:assignment-3", OutcomeKind.TRACE),
+    ),
+)
+def test_paced_plan_selects_each_outcome_uniformly_from_full_mobile_seed(
+    tmp_path: Path, seed: str, expected: OutcomeKind
+) -> None:
+    repository = AcquisitionRepository(
+        tmp_path / f"{expected.value}.db", clock_ms=lambda: 1_000
+    )
+    repository.migrate()
+    round_id, identity_key = _prepare_action_plan_subject(repository)
+
+    plan = repository.create_paced_action_plan(
+        round_id=round_id,
+        identity_key=identity_key,
+        device_id="phone-01",
+        seed=seed,
+        now_ms=1_000,
+        hourly_limits={
+            OutcomeKind.LIKE: 100,
+            OutcomeKind.FAVORITE: 14,
+            OutcomeKind.REPOST: 25,
+        },
+    )
+
+    assert plan.requested_outcome is expected
+    assert plan.effective_outcome is expected
+    assert plan.quota_reason is None
+    quota = repository.quota_window("phone-01", expected, 0)
+    if expected is OutcomeKind.TRACE:
+        assert quota is None
+        assert plan.quota_window_start_ms is None
+    else:
+        assert quota is not None and quota.reserved_count == 1
+        assert plan.quota_window_start_ms == 0
+
+
+def test_paced_plan_preserves_selected_action_when_quota_is_exhausted(
+    tmp_path: Path,
+) -> None:
+    repository = AcquisitionRepository(tmp_path / "tikpoc.db", clock_ms=lambda: 1_000)
+    repository.migrate()
+    round_id, identity_key = _prepare_action_plan_subject(repository)
+
+    plan = repository.create_paced_action_plan(
+        round_id=round_id,
+        identity_key=identity_key,
+        device_id="phone-01",
+        seed="mobile:assignment-0",
+        now_ms=1_000,
+        hourly_limits={
+            OutcomeKind.LIKE: 100,
+            OutcomeKind.FAVORITE: 0,
+            OutcomeKind.REPOST: 25,
+        },
+    )
+
+    assert plan.requested_outcome is OutcomeKind.FAVORITE
+    assert plan.effective_outcome is OutcomeKind.TRACE
+    assert plan.quota_reason == "favorite_limit_reached"
+    assert plan.quota_window_start_ms == 0
+
+
 def test_import_pool_is_idempotent_by_source_checksum(tmp_path: Path) -> None:
     repository = AcquisitionRepository(tmp_path / "tikpoc.db", clock_ms=lambda: 1000)
     repository.migrate()
