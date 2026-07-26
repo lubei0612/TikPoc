@@ -7,6 +7,7 @@ public final class AutonomousTaskRunnerTest {
     public static void main(String[] args) throws Exception {
         pullsTasksAndFlushesIdempotentOutbox();
         executesOnePersistedTaskAndQueuesResult();
+        activeQueueUsesShortDelayWithoutHeartbeatFlooding();
         transientFailuresRemainDegradedAndRecover();
         System.out.println("AutonomousTaskRunnerTest PASS");
     }
@@ -23,7 +24,24 @@ public final class AutonomousTaskRunnerTest {
         runner.runOnce(1_000L);
 
         check(store.next(7L, 1_000L) == null, "completed task removed");
-        check(store.pendingResults().size() == 1, "result persisted before upload");
+        check(store.pendingResults().isEmpty(), "result uploaded in the same cycle");
+        check(client.uploads == 1, "same-cycle result upload avoids one-second latency");
+    }
+
+    private static void activeQueueUsesShortDelayWithoutHeartbeatFlooding()
+            throws Exception {
+        DeviceTaskStore store = new DeviceTaskStore(new DeviceTaskStore.MemoryBackend());
+        FakeClient client = new FakeClient();
+        client.tasks.add(new DeviceTaskStore.Task(
+                "task-1", "lease-1", 7L, 9_000L, "pending", "{}"));
+        AutonomousTaskRunner runner = new AutonomousTaskRunner(
+                client, store, "round-1", 7L);
+
+        runner.runOnce(1_000L);
+        runner.runOnce(1_100L);
+
+        check(runner.recommendedDelayMs() == 100L, "queued work uses short delay");
+        check(client.heartbeats == 1, "heartbeats remain throttled during short cycles");
     }
 
     private static void pullsTasksAndFlushesIdempotentOutbox() throws Exception {

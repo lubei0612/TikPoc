@@ -102,7 +102,7 @@ public final class TikPocAccessibilityService extends AccessibilityService
                     AutonomousTaskRunner.State state = runner.runOnce(System.currentTimeMillis());
                     if (state == AutonomousTaskRunner.State.PAUSED) return;
                     try {
-                        Thread.sleep(1_000L);
+                        Thread.sleep(runner.recommendedDelayMs());
                     } catch (InterruptedException interrupted) {
                         Thread.currentThread().interrupt();
                     }
