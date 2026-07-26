@@ -196,10 +196,12 @@ public final class TikPocAccessibilityService extends AccessibilityService
             input.recycle();
         }
         boolean visibleSubmit = clickExactSearchSubmit(800L);
-        if (!submitted && !visibleSubmit && !clickSearchSubmit(2_200L)) {
+        if (!visibleSubmit) visibleSubmit = clickSearchSubmit(2_200L);
+        if (!submitted && !visibleSubmit) {
             return "search_submit_missing";
         }
-        return waitForAndClickExactUsername(username, 8_000L);
+        if (!clickSearchUsersTab(3_000L)) return "search_users_tab_missing";
+        return waitForAndClickExactUsername(username, 12_000L);
     }
 
     private AccessibilityNodeInfo openSearchInput() {
@@ -209,7 +211,25 @@ public final class TikPocAccessibilityService extends AccessibilityService
             Rect searchBounds = new Rect();
             try {
                 AccessibilityNodeInfo input = firstSearchEditable(root);
-                if (input != null) return input;
+                if (input != null) {
+                    AccessibilityNodeInfo submit = firstClickableByExactText(root, "搜索");
+                    if (submit == null) {
+                        submit = firstClickableByExactText(root, "Search");
+                    }
+                    if (submit != null) {
+                        submit.recycle();
+                        return input;
+                    }
+                    Rect inputBounds = new Rect();
+                    input.getBoundsInScreen(inputBounds);
+                    boolean opened = tapCenter(inputBounds)
+                            || input.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                    input.recycle();
+                    if (opened) {
+                        SystemClock.sleep(300L);
+                        continue;
+                    }
+                }
                 AccessibilityNodeInfo search = firstClickableByLabel(root, "search", "搜索");
                 if (search != null) {
                     search.getBoundsInScreen(searchBounds);
@@ -342,6 +362,9 @@ public final class TikPocAccessibilityService extends AccessibilityService
             if (root != null) {
                 try {
                     AccessibilityNodeInfo submit = firstClickableByExactText(root, "搜索");
+                    if (submit == null) {
+                        submit = firstClickableByExactText(root, "Search");
+                    }
                     if (submit != null) {
                         Rect bounds = new Rect();
                         submit.getBoundsInScreen(bounds);
@@ -357,10 +380,36 @@ public final class TikPocAccessibilityService extends AccessibilityService
         return false;
     }
 
+    private boolean clickSearchUsersTab(long timeoutMs) {
+        long deadline = SystemClock.elapsedRealtime() + timeoutMs;
+        while (SystemClock.elapsedRealtime() < deadline) {
+            AccessibilityNodeInfo root = getRootInActiveWindow();
+            if (root != null) {
+                try {
+                    AccessibilityNodeInfo tab = firstClickableByExactText(root, "用户");
+                    if (tab == null) tab = firstClickableByExactText(root, "Users");
+                    if (tab != null) {
+                        Rect bounds = new Rect();
+                        tab.getBoundsInScreen(bounds);
+                        boolean clicked = tapCenter(bounds)
+                                || tab.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                        tab.recycle();
+                        if (clicked) {
+                            SystemClock.sleep(300L);
+                            return true;
+                        }
+                    }
+                } finally { root.recycle(); }
+            }
+            SystemClock.sleep(100L);
+        }
+        return false;
+    }
+
     private static AccessibilityNodeInfo firstClickableByExactText(
             AccessibilityNodeInfo node, String expected) {
         if (node.isVisibleToUser() && string(node.getText()).trim().equals(expected)) {
-            return clickableAncestor(node);
+            return AccessibilityNodeInfo.obtain(node);
         }
         for (int index = 0; index < node.getChildCount(); index++) {
             AccessibilityNodeInfo child = node.getChild(index);
