@@ -36,7 +36,13 @@ def _parser() -> argparse.ArgumentParser:
     priority_import.add_argument("--db", type=Path, required=True)
     priority_import.add_argument("--devices", type=Path, required=True)
     priority_import.add_argument("--file", type=Path, required=True)
-    priority_import.add_argument("--source-live", required=True)
+    priority_source = priority_import.add_mutually_exclusive_group(required=True)
+    priority_source.add_argument("--source-id")
+    priority_source.add_argument("--source-live")
+    priority_import.add_argument(
+        "--navigation-mode", choices=("deeplink", "search"), default="deeplink"
+    )
+    priority_import.add_argument("--json", action="store_true", dest="json_output")
     priority_status = commands.add_parser("priority-status")
     priority_status.add_argument("--db", type=Path, required=True)
     supabase_pool_import = commands.add_parser("supabase-pool-import")
@@ -200,8 +206,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _require_file(args.file, "priority input")
                 summary = service.import_batch(
                     args.file,
-                    source_live_id=args.source_live,
+                    source_live_id=args.source_id or args.source_live,
                     fleet_config=FleetConfig.from_path(args.devices),
+                    navigation_mode=args.navigation_mode,
                 )
                 payload = summary_json(summary)
             else:

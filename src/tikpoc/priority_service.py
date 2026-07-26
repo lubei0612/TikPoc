@@ -9,6 +9,7 @@ from openpyxl.utils.exceptions import InvalidFileException
 from .acquisition_db import AcquisitionRepository
 from .acquisition_models import PriorityBatchClass
 from .fleet import FleetConfig
+from .navigation import NavigationMode
 from .priority_importer import read_priority_targets
 
 
@@ -21,6 +22,7 @@ class PriorityImportSummary:
     skipped_duplicates: int
     skipped_invalid: int
     device_count: int
+    navigation_mode: str
 
 
 class PriorityBatchService:
@@ -33,11 +35,13 @@ class PriorityBatchService:
         *,
         source_live_id: str,
         fleet_config: FleetConfig,
+        navigation_mode: NavigationMode | str = NavigationMode.DEEPLINK,
     ) -> PriorityImportSummary:
         source = Path(source_path).expanduser().resolve()
         if not source.is_file():
             raise ValueError(f"priority input does not exist: {source}")
         live_id = str(source_live_id).strip()
+        normalized_navigation = NavigationMode.parse(str(navigation_mode))
         if not live_id:
             raise ValueError("source live id is required")
         before = source.stat()
@@ -74,6 +78,7 @@ class PriorityBatchService:
                 unique_targets=len(parsed.targets),
                 skipped_duplicates=parsed.skipped_duplicates,
                 skipped_invalid=parsed.skipped_invalid,
+                navigation_mode=normalized_navigation.value,
             )
         if len(parent_rounds) != 1:
             raise ValueError(
@@ -97,6 +102,7 @@ class PriorityBatchService:
                 device_count=len(
                     self.repository.round_device_ids(existing.priority_round_id)
                 ),
+                navigation_mode=existing.navigation_mode,
             )
 
         participant_device_ids = self.repository.running_round_device_ids(
@@ -124,6 +130,7 @@ class PriorityBatchService:
             source_checksum=checksum,
             device_seeds=device_seeds,
             batch_class=PriorityBatchClass.LIVE_INTERRUPT,
+            navigation_mode=normalized_navigation,
             require_unique_active_parent=True,
         )
         return PriorityImportSummary(
@@ -134,6 +141,7 @@ class PriorityBatchService:
             skipped_duplicates=parsed.skipped_duplicates,
             skipped_invalid=parsed.skipped_invalid,
             device_count=len(participant_device_ids),
+            navigation_mode=normalized_navigation.value,
         )
 
     def _replay_completed_batch(
@@ -145,11 +153,12 @@ class PriorityBatchService:
         unique_targets: int,
         skipped_duplicates: int,
         skipped_invalid: int,
+        navigation_mode: str,
     ) -> PriorityImportSummary:
         with self.repository._connect_read_only() as connection:
             rows = connection.execute(
                 """
-                SELECT batch_id, batch_class, parent_round_id, priority_round_id
+                SELECT batch_id, batch_class, parent_round_id, priority_round_id, navigation_mode
                 FROM priority_batches
                 WHERE source_checksum = ? AND source_live_id = ?
                 ORDER BY queue_sequence
@@ -174,6 +183,7 @@ class PriorityBatchService:
             skipped_duplicates=skipped_duplicates,
             skipped_invalid=skipped_invalid,
             device_count=len(stored_device_ids),
+            navigation_mode=str(row["navigation_mode"]),
         )
 
     def status(self) -> dict[str, object]:
@@ -212,6 +222,7 @@ class PriorityBatchService:
                         "parent_round_id": str(batch["parent_round_id"]),
                         "queue_sequence": int(batch["queue_sequence"]),
                         "source_live_id": str(batch["source_live_id"]),
+                        "navigation_mode": str(batch["navigation_mode"]),
                         "state": str(batch["state"]),
                         "devices": [
                             {

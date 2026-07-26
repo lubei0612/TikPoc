@@ -240,3 +240,36 @@ def test_priority_importer_requires_supported_named_headers(tmp_path: Path) -> N
 
     with pytest.raises(ValueError, match="missing required priority workbook columns"):
         read_priority_targets(source, source_live_id="live-6")
+
+
+def test_priority_jsonl_accepts_followers_source_contract(tmp_path: Path) -> None:
+    source = tmp_path / "followers.jsonl"
+    source.write_text(
+        json.dumps(
+            {
+                "username": "buyer.one",
+                "user_id": "123",
+                "sec_uid": "sec-1",
+                "source_type": "comments",
+                "source_id": "video-1",
+                "collected_at": "2026-07-26T20:00:00+08:00",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = read_priority_targets(source, source_live_id="video-1")
+
+    assert [target.username for target in result.targets] == ["buyer.one"]
+
+
+def test_priority_jsonl_rejects_different_source_id(tmp_path: Path) -> None:
+    source = tmp_path / "followers.jsonl"
+    source.write_text(
+        '{"username":"buyer","source_type":"live","source_id":"room-2"}\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="different source_id"):
+        read_priority_targets(source, source_live_id="room-1")

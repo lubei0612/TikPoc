@@ -90,6 +90,7 @@ def test_priority_import_is_idempotent_and_prints_redacted_json(
         "batch_class": "live_interrupt",
         "batch_id": first["batch_id"],
         "device_count": 2,
+        "navigation_mode": "deeplink",
         "parent_round_id": parent_round,
         "skipped_duplicates": 1,
         "skipped_invalid": 1,
@@ -99,6 +100,7 @@ def test_priority_import_is_idempotent_and_prints_redacted_json(
         "batch_class",
         "batch_id",
         "device_count",
+        "navigation_mode",
         "parent_round_id",
         "skipped_duplicates",
         "skipped_invalid",
@@ -430,3 +432,42 @@ def test_priority_status_rejects_multiple_active_ordinary_rounds(
 
     with pytest.raises(SystemExit, match="multiple active ordinary rounds"):
         main(["priority-status", "--db", str(database)])
+
+
+def test_priority_import_accepts_source_id_and_search_mode(
+    tmp_path: Path, capsys
+) -> None:
+    database = tmp_path / "tikpoc.db"
+    _seed_active_round(database)
+    devices = tmp_path / "devices.yaml"
+    _write_fleet_config(devices)
+    source = tmp_path / "followers.jsonl"
+    source.write_text(
+        '{"username":"buyer.one","source_type":"comments","source_id":"video-1"}\n',
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "priority-import",
+                "--db",
+                str(database),
+                "--devices",
+                str(devices),
+                "--file",
+                str(source),
+                "--source-id",
+                "video-1",
+                "--navigation-mode",
+                "search",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["navigation_mode"] == "search"
+    repository = AcquisitionRepository(database)
+    assert repository.priority_batch(payload["batch_id"]).navigation_mode == "search"

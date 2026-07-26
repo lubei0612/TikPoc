@@ -23,6 +23,8 @@ _JSON_TEXT_FIELDS = (
     "profile_url",
     "source_video_id",
     "source_live_id",
+    "source_type",
+    "source_id",
     "collected_at",
 )
 
@@ -68,11 +70,17 @@ def _read_jsonl(path: Path, live_id: str) -> PriorityImportResult:
                 field: _json_text(row, field, line_number)
                 for field in _JSON_TEXT_FIELDS
             }
-            row_live_id = str(values["source_live_id"] or live_id).strip()
-            if row_live_id != live_id:
+            source_type = str(values["source_type"] or "").strip()
+            if source_type and source_type not in {"followers", "comments", "live"}:
                 raise ValueError(
-                    f"JSONL line {line_number} has a different source_live_id"
+                    f"JSONL line {line_number} has an unsupported source_type"
                 )
+            row_source_id = str(
+                values["source_id"] or values["source_live_id"] or live_id
+            ).strip()
+            if row_source_id != live_id:
+                field = "source_id" if values["source_id"] else "source_live_id"
+                raise ValueError(f"JSONL line {line_number} has a different {field}")
             target = _target_from_values(
                 username=values["username"],
                 target_id=values["user_id"],
