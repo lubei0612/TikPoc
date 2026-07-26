@@ -120,11 +120,19 @@ public final class TikTokSemantics {
     }
 
     public static String actionState(SemanticSnapshot.Node node) {
-        if (node.selected) return "on";
+        if (hasSelectedNode(node)) return "on";
         String searchable = node.searchableText();
         if (searchable.contains("selected") || searchable.contains("remove")
                 || searchable.contains("点赞的视频")) return "on";
         return "off";
+    }
+
+    private static boolean hasSelectedNode(SemanticSnapshot.Node node) {
+        if (node.selected) return true;
+        for (SemanticSnapshot.Node child : node.children) {
+            if (hasSelectedNode(child)) return true;
+        }
+        return false;
     }
 
     public static SemanticSnapshot.Node postControl(

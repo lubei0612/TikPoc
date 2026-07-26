@@ -19,8 +19,23 @@ public final class TikTokSemanticsTest {
         selectsOnlyOneVisibleControl();
         recognizesLocalizedObfuscatedVideoControls();
         recognizesLocalizedSelectedLikeState();
+        recognizesSelectedFavoriteFromItsIconChild();
         recognizesLocalizedRepostConfirmation();
         System.out.println("TikTokSemanticsTest PASS");
+    }
+
+    private static void recognizesSelectedFavoriteFromItsIconChild() throws Exception {
+        SemanticSnapshot.Node selectedIcon = new SemanticSnapshot.Node(
+                "g3n", "ImageView", "", "",
+                new SemanticSnapshot.Bounds(10, 10, 90, 45), true, false, true, true,
+                Collections.<SemanticSnapshot.Node>emptyList());
+        SemanticSnapshot.Node favorite = new SemanticSnapshot.Node(
+                "g4g", "Button", "", "将此视频添加到或移出收藏。",
+                new SemanticSnapshot.Bounds(0, 0, 100, 50), true, true, true, false,
+                Collections.singletonList(selectedIcon));
+
+        check(TikTokSemantics.actionState(favorite).equals("on"),
+                "selected favorite icon propagates to its control");
     }
 
     private static void parsesCoherentProfileEvidence() throws Exception {
