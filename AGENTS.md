@@ -51,8 +51,10 @@ first failing gate:
    uncertain reconciliation, and terminal accounting all pass with no duplicate
    interaction.
 2. **Single-device performance:** fresh 100-target round and then an unchanged
-   30-minute run; mean below `6.5 s`, p90 below `8.64 s`, zero stuck leases, and
-   no route/action integrity regression.
+   30-minute run; overall mean at or below `8.64 s`, zero stuck leases, and no
+   route/action integrity regression. Track p90 and action/trace distributions
+   diagnostically; slower interacted targets are acceptable when the complete
+   target mix remains inside the average budget.
 3. **Two-device isolation:** both APK workers pull over HTTPS without runtime
    ADB dependence; independent queues, sessions, order seeds, quotas, proxy
    exits, and visible actions remain isolated.
@@ -230,9 +232,10 @@ user-approved document and update this guide in the same change.
 - Required seven-device visit count: `70,000`.
 - Per-device daily visit count: `10,000`.
 - Twenty-four-hour average budget: `8.64 s/target`.
-- Twenty-hour average budget: `7.20 s/target`.
-- Promotion gate: per-device mean below `6.5 s` and p90 below `8.64 s`, with
-  identity, route, action, and `7/7` coverage checks passing.
+- Promotion gate: each device's measured overall mean is at or below
+  `8.64 s/target`, with identity, route, action, and `N/N` coverage checks
+  passing. Interaction targets may exceed 8.64 seconds and trace targets may be
+  faster; p50/p90 remain diagnostic rather than independent rejection gates.
 - Report measured throughput separately from projected throughput. Do not claim
   the daily target from unit tests or a short synthetic run.
 
@@ -247,7 +250,7 @@ user-approved document and update this guide in the same change.
 - The interval from first confirmed visit to last completion was approximately
   `194.6 s`, or about `370 targets/hour`. This is a correctness canary, not a
   capacity pass: it is below the `416.7 targets/hour` minimum needed for
-  10,000/24h and below the promotion target implied by the `6.5 s` mean gate.
+  10,000/24h.
 - The next active task is a fresh 100-target performance run followed by an
   unchanged-build 30-minute gate. Diagnose stage timings before changing code;
   prioritize route/open-video latency and avoid altering business decisions.
@@ -603,8 +606,9 @@ Completed on `feat/web-lead-conversion`:
 - The unchanged final build completed a fresh 100-target slot-1 preflight with
   exact 100/100 coverage and zero uncertain results. Mean/P90 were
   6.812/10.847 seconds and the 20-hour projection was 10,570 unique targets.
-  The only capacity failure was `device timing threshold exceeded`, so the
-  clean 500-target gate was not started.
+  It failed the capacity rule in effect at that time because p90 was an
+  independent gate. Under the current user-approved overall-average contract,
+  p90 is diagnostic and this timing distribution would pass the latency gate.
 - Fresh integrated verification after the browser scan-health and mobile repost
   fixes passed Python `687`, Chrome extension `83`, browser-health Python `108`,
   frontend `35`, the production console build, Android build, Ruff check, and
@@ -662,11 +666,9 @@ Outstanding at the current checkpoint:
    bidirectional manual DM delivery, and `4/4` browser health already passed; do
    not repeat them on a conversation whose later bubbles disappear after reload.
    Continue with a fresh controlled conversation that receives live DOM updates.
-4. Repeat the fresh final-build 100-target slot-1 preflight only after the full
-   cross-database 60-minute no-action cooldown and either measured route/video
-   latency improvement or a documented unchanged-build retry. Start the clean
-   500-target gate only when mean is below 6.5 seconds and P90 is below 8.64
-   seconds.
+4. Run the fresh 100-target VMOS performance gate and then the unchanged-build
+   30-minute gate. Promote latency when the complete target mix averages at or
+   below 8.64 seconds; retain p50/p90 and per-action timings as diagnostics.
 5. Execute the remaining Mobile Task 10 two-device live gate on slots 1 and 2.
 6. Reconnect the VMOS ADB endpoint and run a fresh isolated representative
    100-target canary. Do not reuse the interrupted database or infer a capacity

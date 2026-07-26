@@ -349,14 +349,15 @@ The capacity equation is fixed:
 - 70,000 confirmed assignments per day;
 - 10,000 confirmed assignments per device per day.
 
-The design uses a 20-effective-hour operating target and four hours of recovery,
-maintenance, login, proxy, and retry headroom. Each device therefore needs 500
-confirmed assignments per effective hour, or 7.20 seconds per assignment.
+The production capacity gate uses the complete 24-hour target mix. Each device
+needs at least 416.7 confirmed assignments per hour, or an overall mean no
+greater than 8.64 seconds per assignment.
 
 Promotion requires, on every device:
 
-- sustained mean below 6.5 seconds per confirmed assignment;
-- p90 below 8.64 seconds;
+- sustained overall mean at or below 8.64 seconds per confirmed assignment;
+- p50 and p90 reported as diagnostics, without rejecting a run merely because
+  an interacted target is slower than 8.64 seconds;
 - zero identity substitutions;
 - zero quota overruns;
 - zero false completed outcomes;

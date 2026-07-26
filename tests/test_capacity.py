@@ -378,11 +378,11 @@ def test_capacity_allows_projection_exactly_equal_to_target() -> None:
     assert report.passed is True
 
 
-def test_capacity_thresholds_are_strict_and_use_nearest_rank_p90() -> None:
+def test_capacity_uses_overall_mean_budget_and_reports_p90_informationally() -> None:
     rows = synthetic_completed_timings(
         {
-            "phone-01": [6_500] * 10,
-            "phone-02": [1_000] * 8 + [8_640] * 2,
+            "phone-01": [8_640] * 10,
+            "phone-02": [7_000] * 8 + [12_000] * 2,
         }
     )
 
@@ -390,16 +390,31 @@ def test_capacity_thresholds_are_strict_and_use_nearest_rank_p90() -> None:
         rows,
         expected_devices=2,
         target_count=10,
-        effective_hours=20,
+        effective_hours=24,
         fully_covered_targets=10,
         total_assignment_count=20,
     )
 
-    assert report.devices["phone-01"].mean_ms == 6_500
+    assert report.devices["phone-01"].mean_ms == 8_640
+    assert report.devices["phone-01"].passed is True
+    assert report.devices["phone-02"].mean_ms == 8_000
+    assert report.devices["phone-02"].p90_ms == 12_000
+    assert report.devices["phone-02"].passed is True
+    assert "device average timing threshold exceeded" not in report.reasons
+
+
+def test_capacity_rejects_device_average_above_daily_budget() -> None:
+    report = evaluate_capacity(
+        synthetic_completed_timings({"phone-01": [8_641] * 10}),
+        expected_devices=1,
+        target_count=10,
+        effective_hours=24,
+        fully_covered_targets=10,
+        total_assignment_count=10,
+    )
+
     assert report.devices["phone-01"].passed is False
-    assert report.devices["phone-02"].p90_ms == 8_640
-    assert report.devices["phone-02"].passed is False
-    assert "device timing threshold exceeded" in report.reasons
+    assert "device average timing threshold exceeded" in report.reasons
 
 
 def test_capacity_requires_every_configured_device() -> None:

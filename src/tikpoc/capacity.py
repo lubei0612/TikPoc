@@ -1,12 +1,11 @@
 import math
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from statistics import fmean
-from typing import Iterable, Protocol
+from typing import Protocol
 
-
-MEAN_LIMIT_MS = 6_500
-P90_LIMIT_MS = 8_640
+DAILY_AVERAGE_LIMIT_MS = 8_640
 
 
 @dataclass(frozen=True)
@@ -149,7 +148,7 @@ def evaluate_capacity(
             p90_ms=p90_ms,
             confirmed_per_hour=confirmed_per_hour,
             projected_per_effective_day=projected,
-            passed=mean_ms < MEAN_LIMIT_MS and p90_ms < P90_LIMIT_MS,
+            passed=mean_ms <= DAILY_AVERAGE_LIMIT_MS,
         )
 
     if fully_covered_targets is None:
@@ -189,7 +188,7 @@ def evaluate_capacity(
     ):
         reasons.append("assignment cardinality mismatch")
     if any(not device.passed for device in devices.values()):
-        reasons.append("device timing threshold exceeded")
+        reasons.append("device average timing threshold exceeded")
 
     slowest_device_id = ""
     projected_unique_per_day = 0
