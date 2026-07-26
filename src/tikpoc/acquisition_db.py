@@ -1,7 +1,9 @@
 import hashlib
+import hmac
 import json
 import math
 import re
+import secrets
 import sqlite3
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -32,6 +34,7 @@ from .acquisition_models import (
     RoundCompletion,
 )
 from .capacity import AssignmentTiming, RoundCapacityAudit
+from .device_api import DeviceSession
 from .importer import Target, target_identity_key
 from .models import ProfileMetrics
 from .rules import evaluate_profile
@@ -101,9 +104,11 @@ class AcquisitionRepository:
         path: Path,
         *,
         clock_ms: Callable[[], int] = _clock_ms,
+        token_factory: Callable[[], str] = lambda: secrets.token_urlsafe(32),
     ) -> None:
         self.path = path
         self.clock_ms = clock_ms
+        self.token_factory = token_factory
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -538,6 +543,113 @@ class AcquisitionRepository:
                     ADD COLUMN fence_token INTEGER NOT NULL DEFAULT 0
                     """
                 )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS mobile_devices (
+                    device_id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL UNIQUE,
+                    session_epoch INTEGER NOT NULL CHECK(session_epoch > 0),
+                    token_digest TEXT NOT NULL,
+                    state TEXT NOT NULL CHECK(
+                        state IN ('active', 'paused', 'revoked')
+                    ),
+                    registered_at_ms INTEGER NOT NULL,
+                    last_seen_at_ms INTEGER NOT NULL,
+                    revoked_at_ms INTEGER
+                )
+                """
+            )
+
+    def register_mobile_device(
+        self, device_id: str, account_id: str, *, now_ms: int
+    ) -> DeviceSession:
+        device_id = str(device_id).strip()
+        account_id = str(account_id).strip()
+        if not device_id or not account_id or now_ms < 0:
+            raise ValueError("mobile device identifiers and time are required")
+        access_token = str(self.token_factory()).strip()
+        if not access_token:
+            raise ValueError("mobile device token factory returned an empty token")
+        token_digest = hashlib.sha256(access_token.encode()).hexdigest()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            device = connection.execute(
+                "SELECT * FROM mobile_devices WHERE device_id = ?", (device_id,)
+            ).fetchone()
+            account = connection.execute(
+                "SELECT device_id FROM mobile_devices WHERE account_id = ?",
+                (account_id,),
+            ).fetchone()
+            if device is not None and str(device["account_id"]) != account_id:
+                raise ValueError("mobile device binding mismatch")
+            if account is not None and str(account["device_id"]) != device_id:
+                raise ValueError("mobile account binding mismatch")
+            epoch = 1 if device is None else int(device["session_epoch"]) + 1
+            connection.execute(
+                """
+                INSERT INTO mobile_devices(
+                    device_id, account_id, session_epoch, token_digest, state,
+                    registered_at_ms, last_seen_at_ms, revoked_at_ms
+                ) VALUES (?, ?, ?, ?, 'active', ?, ?, NULL)
+                ON CONFLICT(device_id) DO UPDATE SET
+                    account_id = excluded.account_id,
+                    session_epoch = excluded.session_epoch,
+                    token_digest = excluded.token_digest,
+                    state = 'active',
+                    registered_at_ms = excluded.registered_at_ms,
+                    last_seen_at_ms = excluded.last_seen_at_ms,
+                    revoked_at_ms = NULL
+                """,
+                (
+                    device_id,
+                    account_id,
+                    epoch,
+                    token_digest,
+                    now_ms,
+                    now_ms,
+                ),
+            )
+        return DeviceSession(device_id, account_id, epoch, access_token)
+
+    def authenticate_mobile_device(
+        self, device_id: str, access_token: str, *, now_ms: int
+    ) -> DeviceSession | None:
+        device_id = str(device_id).strip()
+        access_token = str(access_token).strip()
+        if not device_id or not access_token or now_ms < 0:
+            return None
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM mobile_devices WHERE device_id = ?", (device_id,)
+            ).fetchone()
+            if row is None or str(row["state"]) != "active":
+                return None
+            digest = hashlib.sha256(access_token.encode()).hexdigest()
+            if not hmac.compare_digest(digest, str(row["token_digest"])):
+                return None
+            connection.execute(
+                "UPDATE mobile_devices SET last_seen_at_ms = ? WHERE device_id = ?",
+                (now_ms, device_id),
+            )
+        return DeviceSession(
+            device_id=device_id,
+            account_id=str(row["account_id"]),
+            session_epoch=int(row["session_epoch"]),
+        )
+
+    def revoke_mobile_device(self, device_id: str, *, now_ms: int) -> None:
+        device_id = str(device_id).strip()
+        if not device_id or now_ms < 0:
+            raise ValueError("mobile device identifier and time are required")
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE mobile_devices
+                SET state = 'revoked', revoked_at_ms = ?, last_seen_at_ms = ?
+                WHERE device_id = ?
+                """,
+                (now_ms, now_ms, device_id),
+            )
 
     def claim_device_worker_lease(
         self,
