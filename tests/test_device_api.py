@@ -141,3 +141,14 @@ def test_mobile_claim_is_bounded_and_result_upload_is_idempotent(
     assert plan is not None
     if plan.effective_outcome.value != "trace":
         assert plan.video_key in {"video-1", "video-2"}
+    continuation = repo.claim_mobile_tasks(
+        round_id,
+        "device-1",
+        session_epoch=1,
+        limit=20,
+        now_ms=4_000,
+    )
+    assert len(continuation) == 1
+    assert continuation[0].plan_id == plan.plan_id
+    assert continuation[0].action == plan.effective_outcome.value
+    assert continuation[0].video_key == (plan.video_key or "")

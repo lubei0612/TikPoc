@@ -24,6 +24,9 @@ class MobileTaskEnvelope:
     target_id: str
     username: str
     profile_url: str
+    plan_id: int = 0
+    action: str = ""
+    video_key: str = ""
 
 
 @dataclass(frozen=True)

@@ -446,6 +446,9 @@ def create_app(
                         "target_id": task.target_id,
                         "username": task.username,
                         "profile_url": task.profile_url,
+                        "plan_id": task.plan_id,
+                        "action": task.action,
+                        "video_key": task.video_key,
                     }
                     for task in tasks
                 ]

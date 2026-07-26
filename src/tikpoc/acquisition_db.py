@@ -777,6 +777,26 @@ class AcquisitionRepository:
                 raise DeviceWorkerLeaseLost("stale mobile session")
             account_id = str(device["account_id"])
         owner_id = f"mobile:{device_id}:{session_epoch}"
+        with self._connect() as connection:
+            continuation = connection.execute(
+                """
+                SELECT assignment_id FROM round_assignments
+                WHERE device_id = ? AND lease_owner = ?
+                  AND lease_expires_at_ms > ?
+                  AND phase = 'identity_confirmed'
+                ORDER BY assignment_id LIMIT 1
+                """,
+                (device_id, owner_id, now_ms),
+            ).fetchone()
+        if continuation is not None:
+            assignment = self.assignment(int(continuation["assignment_id"]))
+            return (
+                self._mobile_task_envelope(
+                    assignment,
+                    account_id=account_id,
+                    session_epoch=session_epoch,
+                ),
+            )
         claimed: list[MobileTaskEnvelope] = []
         for _ in range(limit):
             assignment = self.claim_scheduled_assignment(
@@ -788,27 +808,45 @@ class AcquisitionRepository:
             )
             if assignment is None:
                 break
-            lease_id = (
-                f"{device_id}:{session_epoch}:{assignment.assignment_id}:"
-                f"{assignment.lease_expires_at_ms}"
-            )
             claimed.append(
-                MobileTaskEnvelope(
-                    task_id=str(assignment.assignment_id),
-                    assignment_id=assignment.assignment_id,
-                    round_id=assignment.round_id,
-                    device_id=device_id,
+                self._mobile_task_envelope(
+                    assignment,
                     account_id=account_id,
                     session_epoch=session_epoch,
-                    lease_id=lease_id,
-                    lease_expires_at_ms=assignment.lease_expires_at_ms,
-                    phase=assignment.phase.value,
-                    target_id=assignment.target_id,
-                    username=assignment.username,
-                    profile_url=assignment.profile_url,
                 )
             )
         return tuple(claimed)
+
+    def _mobile_task_envelope(
+        self,
+        assignment: RoundAssignment,
+        *,
+        account_id: str,
+        session_epoch: int,
+    ) -> MobileTaskEnvelope:
+        plan = self.action_plan(
+            assignment.round_id, assignment.identity_key, assignment.device_id
+        )
+        return MobileTaskEnvelope(
+            task_id=str(assignment.assignment_id),
+            assignment_id=assignment.assignment_id,
+            round_id=assignment.round_id,
+            device_id=assignment.device_id,
+            account_id=account_id,
+            session_epoch=session_epoch,
+            lease_id=(
+                f"{assignment.device_id}:{session_epoch}:{assignment.assignment_id}:"
+                f"{assignment.lease_expires_at_ms}"
+            ),
+            lease_expires_at_ms=assignment.lease_expires_at_ms,
+            phase=assignment.phase.value,
+            target_id=assignment.target_id,
+            username=assignment.username,
+            profile_url=assignment.profile_url,
+            plan_id=0 if plan is None else plan.plan_id,
+            action="" if plan is None else plan.effective_outcome.value,
+            video_key="" if plan is None or plan.video_key is None else plan.video_key,
+        )
 
     def record_mobile_result(self, result: MobileTaskResult, *, now_ms: int) -> str:
         if not result.device_id or not result.task_id or not result.idempotency_key:
