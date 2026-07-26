@@ -23,6 +23,7 @@ mkdir -p "$OUT/classes" "$OUT/test-classes" "$OUT/dex" "$OUT/compiled-res"
   "$ROOT/src/com/tikpoc/touch/CommandGate.java" \
   "$ROOT/src/com/tikpoc/touch/TouchCommandDispatcher.java" \
   "$ROOT/src/com/tikpoc/touch/LoopbackCommandServer.java" \
+  "$ROOT/src/com/tikpoc/touch/DeviceTaskStore.java" \
   "$ROOT/src/com/tikpoc/touch/TikPocAccessibilityService.java"
 
 "$JDK/bin/javac" \
@@ -33,7 +34,8 @@ mkdir -p "$OUT/classes" "$OUT/test-classes" "$OUT/dex" "$OUT/compiled-res"
   "$ROOT/test/com/tikpoc/touch/TikTokSemanticsTest.java" \
   "$ROOT/test/com/tikpoc/touch/CommandGateTest.java" \
   "$ROOT/test/com/tikpoc/touch/TouchCommandDispatcherTest.java" \
-  "$ROOT/test/com/tikpoc/touch/LoopbackCommandServerTest.java"
+  "$ROOT/test/com/tikpoc/touch/LoopbackCommandServerTest.java" \
+  "$ROOT/test/com/tikpoc/touch/DeviceTaskStoreTest.java"
 
 "$JDK/bin/java" -cp "$PLATFORM:$OUT/classes:$OUT/test-classes" \
   com.tikpoc.touch.ProtocolTest
@@ -45,6 +47,8 @@ mkdir -p "$OUT/classes" "$OUT/test-classes" "$OUT/dex" "$OUT/compiled-res"
   com.tikpoc.touch.TouchCommandDispatcherTest
 "$JDK/bin/java" -cp "$PLATFORM:$OUT/classes:$OUT/test-classes" \
   com.tikpoc.touch.LoopbackCommandServerTest
+"$JDK/bin/java" -cp "$PLATFORM:$OUT/classes:$OUT/test-classes" \
+  com.tikpoc.touch.DeviceTaskStoreTest
 
 "$BUILD_TOOLS/aapt2" compile \
   --dir "$ROOT/res" \
