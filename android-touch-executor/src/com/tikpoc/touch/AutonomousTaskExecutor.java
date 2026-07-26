@@ -57,8 +57,9 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
     @Override
     public DeviceTaskStore.Result execute(DeviceTaskStore.Task task) {
         String phase = "profile_opening";
+        Map<String, Object> target = null;
         try {
-            Map<String, Object> target = Protocol.decodeObject(task.payload);
+            target = Protocol.decodeObject(task.payload);
             String expected = requiredString(target, "username");
             ui.openProfile(target);
             phase = "identity_confirmed";
@@ -94,6 +95,10 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
             }
             return actionResult(task, target, "action_confirmed");
         } catch (AccessibilityUiAdapter.UiException error) {
+            if ("action_executing".equals(phase) && target != null) {
+                return actionResult(task, target, "action_reconciling",
+                        error.code, "uncertain", "action_executing");
+            }
             return result(task, "deferred", phase, error.code);
         } catch (Exception error) {
             return result(task, "deferred", phase, "executor_error");

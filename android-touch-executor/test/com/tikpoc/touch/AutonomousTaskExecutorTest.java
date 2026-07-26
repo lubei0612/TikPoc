@@ -48,6 +48,12 @@ public final class AutonomousTaskExecutorTest {
 
         check(result.idempotencyKey.equals("task-2:action_executing"),
                 "action failure does not collide with profile evidence receipt");
+        check(result.payload.contains("\"state\":\"uncertain\""),
+                "action evidence failure is reconciled once");
+        check(result.payload.contains("\"phase\":\"action_reconciling\""),
+                "action evidence failure enters reconciliation");
+        check(result.payload.contains("\"plan_id\":42"),
+                "action evidence failure retains its immutable plan");
     }
 
     private static void shadowModeConfirmsIdentityWithoutAction() throws Exception {
