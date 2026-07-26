@@ -38,7 +38,9 @@ from .api_models import (
     LeadTakeoverCommand,
     ManualReplyPlanCommand,
     MobileHeartbeatRequest,
+    MobilePullRequest,
     MobileRegisterRequest,
+    MobileResultRequest,
     OperatorCommand,
     PoolImportRequest,
     ProviderSettingsCommand,
@@ -48,6 +50,7 @@ from .api_models import (
 from .browser_dm import BrowserConversationBusy, BrowserDmService, BrowserInbound
 from .browser_welcome import BrowserWelcomeService
 from .db import Database, OperatorCommandConflict
+from .device_api import MobileTaskResult
 from .messaging import RuntimeAiReplyClient, probe_openai_provider
 from .runtime_settings import (
     AccountRuntimeSettings,
@@ -403,6 +406,81 @@ def create_app(
         if not accepted:
             return _json({"error": "stale_session"}, 409)
         return _json({"accepted": True, "server_time_ms": int(clock() * 1_000)})
+
+    @app.post("/api/mobile/pull")
+    async def mobile_pull(request: Request) -> JSONResponse:
+        try:
+            body = MobilePullRequest.model_validate(await _json_object(request))
+        except (TypeError, ValueError, ValidationError):
+            return _json({"error": "invalid_mobile_pull"}, 400)
+        session = acquisition.authenticate_mobile_device(
+            body.device_id, bearer_token(request), now_ms=int(clock() * 1_000)
+        )
+        if session is None:
+            return _json({"error": "invalid_mobile_token"}, 401)
+        if session.session_epoch != body.session_epoch:
+            return _json({"error": "stale_session"}, 409)
+        try:
+            tasks = acquisition.claim_mobile_tasks(
+                body.round_id,
+                body.device_id,
+                session_epoch=body.session_epoch,
+                limit=body.limit,
+                now_ms=int(clock() * 1_000),
+            )
+        except ValueError as error:
+            return _json({"error": str(error)}, 409)
+        return _json(
+            {
+                "tasks": [
+                    {
+                        "task_id": task.task_id,
+                        "assignment_id": task.assignment_id,
+                        "round_id": task.round_id,
+                        "device_id": task.device_id,
+                        "account_id": task.account_id,
+                        "session_epoch": task.session_epoch,
+                        "lease_id": task.lease_id,
+                        "lease_expires_at_ms": task.lease_expires_at_ms,
+                        "phase": task.phase,
+                        "target_id": task.target_id,
+                        "username": task.username,
+                        "profile_url": task.profile_url,
+                    }
+                    for task in tasks
+                ]
+            }
+        )
+
+    @app.post("/api/mobile/results")
+    async def mobile_result(request: Request) -> JSONResponse:
+        try:
+            body = MobileResultRequest.model_validate(await _json_object(request))
+        except (TypeError, ValueError, ValidationError):
+            return _json({"error": "invalid_mobile_result"}, 400)
+        session = acquisition.authenticate_mobile_device(
+            body.device_id, bearer_token(request), now_ms=int(clock() * 1_000)
+        )
+        if session is None:
+            return _json({"error": "invalid_mobile_token"}, 401)
+        if session.session_epoch != body.session_epoch:
+            return _json({"error": "stale_session"}, 409)
+        state = acquisition.record_mobile_result(
+            MobileTaskResult(
+                device_id=body.device_id,
+                session_epoch=body.session_epoch,
+                task_id=body.task_id,
+                lease_id=body.lease_id,
+                idempotency_key=body.idempotency_key,
+                state=body.state,
+                phase=body.phase,
+                evidence=body.evidence,
+            ),
+            now_ms=int(clock() * 1_000),
+        )
+        if state == "stale_session":
+            return _json({"error": state}, 409)
+        return _json({"accepted": state == "accepted", "state": state})
 
     @app.post("/api/browser-events")
     async def browser_event(request: Request) -> JSONResponse:

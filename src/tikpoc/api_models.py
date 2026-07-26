@@ -131,6 +131,24 @@ class MobileHeartbeatRequest(ApiRequest):
     client_timestamp_ms: int = Field(ge=0)
 
 
+class MobilePullRequest(ApiRequest):
+    device_id: Identifier
+    session_epoch: int = Field(gt=0)
+    round_id: Identifier
+    limit: int = Field(default=20, ge=1, le=50)
+
+
+class MobileResultRequest(ApiRequest):
+    device_id: Identifier
+    session_epoch: int = Field(gt=0)
+    task_id: Identifier
+    lease_id: Identifier
+    idempotency_key: Identifier
+    state: Literal["completed", "deferred", "uncertain", "skipped"]
+    phase: Identifier
+    evidence: dict[str, object] = Field(default_factory=dict)
+
+
 CommandId = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=100),

@@ -4,6 +4,9 @@ from pathlib import Path
 import pytest
 
 from tikpoc.acquisition_db import AcquisitionRepository
+from tikpoc.device_api import MobileTaskResult
+from tikpoc.importer import Target
+from tikpoc.rounds import create_exposure_round
 
 
 def repository(tmp_path: Path) -> AcquisitionRepository:
@@ -72,3 +75,51 @@ def test_revoked_device_does_not_authenticate(tmp_path: Path) -> None:
         repo.authenticate_mobile_device("device-1", session.access_token, now_ms=3_000)
         is None
     )
+
+
+def test_mobile_claim_is_bounded_and_result_upload_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    repo = repository(tmp_path)
+    target = Target(
+        target_id="target-1",
+        username="target_user",
+        profile_url="https://www.tiktok.com/@target_user",
+        source_video_id="video-1",
+        sec_uid="sec-1",
+        identity_key="sec:sec-1",
+        source_line_numbers=(2,),
+    )
+    pool = repo.import_pool("targets.csv", "b" * 64, (target,))
+    round_id = create_exposure_round(
+        repo,
+        pool_id=pool.pool_id,
+        device_seeds={"device-1": "seed-1"},
+        starts_at_ms=0,
+        min_inter_device_gap_ms=0,
+        min_repeat_gap_ms=0,
+    )
+    repo.register_mobile_device("device-1", "account-1", now_ms=1_000)
+
+    tasks = repo.claim_mobile_tasks(
+        round_id,
+        "device-1",
+        session_epoch=1,
+        limit=50,
+        now_ms=2_000,
+    )
+
+    assert len(tasks) == 1
+    task = tasks[0]
+    result = MobileTaskResult(
+        device_id="device-1",
+        session_epoch=1,
+        task_id=task.task_id,
+        lease_id=task.lease_id,
+        idempotency_key="result-1",
+        state="deferred",
+        phase="profile_opening",
+        evidence={"error_code": "network_lost"},
+    )
+    assert repo.record_mobile_result(result, now_ms=3_000) == "accepted"
+    assert repo.record_mobile_result(result, now_ms=4_000) == "duplicate"

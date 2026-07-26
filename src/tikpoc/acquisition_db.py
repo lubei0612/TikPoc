@@ -34,7 +34,7 @@ from .acquisition_models import (
     RoundCompletion,
 )
 from .capacity import AssignmentTiming, RoundCapacityAudit
-from .device_api import DeviceSession
+from .device_api import DeviceSession, MobileTaskEnvelope, MobileTaskResult
 from .importer import Target, target_identity_key
 from .models import ProfileMetrics
 from .rules import evaluate_profile
@@ -573,6 +573,24 @@ class AcquisitionRepository:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS mobile_task_receipts (
+                    receipt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    device_id TEXT NOT NULL,
+                    session_epoch INTEGER NOT NULL,
+                    task_id TEXT NOT NULL,
+                    lease_id TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    phase TEXT NOT NULL,
+                    evidence_json TEXT NOT NULL,
+                    received_at_ms INTEGER NOT NULL,
+                    UNIQUE(device_id, session_epoch, idempotency_key),
+                    FOREIGN KEY(device_id) REFERENCES mobile_devices(device_id)
+                )
+                """
+            )
 
     def register_mobile_device(
         self, device_id: str, account_id: str, *, now_ms: int
@@ -729,6 +747,109 @@ class AcquisitionRepository:
                 (now_ms, device_id),
             )
         return True
+
+    def claim_mobile_tasks(
+        self,
+        round_id: str,
+        device_id: str,
+        *,
+        session_epoch: int,
+        limit: int,
+        now_ms: int,
+        lease_ttl_ms: int = 120_000,
+    ) -> tuple[MobileTaskEnvelope, ...]:
+        round_id = str(round_id).strip()
+        device_id = str(device_id).strip()
+        if not round_id or not device_id or session_epoch <= 0:
+            raise ValueError("mobile task identifiers are required")
+        if not 1 <= limit <= 50 or lease_ttl_ms <= 0 or now_ms < 0:
+            raise ValueError("invalid mobile task claim limits")
+        with self._connect() as connection:
+            device = connection.execute(
+                "SELECT account_id, session_epoch, state FROM mobile_devices WHERE device_id = ?",
+                (device_id,),
+            ).fetchone()
+            if (
+                device is None
+                or str(device["state"]) != "active"
+                or int(device["session_epoch"]) != session_epoch
+            ):
+                raise DeviceWorkerLeaseLost("stale mobile session")
+            account_id = str(device["account_id"])
+        owner_id = f"mobile:{device_id}:{session_epoch}"
+        claimed: list[MobileTaskEnvelope] = []
+        for _ in range(limit):
+            assignment = self.claim_scheduled_assignment(
+                round_id,
+                device_id,
+                owner_id,
+                now_ms=now_ms,
+                lease_ttl_ms=lease_ttl_ms,
+            )
+            if assignment is None:
+                break
+            lease_id = (
+                f"{device_id}:{session_epoch}:{assignment.assignment_id}:"
+                f"{assignment.lease_expires_at_ms}"
+            )
+            claimed.append(
+                MobileTaskEnvelope(
+                    task_id=str(assignment.assignment_id),
+                    assignment_id=assignment.assignment_id,
+                    round_id=assignment.round_id,
+                    device_id=device_id,
+                    account_id=account_id,
+                    session_epoch=session_epoch,
+                    lease_id=lease_id,
+                    lease_expires_at_ms=assignment.lease_expires_at_ms,
+                    phase=assignment.phase.value,
+                    target_id=assignment.target_id,
+                    username=assignment.username,
+                    profile_url=assignment.profile_url,
+                )
+            )
+        return tuple(claimed)
+
+    def record_mobile_result(self, result: MobileTaskResult, *, now_ms: int) -> str:
+        if not result.device_id or not result.task_id or not result.idempotency_key:
+            raise ValueError("mobile result identifiers are required")
+        if result.session_epoch <= 0 or now_ms < 0:
+            raise ValueError("invalid mobile result session")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            device = connection.execute(
+                "SELECT session_epoch, state FROM mobile_devices WHERE device_id = ?",
+                (result.device_id,),
+            ).fetchone()
+            if (
+                device is None
+                or str(device["state"]) != "active"
+                or int(device["session_epoch"]) != result.session_epoch
+            ):
+                return "stale_session"
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO mobile_task_receipts(
+                        device_id, session_epoch, task_id, lease_id,
+                        idempotency_key, state, phase, evidence_json, received_at_ms
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        result.device_id,
+                        result.session_epoch,
+                        result.task_id,
+                        result.lease_id,
+                        result.idempotency_key,
+                        result.state,
+                        result.phase,
+                        json.dumps(dict(result.evidence), sort_keys=True),
+                        now_ms,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                return "duplicate"
+        return "accepted"
 
     def claim_device_worker_lease(
         self,
