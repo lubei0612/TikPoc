@@ -1,9 +1,12 @@
 import json
+import os
 import socket
 import struct
 import subprocess
+import sys
 import threading
 from collections.abc import Callable
+from pathlib import Path
 from subprocess import CompletedProcess
 
 import pytest
@@ -186,6 +189,50 @@ def test_same_adb_and_host_port_cannot_be_claimed_twice() -> None:
     try:
         with pytest.raises(DeviceSideTransportError, match="forward_already_claimed"):
             second.start()
+    finally:
+        first.close()
+
+
+def test_same_forward_is_locked_across_processes(tmp_path) -> None:
+    runner = RecordingRunner()
+    port = available_port()
+    first = DeviceSideTransport(
+        "ADB_ENDPOINT",
+        host_port=port,
+        device_port=47101,
+        lock_dir=tmp_path,
+        runner=runner,
+    )
+    first.start()
+    try:
+        script = """
+import sys
+from subprocess import CompletedProcess
+from tikpoc.device_side_transport import DeviceSideTransport, DeviceSideTransportError
+
+transport = DeviceSideTransport(
+    'ADB_ENDPOINT', host_port=int(sys.argv[1]), device_port=47101,
+    lock_dir=sys.argv[2], runner=lambda command, **kwargs: CompletedProcess(command, 0, '', ''),
+)
+try:
+    transport.start()
+except DeviceSideTransportError as error:
+    print(error.code)
+else:
+    print('acquired')
+    transport.close()
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(port), os.fspath(tmp_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+            env={
+                **os.environ,
+                "PYTHONPATH": os.fspath(Path(__file__).parents[1] / "src"),
+            },
+        )
+        assert result.stdout.strip() == "forward_already_claimed"
     finally:
         first.close()
 

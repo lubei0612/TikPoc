@@ -1,8 +1,11 @@
+import fcntl
+import hashlib
 import json
 import os
 import socket
 import struct
 import subprocess
+import tempfile
 import threading
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -31,6 +34,7 @@ class DeviceSideTransport:
         device_port: int,
         timeout_seconds: float = 10,
         max_payload_bytes: int = MAX_PAYLOAD_BYTES,
+        lock_dir: Path | None = None,
         runner: Runner = subprocess.run,
     ) -> None:
         if (
@@ -46,9 +50,18 @@ class DeviceSideTransport:
         self.device_port = device_port
         self.timeout_seconds = timeout_seconds
         self.max_payload_bytes = max_payload_bytes
+        self.lock_dir = Path(
+            lock_dir
+            if lock_dir is not None
+            else os.environ.get(
+                "TIKPOC_DEVICE_LOCK_DIR",
+                str(Path(tempfile.gettempdir()) / "tikpoc-device-locks"),
+            )
+        )
         self._runner = runner
         self._adb_executable = "adb"
         self._started = False
+        self._lock_file = None
 
     def start(self) -> None:
         if self._started:
@@ -59,11 +72,30 @@ class DeviceSideTransport:
                 raise DeviceSideTransportError("forward_already_claimed")
             _CLAIMS.add(claim)
         try:
+            self.lock_dir.mkdir(parents=True, exist_ok=True)
+            lock_name = hashlib.sha256(
+                f"{self.adb_endpoint}:{self.host_port}".encode()
+            ).hexdigest()[:32]
+            lock_file = self.lock_dir / f"{lock_name}.lock"
+            self._lock_file = lock_file.open("a+")
+            try:
+                fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except (BlockingIOError, OSError):
+                self._lock_file.close()
+                self._lock_file = None
+                raise DeviceSideTransportError("forward_already_claimed") from None
             self._run_adb("forward", f"tcp:{self.host_port}", f"tcp:{self.device_port}")
         except (OSError, subprocess.SubprocessError):
+            if self._lock_file is not None:
+                self._lock_file.close()
+                self._lock_file = None
             with _CLAIMS_LOCK:
                 _CLAIMS.discard(claim)
             raise DeviceSideTransportError("forward_setup_failed") from None
+        except DeviceSideTransportError:
+            with _CLAIMS_LOCK:
+                _CLAIMS.discard(claim)
+            raise
         self._started = True
 
     def close(self) -> None:
@@ -75,6 +107,12 @@ class DeviceSideTransport:
         except (OSError, subprocess.SubprocessError):
             raise DeviceSideTransportError("forward_cleanup_failed") from None
         finally:
+            if self._lock_file is not None:
+                try:
+                    fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_UN)
+                finally:
+                    self._lock_file.close()
+                    self._lock_file = None
             self._started = False
             with _CLAIMS_LOCK:
                 _CLAIMS.discard(claim)
