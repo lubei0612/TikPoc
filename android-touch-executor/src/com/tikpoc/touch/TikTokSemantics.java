@@ -135,6 +135,21 @@ public final class TikTokSemantics {
         return false;
     }
 
+    public static long actionCounter(SemanticSnapshot.Node node) {
+        for (SemanticSnapshot.Node child : node.children) {
+            if (child.visible && child.text.matches("[0-9][0-9,.]*")) {
+                try {
+                    return Long.parseLong(child.text.replace(",", ""));
+                } catch (NumberFormatException ignored) {
+                    return -1L;
+                }
+            }
+            long nested = actionCounter(child);
+            if (nested >= 0L) return nested;
+        }
+        return -1L;
+    }
+
     public static SemanticSnapshot.Node postControl(
             SemanticSnapshot snapshot, String videoKey) throws SemanticException {
         if (videoKey == null || !videoKey.startsWith("post:")) {

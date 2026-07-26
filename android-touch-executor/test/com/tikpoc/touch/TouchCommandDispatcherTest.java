@@ -23,6 +23,7 @@ public final class TouchCommandDispatcherTest {
         searchNoMatchIsTerminalEvidence();
         actionClicksOnceAndVerifiesResult();
         actionWaitsPastAStalePostClickSnapshot();
+        actionConfirmsFromVisibleCounterIncrement();
         alreadySelectedActionIsConfirmedWithoutClick();
         repostUsesShareSurfaceAndVerifiesResult();
         missingFinalEvidenceIsUncertainWithoutSecondClick();
@@ -217,6 +218,22 @@ public final class TouchCommandDispatcherTest {
         check(fixture.source.index == 3, "stale action snapshot polled once");
     }
 
+    private static void actionConfirmsFromVisibleCounterIncrement() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.source.snapshots = Arrays.asList(
+                countedActionSnapshot(2, 1), countedActionSnapshot(3, 2));
+
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("apply_action", map("action", "favorite")));
+
+        check(response.values.get("status").equals("ok"), "counter action verified");
+        check(fixture.actuator.clicks == 1, "counter action clicked once");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> evidence = (Map<String, Object>) response.values.get("evidence");
+        check(evidence.get("before_count").equals(2L), "counter before evidence");
+        check(evidence.get("after_count").equals(3L), "counter after evidence");
+    }
+
     private static void alreadySelectedActionIsConfirmedWithoutClick() throws Exception {
         Fixture fixture = new Fixture();
         fixture.source.snapshots = Collections.singletonList(actionSnapshot(true, 1));
@@ -332,6 +349,25 @@ public final class TouchCommandDispatcherTest {
                     "like_button", "Button", "secret visible text", "Like",
                     new SemanticSnapshot.Bounds(0, 0, 100, 50), true, true, true, selected,
                     Collections.<SemanticSnapshot.Node>emptyList());
+            SemanticSnapshot.Node root = new SemanticSnapshot.Node(
+                    "root", "Frame", "", "", new SemanticSnapshot.Bounds(0, 0, 1080, 1920),
+                    true, false, true, false, Collections.singletonList(control));
+            return SemanticSnapshot.fromRoot(root, sequence, 1_000L);
+        } catch (Exception error) {
+            throw new RuntimeException(error);
+        }
+    }
+
+    private static SemanticSnapshot countedActionSnapshot(long count, long sequence) {
+        try {
+            SemanticSnapshot.Node counter = new SemanticSnapshot.Node(
+                    "favorite_count", "TextView", Long.toString(count), "",
+                    new SemanticSnapshot.Bounds(0, 40, 100, 50), true, false, true, false,
+                    Collections.<SemanticSnapshot.Node>emptyList());
+            SemanticSnapshot.Node control = new SemanticSnapshot.Node(
+                    "favorite_button", "Button", "", "收藏",
+                    new SemanticSnapshot.Bounds(0, 0, 100, 50), true, true, true, false,
+                    Collections.singletonList(counter));
             SemanticSnapshot.Node root = new SemanticSnapshot.Node(
                     "root", "Frame", "", "", new SemanticSnapshot.Bounds(0, 0, 1080, 1920),
                     true, false, true, false, Collections.singletonList(control));

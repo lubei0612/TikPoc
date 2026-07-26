@@ -122,6 +122,7 @@ public final class TouchCommandDispatcher {
         SemanticSnapshot before = snapshots.current();
         SemanticSnapshot.Node control = TikTokSemantics.uniqueControl(before, action);
         String beforeState = TikTokSemantics.actionState(control);
+        long beforeCount = TikTokSemantics.actionCounter(control);
         if (beforeState.equals("on")) {
             Map<String, Object> evidence = new LinkedHashMap<String, Object>();
             evidence.put("action", action);
@@ -141,11 +142,17 @@ public final class TouchCommandDispatcher {
         for (int attempt = 0; attempt < 5; attempt++) {
             after = snapshots.awaitAfter(after.eventSequence, 400L);
             try {
-                String afterState = TikTokSemantics.actionState(
-                        TikTokSemantics.uniqueControl(after, action));
+                SemanticSnapshot.Node afterControl = TikTokSemantics.uniqueControl(after, action);
+                String afterState = TikTokSemantics.actionState(afterControl);
+                long afterCount = TikTokSemantics.actionCounter(afterControl);
                 evidence.put("after", afterState);
+                if (beforeCount >= 0L && afterCount >= 0L) {
+                    evidence.put("before_count", beforeCount);
+                    evidence.put("after_count", afterCount);
+                }
                 if (after.eventSequence > before.eventSequence
-                        && !afterState.equals(beforeState)) {
+                        && (!afterState.equals(beforeState)
+                        || (beforeCount >= 0L && afterCount == beforeCount + 1L))) {
                     return success(request, startedAt, after, evidence);
                 }
             } catch (TikTokSemantics.SemanticException missingFinalEvidence) {
