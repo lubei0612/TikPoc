@@ -170,6 +170,23 @@ public final class Protocol {
         return encoded.toString();
     }
 
+    public static Map<String, Object> decodeObject(String encoded) throws ProtocolException {
+        Object parsed = new JsonReader(encoded).read();
+        if (!(parsed instanceof Map)) throw new ProtocolException("response_not_object");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> values = (Map<String, Object>) parsed;
+        return values;
+    }
+
+    public static String encodeObject(Map<String, Object> values) throws ProtocolException {
+        StringBuilder encoded = new StringBuilder();
+        writeJson(values, encoded, 0);
+        if (encoded.toString().getBytes(StandardCharsets.UTF_8).length > MAX_REQUEST_BYTES) {
+            throw new ProtocolException("payload_too_large");
+        }
+        return encoded.toString();
+    }
+
     private static String requiredString(Map<String, Object> values, String name)
             throws ProtocolException {
         Object value = values.get(name);
