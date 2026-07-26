@@ -7,6 +7,18 @@ them here.
 
 ## Current Control State
 
+- **Production mobile runtime decision (2026-07-26):** the user moved the
+  project from MYT to VMOS. All new mobile account binding, acquisition,
+  capacity, diagnostics, and catalog-publishing work must use VMOS devices.
+  Do not discover, reconnect, configure, or schedule MYT slots unless the user
+  explicitly authorizes a historical rollback test. Existing MYT documents and
+  measurements remain historical evidence only; they are not current runtime
+  instructions.
+- The current catalog-publishing request targets six VMOS TikTok accounts with
+  15 distinct posts per account. Each VMOS account must pass visible username,
+  network, ADB/Appium, and one-post canary verification before its remaining 14
+  approved jobs are released. Keep account queues isolated and stop the
+  affected account on `uncertain` without automatically resubmitting.
 - The user resumed the project goal on 2026-07-17 and requested continuous
   execution after the revised design and plan are accepted.
 - The user accepted the written design and authorized continuous execution on
@@ -74,9 +86,9 @@ counts, uncertain/failure counts, mean, p50, p90, targets/hour, runtime version,
 device count, and whether the result is measured or projected. A short canary
 may prove correctness but never proves the daily capacity objective.
 
-TikPoc separates outbound mobile touch work from inbound web lead handling:
+TikPoc separates outbound VMOS mobile touch work from inbound web lead handling:
 
-1. A configurable set of paired mobile accounts processes the same imported
+1. A configurable set of paired VMOS accounts processes the same imported
    target batch.
 2. Every target must receive a confirmed visit from every enabled account
    (`N/N`).
@@ -131,6 +143,13 @@ user-approved document and update this guide in the same change.
 
 ### Mobile touch plane
 
+- VMOS is the production phone/device backend for imported CSV targets and
+  catalog photo publishing. MYT is retired from current operations and remains
+  only in historical evidence and rollback documentation.
+- Runtime ADB endpoints, APK provisioning, Appium sessions, account identity,
+  proxy state, and durable worker ownership must be resolved per VMOS instance.
+  Never substitute a reachable MYT slot or another VMOS account when one VMOS
+  instance is unavailable.
 - The phone/device backend imports and visits CSV targets.
 - Eligibility is `following > followers` and `video_count >= 1`.
 - For an eligible profile, open one randomly selected video. Durable per-action
@@ -637,7 +656,10 @@ Completed on `feat/web-lead-conversion`:
   once; a first-use Profile modal caused the automatic result to freeze as
   `uncertain`, and read-only visible evidence on the exact expected account then
   reconciled that same job to `published`. Final durable status is
-  `published=1`, `uncertain=0`; no duplicate or automatic retry occurred.
+  `published=1`, `uncertain=0`; no duplicate or automatic retry occurred. This
+  historical slot-1 acceptance predates the current six-VMOS fleet mapping and
+  does not satisfy or replace any of the six fresh per-account canaries required
+  for the current 90-post request.
 - A representative 100-target VMOS canary reached 78 completions and 81
   confirmed visits before its ADB endpoint went offline. Measured throughput
   was about 183 confirmed visits per hour, below the 400-per-hour recovery gate.
@@ -654,8 +676,9 @@ Completed on `feat/web-lead-conversion`:
 
 Outstanding at the current checkpoint:
 
-1. Let the user complete TikTok login on MYT slots 2-6, then bind visible
-   usernames to the six internal account IDs and refresh Supabase health.
+1. Discover the six active VMOS instances, verify one logged-in TikTok username
+   per instance, bind those visible usernames to six unique internal account
+   IDs, and refresh durable health. Do not reuse the retired MYT slot mappings.
 2. Restore fresh Chrome Activity/Messages heartbeats. The four stored browser
    page records became stale after the service restart; no browser action was
    attempted while the Chrome control connection was unavailable.
@@ -669,12 +692,17 @@ Outstanding at the current checkpoint:
 4. Run the fresh 100-target VMOS performance gate and then the unchanged-build
    30-minute gate. Promote latency when the complete target mix averages at or
    below 8.64 seconds; retain p50/p90 and per-action timings as diagnostics.
-5. Execute the remaining Mobile Task 10 two-device live gate on slots 1 and 2.
-6. Reconnect the VMOS ADB endpoint and run a fresh isolated representative
-   100-target canary. Do not reuse the interrupted database or infer a capacity
-   pass until confirmed throughput reaches the documented gate.
+5. Execute the remaining Mobile Task 10 two-device live gate on two identity-
+   verified VMOS instances.
+6. Reconnect and verify all six VMOS control paths. Run one catalog-publishing
+   canary per account, reconcile each visible post, then release at most the
+   remaining 14 jobs for that account. Separately run a fresh isolated
+   representative 100-target acquisition canary; do not reuse the interrupted
+   database or infer a capacity pass until confirmed throughput reaches the
+   documented gate.
 7. Finish full regression, two-device calibration, four-/eight-hour endurance
-   tests, the seven-device benchmark, runbooks, and branch/PR integration.
+   tests, the six-device VMOS gate, later seven-device benchmark where devices
+   are available, runbooks, and branch/PR integration.
 
 ## Next Execution Procedure
 
