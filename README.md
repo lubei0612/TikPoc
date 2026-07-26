@@ -83,6 +83,12 @@ uv sync --extra test
 npm install
 ```
 
+只有运行历史 Appium Fleet 时才安装兼容依赖：
+
+```bash
+uv sync --extra legacy-appium
+```
+
 检查 CLI：
 
 ```bash

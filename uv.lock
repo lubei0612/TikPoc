@@ -648,7 +648,6 @@ name = "tikpoc"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "appium-python-client" },
     { name = "cryptography" },
     { name = "fastapi" },
     { name = "openpyxl" },
@@ -658,6 +657,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+legacy-appium = [
+    { name = "appium-python-client" },
+]
 test = [
     { name = "httpx" },
     { name = "pytest" },
@@ -665,7 +667,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "appium-python-client", specifier = ">=5,<6" },
+    { name = "appium-python-client", marker = "extra == 'legacy-appium'", specifier = ">=5,<6" },
     { name = "cryptography", specifier = ">=45,<47" },
     { name = "fastapi", specifier = ">=0.116,<1" },
     { name = "httpx", marker = "extra == 'test'", specifier = ">=0.28,<1" },
@@ -675,7 +677,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6,<7" },
     { name = "uvicorn", specifier = ">=0.35,<1" },
 ]
-provides-extras = ["test"]
+provides-extras = ["test", "legacy-appium"]
 
 [[package]]
 name = "trio"
