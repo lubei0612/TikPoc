@@ -2,6 +2,8 @@ package com.tikpoc.touch;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 public class AccessibilityUiAdapter implements AutonomousTaskExecutor.Ui {
@@ -42,11 +44,20 @@ public class AccessibilityUiAdapter implements AutonomousTaskExecutor.Ui {
                 "observe_profile", "identity_confirmed",
                 map("expected_username", string(target, "username")));
         Map<String, Object> evidence = evidence(response);
+        List<String> handles = new ArrayList<String>();
+        Object rawHandles = evidence.get("post_handles");
+        if (rawHandles instanceof List) {
+            for (Object handle : (List<?>) rawHandles) {
+                if (handle instanceof String && !((String) handle).isEmpty()) {
+                    handles.add((String) handle);
+                }
+            }
+        }
         return new AutonomousTaskExecutor.Profile(
                 string(evidence, "username"),
                 "available".equals(string(evidence, "access_state")),
                 number(evidence, "following"), number(evidence, "followers"),
-                number(evidence, "video_count"));
+                number(evidence, "video_count"), handles);
     }
 
     @Override

@@ -863,6 +863,12 @@ class AcquisitionRepository:
             following = int(result.evidence["following"])
             followers = int(result.evidence["followers"])
             video_count = int(result.evidence["video_count"])
+            raw_handles = result.evidence["post_handles"]
+            if not isinstance(raw_handles, list):
+                raise TypeError
+            post_handles = tuple(
+                str(value).strip() for value in raw_handles if str(value).strip()
+            )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("mobile profile evidence is incomplete") from error
         if access_state != "available" or min(following, followers, video_count) < 0:
@@ -893,6 +899,19 @@ class AcquisitionRepository:
             observed_at_ms=now_ms,
             access_state=ProfileAccessState.PUBLIC,
         )
+        plan = self.create_paced_action_plan(
+            round_id=assignment.round_id,
+            identity_key=assignment.identity_key,
+            device_id=assignment.device_id,
+            seed=f"mobile:{assignment.assignment_id}",
+            now_ms=now_ms,
+            hourly_limits=_CAPACITY_QUOTA_LIMITS,
+        )
+        if plan.effective_outcome is not OutcomeKind.TRACE:
+            if not post_handles:
+                raise ValueError("mobile profile post handles are incomplete")
+            selected = post_handles[assignment.assignment_id % len(post_handles)]
+            self.set_plan_video(plan.plan_id, selected)
 
     def claim_device_worker_lease(
         self,

@@ -1,6 +1,8 @@
 package com.tikpoc.touch;
 
 import java.util.LinkedHashMap;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Executor {
@@ -19,6 +21,7 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
         public final long following;
         public final long followers;
         public final long videoCount;
+        public final List<String> postHandles;
 
         public Profile(String username, boolean publicProfile) {
             this(username, publicProfile, 0L, 0L, 0L);
@@ -26,11 +29,18 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
 
         public Profile(String username, boolean publicProfile, long following,
                 long followers, long videoCount) {
+            this(username, publicProfile, following, followers, videoCount,
+                    new ArrayList<String>());
+        }
+
+        public Profile(String username, boolean publicProfile, long following,
+                long followers, long videoCount, List<String> postHandles) {
             this.username = username;
             this.publicProfile = publicProfile;
             this.following = following;
             this.followers = followers;
             this.videoCount = videoCount;
+            this.postHandles = postHandles;
         }
     }
 
@@ -86,6 +96,7 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
         evidence.put("following", profile.following);
         evidence.put("followers", profile.followers);
         evidence.put("video_count", profile.videoCount);
+        evidence.put("post_handles", profile.postHandles);
         payload.put("evidence", evidence);
         try {
             return new DeviceTaskStore.Result(

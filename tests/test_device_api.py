@@ -127,6 +127,7 @@ def test_mobile_claim_is_bounded_and_result_upload_is_idempotent(
             "following": 10,
             "followers": 2,
             "video_count": 4,
+            "post_handles": ["video-1", "video-2"],
         },
     )
     assert repo.record_mobile_result(result, now_ms=3_000) == "accepted"
@@ -136,3 +137,7 @@ def test_mobile_claim_is_bounded_and_result_upload_is_idempotent(
     snapshot = repo.profile_snapshot(round_id, assignment.identity_key)
     assert snapshot is not None
     assert snapshot.observed_username == "target_user"
+    plan = repo.action_plan(round_id, assignment.identity_key, "device-1")
+    assert plan is not None
+    if plan.effective_outcome.value != "trace":
+        assert plan.video_key in {"video-1", "video-2"}
