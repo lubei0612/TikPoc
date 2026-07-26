@@ -11,6 +11,7 @@ public final class AutonomousTaskExecutorTest {
         activeTraceOpensVideoWithoutApplyingAnInteraction();
         preservesDeviceEvidenceErrorCode();
         activeModeVerifiesVideoAndAction();
+        actionFailureUsesActionPhaseIdempotencyKey();
         System.out.println("AutonomousTaskExecutorTest PASS");
     }
 
@@ -30,6 +31,23 @@ public final class AutonomousTaskExecutorTest {
         check(result.payload.contains("\"plan_id\":42"), "action plan identified");
         check(ui.videos == 1, "video verified");
         check(ui.actions == 1, "one action");
+    }
+
+    private static void actionFailureUsesActionPhaseIdempotencyKey() throws Exception {
+        FakeUi ui = new FakeUi("target_user", true);
+        ui.actionError = new AccessibilityUiAdapter.UiException(
+                "device_evidence_unavailable");
+        AutonomousTaskExecutor executor = new AutonomousTaskExecutor(ui,
+                AutonomousTaskExecutor.Mode.ACTIVE);
+        DeviceTaskStore.Task planned = new DeviceTaskStore.Task(
+                "task-2", "lease-2", 7L, 9_000L, "pending",
+                "{\"username\":\"target_user\",\"plan_id\":42,"
+                + "\"video_key\":\"video-1\",\"action\":\"favorite\"}");
+
+        DeviceTaskStore.Result result = executor.execute(planned);
+
+        check(result.idempotencyKey.equals("task-2:action_executing"),
+                "action failure does not collide with profile evidence receipt");
     }
 
     private static void shadowModeConfirmsIdentityWithoutAction() throws Exception {
@@ -119,6 +137,7 @@ public final class AutonomousTaskExecutorTest {
         int actions;
         int videos;
         RuntimeException observeError;
+        RuntimeException actionError;
 
         FakeUi(String observedUsername, boolean publicProfile) {
             this.observedUsername = observedUsername;
@@ -139,9 +158,13 @@ public final class AutonomousTaskExecutorTest {
 
         @Override
         public boolean applyAndConfirmAction(String action) {
+            if (actionError != null) throw actionError;
             actions++;
             return true;
         }
+
+        @Override
+        public boolean observeAction(String action) { return true; }
     }
 
     private static void check(boolean condition, String label) {

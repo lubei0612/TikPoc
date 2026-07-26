@@ -23,7 +23,25 @@ public final class AccessibilityUiAdapterTest {
         check(adapter.last.arguments.get("expected_username").equals("target_user"),
                 "expected username bound");
         check(adapter.last.deadlineElapsedMs == 13_000L, "fresh command deadline");
+        uncertainActionReturnsUnverifiedInsteadOfThrowing();
         System.out.println("AccessibilityUiAdapterTest PASS");
+    }
+
+    private static void uncertainActionReturnsUnverifiedInsteadOfThrowing()
+            throws Exception {
+        AccessibilityUiAdapter adapter = new AccessibilityUiAdapter(
+                "device-1", "account-1", 7L, () -> 1_000L, request -> {
+                    Map<String, Object> evidence = new LinkedHashMap<String, Object>();
+                    evidence.put("action", "favorite");
+                    evidence.put("before", "off");
+                    evidence.put("after", "unknown");
+                    return Protocol.Response.uncertain(request, 1L,
+                            "com.zhiliaoapp.musically", "MainActivity", 2L,
+                            "digest", evidence);
+                });
+
+        check(!adapter.applyAndConfirmAction("favorite"),
+                "uncertain action remains unverified for reconciliation");
     }
 
     private static final class Adapter extends AccessibilityUiAdapter {

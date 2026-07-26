@@ -53,8 +53,20 @@ public class AccessibilityUiAdapter implements AutonomousTaskExecutor.Ui {
         String route = targetId.isEmpty()
                 ? string(target, "profile_url")
                 : "snssdk1233://user/profile/" + targetId;
-        request("open_profile", "profile_opening", map(
-                "route", route, "expected_username", string(target, "username")));
+        Map<String, Object> arguments = map(
+                "route", route, "expected_username", string(target, "username"));
+        try {
+            request("open_profile", "profile_opening", arguments);
+        } catch (UiException error) {
+            String fallback = string(target, "profile_url");
+            if (targetId.isEmpty() || fallback.isEmpty()
+                    || !("profile_identity_mismatch".equals(error.code)
+                    || "profile_not_updated".equals(error.code)
+                    || "profile_evidence_unavailable".equals(error.code))) throw error;
+            request("open_profile", "profile_opening", map(
+                    "route", fallback,
+                    "expected_username", string(target, "username")));
+        }
     }
 
     @Override
@@ -87,9 +99,16 @@ public class AccessibilityUiAdapter implements AutonomousTaskExecutor.Ui {
     @Override
     public boolean applyAndConfirmAction(String action) throws Exception {
         Protocol.Response response = request(
-                "apply_action", "action_executing", map("action", action));
+                "apply_action", "action_executing", map("action", action), true);
         Map<String, Object> evidence = evidence(response);
         return "on".equals(string(evidence, "after"));
+    }
+
+    @Override
+    public boolean observeAction(String action) throws Exception {
+        Protocol.Response response = request(
+                "observe_action", "action_reconciling", map("action", action));
+        return "on".equals(string(evidence(response), "state"));
     }
 
     protected Protocol.Response invoke(Protocol.Request request) throws Exception {
@@ -98,6 +117,11 @@ public class AccessibilityUiAdapter implements AutonomousTaskExecutor.Ui {
 
     private Protocol.Response request(String command, String phase,
             Map<String, Object> arguments) throws Exception {
+        return request(command, phase, arguments, false);
+    }
+
+    private Protocol.Response request(String command, String phase,
+            Map<String, Object> arguments, boolean allowUncertain) throws Exception {
         Map<String, Object> values = new LinkedHashMap<String, Object>();
         values.put("version", 1L);
         values.put("command_id", UUID.randomUUID().toString());
@@ -112,7 +136,9 @@ public class AccessibilityUiAdapter implements AutonomousTaskExecutor.Ui {
         values.put("arguments", arguments);
         Protocol.Request request = Protocol.parseRequest(Protocol.encodeObject(values), nowMs);
         Protocol.Response response = invoke(request);
-        if (!"ok".equals(response.values.get("status"))) {
+        Object status = response.values.get("status");
+        if (allowUncertain && "uncertain".equals(status)) return response;
+        if (!"ok".equals(status)) {
             Object rawError = response.values.get("error");
             if (rawError instanceof Map) {
                 Object code = ((Map<?, ?>) rawError).get("code");

@@ -784,8 +784,12 @@ class AcquisitionRepository:
                 SELECT assignment_id FROM round_assignments
                 WHERE device_id = ? AND lease_owner = ?
                   AND lease_expires_at_ms > ?
-                  AND phase IN ('video_opening', 'identity_confirmed')
-                ORDER BY CASE phase WHEN 'video_opening' THEN 0 ELSE 1 END,
+                  AND phase IN (
+                    'action_reconciling', 'video_opening', 'identity_confirmed'
+                  )
+                ORDER BY CASE phase
+                           WHEN 'action_reconciling' THEN 0
+                           WHEN 'video_opening' THEN 1 ELSE 2 END,
                          assignment_id
                 LIMIT 1
                 """,
@@ -796,7 +800,10 @@ class AcquisitionRepository:
             plan = self.action_plan(
                 assignment.round_id, assignment.identity_key, assignment.device_id
             )
-            if assignment.phase is AssignmentPhase.VIDEO_OPENING:
+            if assignment.phase in {
+                AssignmentPhase.ACTION_RECONCILING,
+                AssignmentPhase.VIDEO_OPENING,
+            }:
                 return (
                     self._mobile_task_envelope(
                         assignment,
@@ -838,7 +845,7 @@ class AcquisitionRepository:
             connection.execute("BEGIN IMMEDIATE")
             recoverable = connection.execute(
                 """
-                SELECT assignment.assignment_id
+                SELECT assignment.assignment_id, plan.state AS plan_state
                 FROM round_assignments AS assignment
                 JOIN device_action_plans AS plan
                   ON plan.round_id = assignment.round_id
@@ -865,12 +872,19 @@ class AcquisitionRepository:
                 connection.execute(
                     """
                     UPDATE round_assignments
-                    SET phase = 'video_opening',
+                    SET phase = ?,
                         attempt_count = attempt_count + 1,
                         lease_owner = ?, lease_expires_at_ms = ?
                     WHERE assignment_id = ?
                     """,
-                    (owner_id, now_ms + lease_ttl_ms, assignment_id),
+                    (
+                        AssignmentPhase.ACTION_RECONCILING.value
+                        if str(recoverable["plan_state"]) == "uncertain"
+                        else AssignmentPhase.VIDEO_OPENING.value,
+                        owner_id,
+                        now_ms + lease_ttl_ms,
+                        assignment_id,
+                    ),
                 )
                 assignment = self._assignment_by_id(connection, assignment_id)
                 return (
@@ -977,18 +991,104 @@ class AcquisitionRepository:
             and result.state == "completed"
         ):
             self._apply_mobile_action_result(result, now_ms=now_ms)
+        elif (
+            result.phase == AssignmentPhase.ACTION_RECONCILING.value
+            and result.state == "uncertain"
+        ):
+            self._apply_mobile_uncertain_action_result(result, now_ms=now_ms)
+        elif (
+            result.phase == AssignmentPhase.ACTION_RECONCILING.value
+            and result.state == "completed"
+        ):
+            self._apply_mobile_reconciled_action_result(result, now_ms=now_ms)
+        elif (
+            result.phase == AssignmentPhase.ACTION_RECONCILING.value
+            and result.state == "deferred"
+        ):
+            self._complete_mobile_unresolved_action(result, now_ms=now_ms)
         return "accepted"
 
-    def _apply_mobile_action_result(
-        self, result: MobileTaskResult, *, now_ms: int
-    ) -> None:
+    def _mobile_action_result_identity(
+        self, result: MobileTaskResult
+    ) -> tuple[int, int, RoundAssignment, str]:
         try:
             assignment_id = int(result.task_id)
             plan_id = int(result.evidence["plan_id"])
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("mobile action evidence is incomplete") from error
         assignment = self.assignment(assignment_id)
-        owner_id = f"mobile:{result.device_id}:{result.session_epoch}"
+        if assignment.device_id != result.device_id:
+            raise ValueError("mobile result device mismatch")
+        return (
+            assignment_id,
+            plan_id,
+            assignment,
+            f"mobile:{result.device_id}:{result.session_epoch}",
+        )
+
+    def _apply_mobile_uncertain_action_result(
+        self, result: MobileTaskResult, *, now_ms: int
+    ) -> None:
+        assignment_id, plan_id, assignment, owner_id = (
+            self._mobile_action_result_identity(result)
+        )
+        if assignment.phase is not AssignmentPhase.VIDEO_OPENING:
+            raise ValueError("mobile uncertain action phase is invalid")
+        for previous, following in (
+            (AssignmentPhase.VIDEO_OPENING, AssignmentPhase.VIDEO_CONFIRMED),
+            (AssignmentPhase.VIDEO_CONFIRMED, AssignmentPhase.QUOTA_RESERVED),
+            (AssignmentPhase.QUOTA_RESERVED, AssignmentPhase.ACTION_EXECUTING),
+        ):
+            self.transition_assignment(
+                assignment_id, owner_id, previous, following, now_ms=now_ms
+            )
+        self.mark_action_executing(plan_id)
+        self.record_action_result(plan_id, ActionResult.UNCERTAIN, now_ms=now_ms)
+        self.transition_assignment(
+            assignment_id,
+            owner_id,
+            AssignmentPhase.ACTION_EXECUTING,
+            AssignmentPhase.ACTION_RECONCILING,
+            now_ms=now_ms,
+        )
+
+    def _apply_mobile_reconciled_action_result(
+        self, result: MobileTaskResult, *, now_ms: int
+    ) -> None:
+        assignment_id, plan_id, assignment, owner_id = (
+            self._mobile_action_result_identity(result)
+        )
+        if assignment.phase is not AssignmentPhase.ACTION_RECONCILING:
+            raise ValueError("mobile action reconciliation phase is invalid")
+        self.record_action_result(plan_id, ActionResult.CONFIRMED, now_ms=now_ms)
+        self.complete_assignment(
+            assignment_id,
+            owner_id,
+            AssignmentPhase.ACTION_RECONCILING,
+            now_ms=now_ms,
+        )
+
+    def _complete_mobile_unresolved_action(
+        self, result: MobileTaskResult, *, now_ms: int
+    ) -> None:
+        assignment_id, _plan_id, assignment, owner_id = (
+            self._mobile_action_result_identity(result)
+        )
+        if assignment.phase is not AssignmentPhase.ACTION_RECONCILING:
+            raise ValueError("mobile unresolved action phase is invalid")
+        self.complete_assignment(
+            assignment_id,
+            owner_id,
+            AssignmentPhase.ACTION_RECONCILING,
+            now_ms=now_ms,
+        )
+
+    def _apply_mobile_action_result(
+        self, result: MobileTaskResult, *, now_ms: int
+    ) -> None:
+        assignment_id, plan_id, assignment, owner_id = (
+            self._mobile_action_result_identity(result)
+        )
         if assignment.phase is not AssignmentPhase.VIDEO_OPENING:
             raise ValueError("mobile action assignment phase is invalid")
         assignment = self.transition_assignment(

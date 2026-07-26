@@ -14,6 +14,7 @@ public final class TouchCommandDispatcherTest {
         returnsBoundedErrorWhenVideoHandleIsMissing();
         returnsBoundedErrorWhenActuatorFails();
         opensProfileOnlyAfterExactNewIdentity();
+        alreadyOpenExactProfileDoesNotRequireANavigationEvent();
         waitsForProfileEventBeforeVerifyingIdentity();
         waitsThroughSlowProfileIntermediateEvents();
         actionClicksOnceAndVerifiesResult();
@@ -33,6 +34,21 @@ public final class TouchCommandDispatcherTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> evidence = (Map<String, Object>) response.values.get("evidence");
         check(evidence.get("username").equals("target_user"), "profile identity");
+    }
+
+    private static void alreadyOpenExactProfileDoesNotRequireANavigationEvent()
+            throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.source.snapshots = Collections.singletonList(profileSnapshot());
+
+        Map<String, Object> arguments = map(
+                "route", "https://www.tiktok.com/@target_user");
+        arguments.put("expected_username", "target_user");
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("open_profile", arguments));
+
+        check(response.values.get("status").equals("ok"), "current profile verified");
+        check(fixture.actuator.profileOpens == 0, "current profile not reopened");
     }
 
     private static void waitsForProfileEventBeforeVerifyingIdentity() throws Exception {
@@ -219,6 +235,7 @@ public final class TouchCommandDispatcherTest {
 
     private static final class FakeActuator implements TouchCommandDispatcher.Actuator {
         int clicks;
+        int profileOpens;
         RuntimeException failure;
 
         @Override
@@ -230,6 +247,7 @@ public final class TouchCommandDispatcherTest {
 
         @Override
         public boolean openProfile(String route) {
+            profileOpens++;
             return true;
         }
     }

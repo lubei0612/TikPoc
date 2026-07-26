@@ -222,6 +222,18 @@ public final class TouchCommandDispatcher {
         String route = requiredArgument(request, "route");
         String expectedUsername = requiredArgument(request, "expected_username");
         SemanticSnapshot before = snapshots.current();
+        try {
+            TikTokSemantics.Profile current = TikTokSemantics.parseProfile(
+                    before, clock.elapsedRealtimeMs(), 500L, expectedUsername);
+            if (current.username.equals(expectedUsername)) {
+                Map<String, Object> evidence = new LinkedHashMap<String, Object>();
+                evidence.put("route_opened", false);
+                evidence.put("username", current.username);
+                return success(request, startedAt, before, evidence);
+            }
+        } catch (TikTokSemantics.SemanticException notCurrentTarget) {
+            // Continue with the requested route when exact current identity is absent.
+        }
         if (!actuator.openProfile(route)) {
             return Protocol.Response.error(request, "route_rejected", "profile route rejected");
         }

@@ -13,6 +13,7 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
         Profile observeProfile() throws Exception;
         void openAndConfirmVideo(String videoKey) throws Exception;
         boolean applyAndConfirmAction(String action) throws Exception;
+        boolean observeAction(String action) throws Exception;
     }
 
     public static final class Profile {
@@ -73,12 +74,23 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
                     || !nonemptyString(target.get("action"))) {
                 return profileResult(task, profile, phase, "profile_observed");
             }
+            phase = "video_opening";
             ui.openAndConfirmVideo((String) target.get("video_key"));
             if ("trace".equals(target.get("action"))) {
                 return actionResult(task, target, "trace_confirmed");
             }
+            if ("action_reconciling".equals(task.phase)) {
+                phase = "action_reconciling";
+                if (ui.observeAction((String) target.get("action"))) {
+                    return actionResult(task, target, phase, "action_reconciled");
+                }
+                return actionResult(task, target, phase, "action_not_confirmed",
+                        "deferred");
+            }
+            phase = "action_executing";
             if (!ui.applyAndConfirmAction((String) target.get("action"))) {
-                return result(task, "uncertain", "action_reconciling", "action_unverified");
+                return actionResult(task, target, "action_reconciling",
+                        "action_unverified", "uncertain", "action_executing");
             }
             return actionResult(task, target, "action_confirmed");
         } catch (AccessibilityUiAdapter.UiException error) {
@@ -134,17 +146,33 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
 
     private static DeviceTaskStore.Result actionResult(DeviceTaskStore.Task task,
             Map<String, Object> target, String code) {
+        return actionResult(task, target, "action_executing", code, "completed");
+    }
+
+    private static DeviceTaskStore.Result actionResult(DeviceTaskStore.Task task,
+            Map<String, Object> target, String phase, String code) {
+        return actionResult(task, target, phase, code, "completed");
+    }
+
+    private static DeviceTaskStore.Result actionResult(DeviceTaskStore.Task task,
+            Map<String, Object> target, String phase, String code, String state) {
+        return actionResult(task, target, phase, code, state, phase);
+    }
+
+    private static DeviceTaskStore.Result actionResult(DeviceTaskStore.Task task,
+            Map<String, Object> target, String phase, String code, String state,
+            String idempotencyPhase) {
         Map<String, Object> payload = new LinkedHashMap<String, Object>();
         payload.put("lease_id", task.leaseId);
-        payload.put("state", "completed");
-        payload.put("phase", "action_executing");
+        payload.put("state", state);
+        payload.put("phase", phase);
         Map<String, Object> evidence = new LinkedHashMap<String, Object>();
         evidence.put("code", code);
         evidence.put("plan_id", target.get("plan_id"));
         payload.put("evidence", evidence);
         try {
             return new DeviceTaskStore.Result(
-                    task.taskId + ":action_executing", task.taskId,
+                    task.taskId + ":" + idempotencyPhase, task.taskId,
                     Protocol.encodeObject(payload));
         } catch (Protocol.ProtocolException error) {
             throw new IllegalStateException("result encoding failed");

@@ -176,7 +176,7 @@ def test_mobile_profile_result_creates_video_bound_follow_up_plan(
     with sqlite3.connect(path) as connection:
         connection.execute(
             "INSERT OR REPLACE INTO sqlite_sequence(name, seq) "
-            "VALUES ('round_assignments', 5)"
+            "VALUES ('round_assignments', 32809)"
         )
     pool = repo.import_pool(
         "targets.csv",
@@ -252,7 +252,7 @@ def test_mobile_profile_result_creates_video_bound_follow_up_plan(
     plan = repo.action_plan(round_id, assignment.identity_key, "device-1")
     assert assignment.phase is AssignmentPhase.VIDEO_OPENING
     assert plan is not None and plan.video_key in {"post:0", "post:1"}
-    assert plan.effective_outcome is OutcomeKind.TRACE
+    assert plan.effective_outcome is OutcomeKind.FAVORITE
     assert plan.state is ActionPlanState.PLANNED
     with sqlite3.connect(path) as connection:
         connection.execute(
@@ -273,8 +273,41 @@ def test_mobile_profile_result_creates_video_bound_follow_up_plan(
     assert len(follow_up) == 1
     assert follow_up[0]["task_id"] == task["task_id"]
     assert follow_up[0]["video_key"] == plan.video_key
-    assert follow_up[0]["action"] == "trace"
+    assert follow_up[0]["action"] == "favorite"
     assert repo.assignment(int(task["task_id"])).phase is AssignmentPhase.VIDEO_OPENING
+
+    uncertain = api.post(
+        "/api/mobile/results",
+        json={
+            "device_id": "device-1",
+            "session_epoch": 1,
+            "task_id": task["task_id"],
+            "lease_id": task["lease_id"],
+            "idempotency_key": "action-uncertain-1",
+            "state": "uncertain",
+            "phase": "action_reconciling",
+            "evidence": {"code": "action_unverified", "plan_id": plan.plan_id},
+        },
+        headers=headers,
+    )
+
+    assert uncertain.status_code == 200
+    assert (
+        repo.assignment(int(task["task_id"])).phase
+        is AssignmentPhase.ACTION_RECONCILING
+    )
+    assert repo.action_plan_by_id(plan.plan_id).state is ActionPlanState.UNCERTAIN
+    reconciliation = api.post(
+        "/api/mobile/pull",
+        json={
+            "device_id": "device-1",
+            "session_epoch": 1,
+            "round_id": round_id,
+            "limit": 1,
+        },
+        headers=headers,
+    ).json()["tasks"][0]
+    assert reconciliation["phase"] == "action_reconciling"
 
     completed = api.post(
         "/api/mobile/results",
@@ -283,10 +316,10 @@ def test_mobile_profile_result_creates_video_bound_follow_up_plan(
             "session_epoch": 1,
             "task_id": task["task_id"],
             "lease_id": task["lease_id"],
-            "idempotency_key": "action-1",
+            "idempotency_key": "action-reconciled-1",
             "state": "completed",
-            "phase": "action_executing",
-            "evidence": {"code": "trace_confirmed", "plan_id": plan.plan_id},
+            "phase": "action_reconciling",
+            "evidence": {"code": "action_reconciled", "plan_id": plan.plan_id},
         },
         headers=headers,
     )
