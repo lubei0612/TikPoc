@@ -77,7 +77,7 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
             if (!ui.applyAndConfirmAction((String) target.get("action"))) {
                 return result(task, "uncertain", "action_reconciling", "action_unverified");
             }
-            return result(task, "completed", "action_confirmed", "action_applied");
+            return result(task, "completed", "action_executing", "action_confirmed");
         } catch (Exception error) {
             return result(task, "deferred", phase, "executor_error");
         }
@@ -91,6 +91,10 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
         payload.put("phase", phase);
         Map<String, Object> evidence = new LinkedHashMap<String, Object>();
         evidence.put("code", code);
+        try {
+            Object planId = Protocol.decodeObject(task.payload).get("plan_id");
+            if (planId instanceof Long) evidence.put("plan_id", planId);
+        } catch (Protocol.ProtocolException ignored) {}
         evidence.put("observed_username", profile.username);
         evidence.put("access_state", profile.publicProfile ? "available" : "unavailable");
         evidence.put("following", profile.following);

@@ -790,6 +790,32 @@ class AcquisitionRepository:
             ).fetchone()
         if continuation is not None:
             assignment = self.assignment(int(continuation["assignment_id"]))
+            plan = self.action_plan(
+                assignment.round_id, assignment.identity_key, assignment.device_id
+            )
+            if plan is not None and plan.effective_outcome is OutcomeKind.TRACE:
+                self.confirm_trace_plan(plan.plan_id)
+                self.complete_assignment(
+                    assignment.assignment_id,
+                    owner_id,
+                    AssignmentPhase.IDENTITY_CONFIRMED,
+                    now_ms=now_ms,
+                )
+                return self.claim_mobile_tasks(
+                    round_id,
+                    device_id,
+                    session_epoch=session_epoch,
+                    limit=limit,
+                    now_ms=now_ms,
+                    lease_ttl_ms=lease_ttl_ms,
+                )
+            assignment = self.transition_assignment(
+                assignment.assignment_id,
+                owner_id,
+                AssignmentPhase.IDENTITY_CONFIRMED,
+                AssignmentPhase.VIDEO_OPENING,
+                now_ms=now_ms,
+            )
             return (
                 self._mobile_task_envelope(
                     assignment,
@@ -889,7 +915,54 @@ class AcquisitionRepository:
                 return "duplicate"
         if result.phase == AssignmentPhase.IDENTITY_CONFIRMED.value:
             self._apply_mobile_profile_result(result, now_ms=now_ms)
+        elif (
+            result.phase == AssignmentPhase.ACTION_EXECUTING.value
+            and result.state == "completed"
+        ):
+            self._apply_mobile_action_result(result, now_ms=now_ms)
         return "accepted"
+
+    def _apply_mobile_action_result(
+        self, result: MobileTaskResult, *, now_ms: int
+    ) -> None:
+        try:
+            assignment_id = int(result.task_id)
+            plan_id = int(result.evidence["plan_id"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("mobile action evidence is incomplete") from error
+        assignment = self.assignment(assignment_id)
+        owner_id = f"mobile:{result.device_id}:{result.session_epoch}"
+        if assignment.phase is not AssignmentPhase.VIDEO_OPENING:
+            raise ValueError("mobile action assignment phase is invalid")
+        assignment = self.transition_assignment(
+            assignment_id,
+            owner_id,
+            AssignmentPhase.VIDEO_OPENING,
+            AssignmentPhase.VIDEO_CONFIRMED,
+            now_ms=now_ms,
+        )
+        assignment = self.transition_assignment(
+            assignment_id,
+            owner_id,
+            AssignmentPhase.VIDEO_CONFIRMED,
+            AssignmentPhase.QUOTA_RESERVED,
+            now_ms=now_ms,
+        )
+        self.transition_assignment(
+            assignment_id,
+            owner_id,
+            AssignmentPhase.QUOTA_RESERVED,
+            AssignmentPhase.ACTION_EXECUTING,
+            now_ms=now_ms,
+        )
+        self.mark_action_executing(plan_id)
+        self.record_action_result(plan_id, ActionResult.CONFIRMED, now_ms=now_ms)
+        self.complete_assignment(
+            assignment_id,
+            owner_id,
+            AssignmentPhase.ACTION_EXECUTING,
+            now_ms=now_ms,
+        )
 
     def _apply_mobile_profile_result(
         self, result: MobileTaskResult, *, now_ms: int

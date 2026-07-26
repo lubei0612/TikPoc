@@ -148,7 +148,24 @@ def test_mobile_claim_is_bounded_and_result_upload_is_idempotent(
         limit=20,
         now_ms=4_000,
     )
-    assert len(continuation) == 1
-    assert continuation[0].plan_id == plan.plan_id
-    assert continuation[0].action == plan.effective_outcome.value
-    assert continuation[0].video_key == (plan.video_key or "")
+    if plan.effective_outcome.value == "trace":
+        assert continuation == ()
+        assert repo.assignment(task.assignment_id).phase.value == "completed"
+    else:
+        assert len(continuation) == 1
+        assert continuation[0].plan_id == plan.plan_id
+        assert continuation[0].action == plan.effective_outcome.value
+        assert continuation[0].video_key == plan.video_key
+        action = MobileTaskResult(
+            device_id="device-1",
+            session_epoch=1,
+            task_id=task.task_id,
+            lease_id=task.lease_id,
+            idempotency_key="action-1",
+            state="completed",
+            phase="action_executing",
+            evidence={"plan_id": plan.plan_id},
+        )
+        assert repo.record_mobile_result(action, now_ms=5_000) == "accepted"
+        assert repo.assignment(task.assignment_id).phase.value == "completed"
+        assert repo.action_plan_by_id(plan.plan_id).state.value == "confirmed"
