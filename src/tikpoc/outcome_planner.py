@@ -5,7 +5,6 @@ from types import MappingProxyType
 from .acquisition_db import AcquisitionRepository
 from .acquisition_models import ActionPlan, OutcomeKind
 
-
 OUTCOMES = (
     OutcomeKind.LIKE,
     OutcomeKind.FAVORITE,
@@ -22,7 +21,7 @@ HOURLY_LIMITS = MappingProxyType(
 
 
 def plan_seed(round_id: str, identity_key: str, device_id: str) -> str:
-    payload = "\0".join((round_id, identity_key, device_id)).encode()
+    payload = f"{round_id}\0{identity_key}\0{device_id}".encode()
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -56,6 +55,13 @@ def get_or_create_plan(
         draw_outcome(seed) if forced_draw is None else OutcomeKind(forced_draw)
     )
     if forced_draw is None:
+        allowed_outcomes = None
+        if repository.round_navigation_mode(round_id) == "search":
+            allowed_outcomes = (
+                OutcomeKind.LIKE,
+                OutcomeKind.FAVORITE,
+                OutcomeKind.REPOST,
+            )
         return repository.create_paced_action_plan(
             round_id=round_id,
             identity_key=identity_key,
@@ -63,6 +69,7 @@ def get_or_create_plan(
             seed=seed,
             now_ms=now_ms,
             hourly_limits=HOURLY_LIMITS,
+            allowed_outcomes=allowed_outcomes,
             worker_owner_id=worker_owner_id,
             worker_account_id=worker_account_id,
             worker_fence_token=worker_fence_token,

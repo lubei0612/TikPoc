@@ -39,7 +39,12 @@ from .device_api import DeviceSession, MobileTaskEnvelope, MobileTaskResult
 from .importer import Target, target_identity_key
 from .models import ProfileMetrics
 from .navigation import NavigationMode
-from .rules import evaluate_profile
+from .rules import (
+    POLICY_VERSION,
+    SEARCH_POLICY_VERSION,
+    evaluate_profile,
+    evaluate_search_profile,
+)
 
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 MANUAL_RETRY_AT_MS = 2**63 - 1
@@ -372,6 +377,8 @@ class AcquisitionRepository:
                     video_key TEXT,
                     state TEXT NOT NULL DEFAULT 'planned',
                     created_at_ms INTEGER NOT NULL,
+                    policy_version TEXT NOT NULL DEFAULT
+                        'following-gt-followers-posts-gte-1-v1',
                     UNIQUE(round_id, identity_key, device_id),
                     FOREIGN KEY(round_id) REFERENCES exposure_rounds(round_id)
                 )
@@ -385,6 +392,19 @@ class AcquisitionRepository:
                 )
                 """
             )
+            plan_columns = {
+                str(row["name"])
+                for row in connection.execute(
+                    "PRAGMA table_info(device_action_plans)"
+                ).fetchall()
+            }
+            if "policy_version" not in plan_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE device_action_plans ADD COLUMN policy_version TEXT
+                    NOT NULL DEFAULT 'following-gt-followers-posts-gte-1-v1'
+                    """
+                )
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS acquisition_quota_windows (
@@ -4221,8 +4241,13 @@ class AcquisitionRepository:
             raise ValueError("public profile metrics are incomplete")
 
         normalized_observed_username = self._normalize_username(observed_username)
+        navigation_mode = self.round_navigation_mode(round_id)
         if state is ProfileAccessState.PUBLIC:
-            decision = evaluate_profile(metrics)
+            decision = (
+                evaluate_search_profile(metrics)
+                if navigation_mode == NavigationMode.SEARCH.value
+                else evaluate_profile(metrics)
+            )
             eligible = decision.eligible
             reason = "eligible" if decision.eligible else ",".join(decision.reasons)
         else:
@@ -4427,8 +4452,9 @@ class AcquisitionRepository:
                 INSERT INTO device_action_plans(
                     round_id, identity_key, device_id, seed,
                     requested_outcome, effective_outcome,
-                    quota_window_start_ms, quota_reason, state, created_at_ms
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'planned', ?)
+                    quota_window_start_ms, quota_reason, state, created_at_ms,
+                    policy_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'planned', ?, ?)
                 """,
                 (
                     round_id,
@@ -4440,6 +4466,7 @@ class AcquisitionRepository:
                     quota_window_start_ms,
                     quota_reason,
                     now_ms,
+                    self._policy_version_for_round(connection, round_id),
                 ),
             )
             return self._action_plan_by_id(connection, int(cursor.lastrowid))
@@ -4453,6 +4480,7 @@ class AcquisitionRepository:
         seed: str,
         now_ms: int,
         hourly_limits: Mapping[OutcomeKind, int],
+        allowed_outcomes: tuple[OutcomeKind, ...] | None = None,
         worker_owner_id: str | None = None,
         worker_account_id: str | None = None,
         worker_fence_token: int | None = None,
@@ -4494,12 +4522,14 @@ class AcquisitionRepository:
             quota_reason = "profile_ineligible" if not snapshot.eligible else None
             quota_window_start_ms: int | None = None
             if snapshot.eligible:
-                outcomes = (
+                outcomes = allowed_outcomes or (
                     OutcomeKind.LIKE,
                     OutcomeKind.FAVORITE,
                     OutcomeKind.REPOST,
                     OutcomeKind.TRACE,
                 )
+                if not outcomes:
+                    raise ValueError("allowed outcomes must not be empty")
                 requested = outcomes[random.Random(seed).randrange(len(outcomes))]
                 effective = requested
                 if requested is not OutcomeKind.TRACE:
@@ -4542,8 +4572,9 @@ class AcquisitionRepository:
                 INSERT INTO device_action_plans(
                     round_id, identity_key, device_id, seed,
                     requested_outcome, effective_outcome,
-                    quota_window_start_ms, quota_reason, state, created_at_ms
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'planned', ?)
+                    quota_window_start_ms, quota_reason, state, created_at_ms,
+                    policy_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'planned', ?, ?)
                 """,
                 (
                     round_id,
@@ -4555,9 +4586,34 @@ class AcquisitionRepository:
                     quota_window_start_ms,
                     quota_reason,
                     now_ms,
+                    self._policy_version_for_round(connection, round_id),
                 ),
             )
             return self._action_plan_by_id(connection, int(cursor.lastrowid))
+
+    def round_navigation_mode(self, round_id: str) -> str:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT navigation_mode FROM exposure_rounds WHERE round_id = ?",
+                (round_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"unknown round: {round_id}")
+        return NavigationMode.parse(str(row["navigation_mode"])).value
+
+    @staticmethod
+    def _policy_version_for_round(connection: sqlite3.Connection, round_id: str) -> str:
+        row = connection.execute(
+            "SELECT navigation_mode FROM exposure_rounds WHERE round_id = ?",
+            (round_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"unknown round: {round_id}")
+        return (
+            SEARCH_POLICY_VERSION
+            if str(row["navigation_mode"]) == NavigationMode.SEARCH.value
+            else POLICY_VERSION
+        )
 
     def action_plan(
         self, round_id: str, identity_key: str, device_id: str
@@ -5271,6 +5327,7 @@ class AcquisitionRepository:
             video_key=None if row["video_key"] is None else str(row["video_key"]),
             state=ActionPlanState(str(row["state"])),
             created_at_ms=int(row["created_at_ms"]),
+            policy_version=str(row["policy_version"]),
         )
 
     @staticmethod

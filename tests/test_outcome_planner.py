@@ -23,6 +23,7 @@ def _eligible_repository(
     target_count: int = 1,
     device_ids: tuple[str, ...] = ("phone-01",),
     eligible: bool = True,
+    navigation_mode: str = "deeplink",
 ) -> tuple[AcquisitionRepository, str, tuple[str, ...]]:
     repository = AcquisitionRepository(tmp_path / "tikpoc.db", clock_ms=lambda: 1_000)
     repository.migrate()
@@ -48,6 +49,7 @@ def _eligible_repository(
         },
         starts_at_ms=1_000,
         min_inter_device_gap_ms=0,
+        navigation_mode=navigation_mode,
     )
     for device_index, device_id in enumerate(device_ids):
         while assignment := repository.claim_next_assignment(
@@ -83,6 +85,29 @@ def _eligible_repository(
             observed_at_ms=1_001,
         )
     return repository, round_id, tuple(target.identity_key for target in targets)
+
+
+def test_search_policy_ignores_ratio_and_never_draws_trace(tmp_path: Path) -> None:
+    repository, round_id, identities = _eligible_repository(
+        tmp_path,
+        target_count=12,
+        eligible=False,
+        navigation_mode="search",
+    )
+
+    plans = [
+        get_or_create_plan(repository, round_id, identity_key, "phone-01", now_ms=1_000)
+        for identity_key in identities
+    ]
+
+    assert {plan.requested_outcome for plan in plans} <= {
+        OutcomeKind.LIKE,
+        OutcomeKind.FAVORITE,
+        OutcomeKind.REPOST,
+    }
+    assert {plan.policy_version for plan in plans} == {
+        "search-posts-gte-1-composite-v1"
+    }
 
 
 def test_each_device_persists_an_independent_paced_plan(tmp_path: Path) -> None:

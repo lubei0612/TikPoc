@@ -174,6 +174,7 @@ class ActionPlan:
     video_key: str | None
     state: ActionPlanState
     created_at_ms: int
+    policy_version: str = "following-gt-followers-posts-gte-1-v1"
 
 
 @dataclass(frozen=True)
