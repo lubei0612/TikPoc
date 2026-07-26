@@ -7,9 +7,27 @@ public final class AutonomousTaskRunnerTest {
     public static void main(String[] args) throws Exception {
         pullsTasksAndFlushesIdempotentOutbox();
         executesOnePersistedTaskAndQueuesResult();
+        appliesPacingAfterACompletedTarget();
         activeQueueUsesShortDelayWithoutHeartbeatFlooding();
         transientFailuresRemainDegradedAndRecover();
         System.out.println("AutonomousTaskRunnerTest PASS");
+    }
+
+    private static void appliesPacingAfterACompletedTarget() throws Exception {
+        DeviceTaskStore store = new DeviceTaskStore(new DeviceTaskStore.MemoryBackend());
+        store.enqueue(new DeviceTaskStore.Task(
+                "task-1", "lease-1", 7L, 9_000L, "pending", "{}"));
+        FakeClient client = new FakeClient();
+        final long[] paced = {0L};
+        AutonomousTaskRunner runner = new AutonomousTaskRunner(
+                client, store, "round-1", 7L,
+                task -> new DeviceTaskStore.Result("result-1", task.taskId, "{}"),
+                completedTargets -> paced[0] = completedTargets);
+
+        runner.runOnce(1_000L);
+
+        check(paced[0] == 1L, "pacing follows durable task completion");
+        check(client.uploads == 1, "result uploads before the next target");
     }
 
     private static void executesOnePersistedTaskAndQueuesResult() throws Exception {

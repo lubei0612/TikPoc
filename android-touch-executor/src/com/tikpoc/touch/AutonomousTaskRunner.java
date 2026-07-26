@@ -18,6 +18,10 @@ public final class AutonomousTaskRunner {
         DeviceTaskStore.Result execute(DeviceTaskStore.Task task) throws Exception;
     }
 
+    public interface Pacing {
+        void afterTarget(long completedTargets) throws Exception;
+    }
+
     public enum State { HEALTHY, DEGRADED, PAUSED }
 
     private final Client client;
@@ -25,6 +29,8 @@ public final class AutonomousTaskRunner {
     private final String roundId;
     private final long sessionEpoch;
     private final Executor executor;
+    private final Pacing pacing;
+    private long completedTargets;
     private int consecutiveFailures;
     private State state = State.HEALTHY;
     private long lastHeartbeatAtMs = -1L;
@@ -32,18 +38,25 @@ public final class AutonomousTaskRunner {
 
     public AutonomousTaskRunner(Client client, DeviceTaskStore store,
             String roundId, long sessionEpoch) {
-        this(client, store, roundId, sessionEpoch, null);
+        this(client, store, roundId, sessionEpoch, null, completed -> {});
     }
 
     public AutonomousTaskRunner(Client client, DeviceTaskStore store,
             String roundId, long sessionEpoch, Executor executor) {
+        this(client, store, roundId, sessionEpoch, executor, completed -> {});
+    }
+
+    public AutonomousTaskRunner(Client client, DeviceTaskStore store,
+            String roundId, long sessionEpoch, Executor executor, Pacing pacing) {
         if (client == null || store == null || roundId == null || roundId.trim().isEmpty()
-                || sessionEpoch <= 0) throw new IllegalArgumentException("invalid runner");
+                || sessionEpoch <= 0 || pacing == null)
+            throw new IllegalArgumentException("invalid runner");
         this.client = client;
         this.store = store;
         this.roundId = roundId;
         this.sessionEpoch = sessionEpoch;
         this.executor = executor;
+        this.pacing = pacing;
     }
 
     public synchronized State runOnce(long nowMs) {
@@ -67,6 +80,8 @@ public final class AutonomousTaskRunner {
                     store.enqueueResult(result);
                     store.removeTask(task.taskId);
                     flushResults();
+                    completedTargets++;
+                    pacing.afterTarget(completedTargets);
                     depth = store.queueDepth(sessionEpoch, nowMs);
                 }
             }

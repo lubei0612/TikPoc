@@ -9,6 +9,7 @@ public final class TouchCommandDispatcherTest {
     public static void main(String[] args) throws Exception {
         healthIsReadOnly();
         healthReadsCurrentSurface();
+        homeBrowseIsBoundedAndReadOnly();
         opensOnePostAndVerifiesVideoControls();
         waitsForVideoEventBeforeVerifyingControls();
         returnsBoundedErrorWhenVideoHandleIsMissing();
@@ -26,6 +27,18 @@ public final class TouchCommandDispatcherTest {
         missingFinalEvidenceIsUncertainWithoutSecondClick();
         diagnosticsContainsNoVisibleText();
         System.out.println("TouchCommandDispatcherTest PASS");
+    }
+
+    private static void homeBrowseIsBoundedAndReadOnly() throws Exception {
+        Fixture fixture = new Fixture();
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("browse_home", empty()));
+        check(response.values.get("status").equals("ok"), "home browse status");
+        check(fixture.actuator.homeBrowses == 1, "one bounded home browse");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> evidence = (Map<String, Object>) response.values.get("evidence");
+        check(evidence.get("home_visible").equals(true), "home visible evidence");
+        check(evidence.get("browse_performed").equals(true), "browse performed evidence");
     }
 
     private static void searchRequiresExactProfileEvidence() throws Exception {
@@ -270,6 +283,7 @@ public final class TouchCommandDispatcherTest {
     private static final class FakeActuator implements TouchCommandDispatcher.Actuator {
         int clicks;
         int profileOpens;
+        int homeBrowses;
         RuntimeException failure;
         String searchResult = "timeout";
 
@@ -288,6 +302,12 @@ public final class TouchCommandDispatcherTest {
 
         @Override
         public String searchProfile(String username) { return searchResult; }
+
+        @Override
+        public boolean browseHomeReadOnly() {
+            homeBrowses++;
+            return true;
+        }
     }
 
     private static SemanticSnapshot actionSnapshot(boolean selected, long sequence) {

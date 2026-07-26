@@ -16,6 +16,7 @@ public final class TouchCommandDispatcher {
         boolean click(SemanticSnapshot.Node node) throws Exception;
         boolean openProfile(String route) throws Exception;
         default String searchProfile(String username) throws Exception { return "timeout"; }
+        default boolean browseHomeReadOnly() throws Exception { return false; }
     }
 
     public interface Clock {
@@ -57,6 +58,7 @@ public final class TouchCommandDispatcher {
         long startedAt = clock.elapsedRealtimeMs();
         if (request.command.equals("health")) return health(request, startedAt);
         if (request.command.equals("diagnostics")) return diagnostics(request, startedAt);
+        if (request.command.equals("browse_home")) return browseHome(request, startedAt);
         if (request.command.equals("apply_action")) return applyAction(request, startedAt);
         if (request.command.equals("observe_action")) return observeAction(request, startedAt);
         if (request.command.equals("observe_profile")) return observeProfile(request, startedAt);
@@ -66,6 +68,19 @@ public final class TouchCommandDispatcher {
         }
         if (request.command.equals("open_video")) return openVideo(request, startedAt);
         return Protocol.Response.error(request, "unsupported_command", "command unavailable");
+    }
+
+    private Protocol.Response browseHome(Protocol.Request request, long startedAt)
+            throws Exception {
+        if (!actuator.browseHomeReadOnly()) {
+            return Protocol.Response.error(
+                    request, "home_browse_rejected", "home browse unavailable");
+        }
+        SemanticSnapshot snapshot = snapshots.current();
+        Map<String, Object> evidence = new LinkedHashMap<String, Object>();
+        evidence.put("home_visible", true);
+        evidence.put("browse_performed", true);
+        return success(request, startedAt, snapshot, evidence);
     }
 
     private Protocol.Response health(Protocol.Request request, long startedAt) throws Exception {

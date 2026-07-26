@@ -120,6 +120,11 @@ public class AccessibilityUiAdapter implements AutonomousTaskExecutor.Ui {
         return "on".equals(string(evidence(response), "state"));
     }
 
+    @Override
+    public void browseHomeReadOnly() throws Exception {
+        request("browse_home", "session_pacing", new LinkedHashMap<String, Object>());
+    }
+
     protected Protocol.Response invoke(Protocol.Request request) throws Exception {
         return invoker.invoke(request);
     }

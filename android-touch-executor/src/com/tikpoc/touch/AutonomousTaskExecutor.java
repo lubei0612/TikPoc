@@ -14,6 +14,11 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
         void openAndConfirmVideo(String videoKey) throws Exception;
         boolean applyAndConfirmAction(String action) throws Exception;
         boolean observeAction(String action) throws Exception;
+        default void browseHomeReadOnly() throws Exception {}
+    }
+
+    public void browseHomeReadOnly() throws Exception {
+        ui.browseHomeReadOnly();
     }
 
     public static final class Profile {

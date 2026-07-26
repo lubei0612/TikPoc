@@ -99,7 +99,13 @@ public final class TikPocAccessibilityService extends AccessibilityService
                             ? AutonomousTaskExecutor.Mode.ACTIVE
                             : AutonomousTaskExecutor.Mode.SHADOW);
             AutonomousTaskRunner runner = new AutonomousTaskRunner(
-                    client, store, settings.roundId, settings.sessionEpoch, executor);
+                    client, store, settings.roundId, settings.sessionEpoch, executor,
+                    completedTargets -> {
+                        SessionPacingPlanner.Plan plan = SessionPacingPlanner.plan(
+                                settings.deviceId, completedTargets);
+                        SystemClock.sleep(plan.delayMs);
+                        if (plan.homeBrowseDue) executor.browseHomeReadOnly();
+                    });
             autonomousThread = new Thread(() -> {
                 while (!Thread.currentThread().isInterrupted()) {
                     AutonomousTaskRunner.State state = runner.runOnce(System.currentTimeMillis());
@@ -168,6 +174,31 @@ public final class TikPocAccessibilityService extends AccessibilityService
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         startActivity(intent);
         return true;
+    }
+
+    @Override
+    public boolean browseHomeReadOnly() {
+        AccessibilityNodeInfo root = waitForRoot(2_000L);
+        if (root == null) return false;
+        AccessibilityNodeInfo home = null;
+        try {
+            home = firstClickableByExactText(root, "首页");
+            if (home == null) home = firstClickableByExactText(root, "Home");
+            if (home == null || !home.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                return false;
+            }
+        } finally {
+            recycle(home);
+            root.recycle();
+        }
+        SystemClock.sleep(400L);
+        Path path = new Path();
+        path.moveTo(540F, 1_350F);
+        path.lineTo(540F, 750F);
+        GestureDescription gesture = new GestureDescription.Builder()
+                .addStroke(new GestureDescription.StrokeDescription(path, 0L, 350L))
+                .build();
+        return dispatchGesture(gesture, null, null);
     }
 
     @Override
