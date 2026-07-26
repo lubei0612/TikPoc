@@ -1,7 +1,9 @@
 package com.tikpoc.touch;
 
 import android.accessibilityservice.AccessibilityService;
+import android.accessibilityservice.GestureDescription;
 import android.content.Intent;
+import android.graphics.Path;
 import android.graphics.Rect;
 import android.net.Uri;
 import android.os.SystemClock;
@@ -171,56 +173,41 @@ public final class TikPocAccessibilityService extends AccessibilityService
     @Override
     public String searchProfile(String username) throws Exception {
         Intent launch = getPackageManager().getLaunchIntentForPackage(TIKTOK_PACKAGE);
-        if (launch == null) return "timeout";
-        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        startActivity(launch);
+        if (launch != null) {
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(launch);
+        } else if (!TIKTOK_PACKAGE.equals(packageName)) {
+            return "search_launch_unavailable";
+        }
         AccessibilityNodeInfo root = waitForRoot(4_000L);
-        if (root == null) return "timeout";
+        if (root == null) return "search_root_unavailable";
+        Rect searchBounds = new Rect();
         try {
             AccessibilityNodeInfo search = firstClickableByLabel(root, "search", "搜索");
-            if (search == null || !search.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+            if (search == null) {
                 recycle(search);
-                return "timeout";
+                return "search_button_missing";
             }
+            search.getBoundsInScreen(searchBounds);
+            search.performAction(AccessibilityNodeInfo.ACTION_CLICK);
             recycle(search);
         } finally {
             root.recycle();
         }
-        AccessibilityNodeInfo inputRoot = waitForRoot(3_000L);
-        if (inputRoot == null) return "timeout";
+        AccessibilityNodeInfo input = waitForEditable(3_000L);
+        if (input == null && tapCenter(searchBounds)) input = waitForEditable(3_000L);
+        if (input == null) return "search_input_missing";
         try {
-            AccessibilityNodeInfo input = firstEditable(inputRoot);
-            if (input == null) return "timeout";
             Bundle text = new Bundle();
             text.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
                     username);
             boolean entered = input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, text);
+            if (!entered) return "search_text_rejected";
+        } finally {
             input.recycle();
-            if (!entered) return "timeout";
-        } finally {
-            inputRoot.recycle();
         }
-        SystemClock.sleep(1_000L);
-        AccessibilityNodeInfo results = waitForRoot(4_000L);
-        if (results == null) return "timeout";
-        try {
-            List<AccessibilityNodeInfo> matches = new ArrayList<AccessibilityNodeInfo>();
-            collectExactUsername(results, username, matches);
-            if (matches.isEmpty()) return "no_match";
-            if (matches.size() > 1) {
-                recycleAll(matches);
-                return "ambiguous";
-            }
-            AccessibilityNodeInfo candidate = matches.get(0);
-            AccessibilityNodeInfo clickable = clickableAncestor(candidate);
-            boolean clicked = clickable != null
-                    && clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-            recycle(clickable);
-            candidate.recycle();
-            return clicked ? "exact" : "timeout";
-        } finally {
-            results.recycle();
-        }
+        if (!clickSearchSubmit(3_000L)) return "search_submit_missing";
+        return waitForAndClickExactUsername(username, 4_000L);
     }
 
     private AccessibilityNodeInfo waitForRoot(long timeoutMs) {
@@ -229,6 +216,104 @@ public final class TikPocAccessibilityService extends AccessibilityService
         while ((root = getRootInActiveWindow()) == null
                 && SystemClock.elapsedRealtime() < deadline) SystemClock.sleep(100L);
         return root;
+    }
+
+    private boolean tapCenter(Rect bounds) {
+        if (bounds == null || bounds.isEmpty()) return false;
+        Path path = new Path();
+        path.moveTo(bounds.exactCenterX(), bounds.exactCenterY());
+        GestureDescription gesture = new GestureDescription.Builder()
+                .addStroke(new GestureDescription.StrokeDescription(path, 0L, 80L))
+                .build();
+        return dispatchGesture(gesture, null, null);
+    }
+
+    private AccessibilityNodeInfo waitForEditable(long timeoutMs) {
+        long deadline = SystemClock.elapsedRealtime() + timeoutMs;
+        while (SystemClock.elapsedRealtime() < deadline) {
+            AccessibilityNodeInfo root = getRootInActiveWindow();
+            if (root != null) {
+                try {
+                    AccessibilityNodeInfo input = firstEditable(root);
+                    if (input != null) return input;
+                } finally { root.recycle(); }
+            }
+            SystemClock.sleep(100L);
+        }
+        return null;
+    }
+
+    private String waitForAndClickExactUsername(String username, long timeoutMs) {
+        long deadline = SystemClock.elapsedRealtime() + timeoutMs;
+        while (SystemClock.elapsedRealtime() < deadline) {
+            AccessibilityNodeInfo root = getRootInActiveWindow();
+            if (root != null) {
+                try {
+                    List<AccessibilityNodeInfo> matches =
+                            new ArrayList<AccessibilityNodeInfo>();
+                    collectExactUsername(root, username, matches);
+                    if (matches.size() > 1) {
+                        recycleAll(matches);
+                        return "ambiguous";
+                    }
+                    if (matches.size() == 1) {
+                        AccessibilityNodeInfo candidate = matches.get(0);
+                        AccessibilityNodeInfo clickable = clickableAncestor(candidate);
+                        Rect bounds = new Rect();
+                        if (clickable != null) clickable.getBoundsInScreen(bounds);
+                        boolean clicked = clickable != null && tapCenter(bounds);
+                        if (!clicked && clickable != null) {
+                            clicked = clickable.performAction(
+                                    AccessibilityNodeInfo.ACTION_CLICK);
+                        }
+                        recycle(clickable);
+                        candidate.recycle();
+                        if (clicked) SystemClock.sleep(300L);
+                        return clicked ? "exact" : "timeout";
+                    }
+                } finally { root.recycle(); }
+            }
+            SystemClock.sleep(100L);
+        }
+        return "no_match";
+    }
+
+    private boolean clickSearchSubmit(long timeoutMs) {
+        long deadline = SystemClock.elapsedRealtime() + timeoutMs;
+        while (SystemClock.elapsedRealtime() < deadline) {
+            AccessibilityNodeInfo root = getRootInActiveWindow();
+            if (root != null) {
+                try {
+                    AccessibilityNodeInfo submit = firstClickableByExactText(root, "搜索");
+                    if (submit != null) {
+                        Rect bounds = new Rect();
+                        submit.getBoundsInScreen(bounds);
+                        boolean clicked = submit.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                        submit.recycle();
+                        if (clicked || tapCenter(bounds)) return true;
+                    }
+                } finally { root.recycle(); }
+            }
+            SystemClock.sleep(100L);
+        }
+        return false;
+    }
+
+    private static AccessibilityNodeInfo firstClickableByExactText(
+            AccessibilityNodeInfo node, String expected) {
+        if (node.isVisibleToUser() && node.isClickable()
+                && string(node.getText()).trim().equals(expected)) {
+            return AccessibilityNodeInfo.obtain(node);
+        }
+        for (int index = 0; index < node.getChildCount(); index++) {
+            AccessibilityNodeInfo child = node.getChild(index);
+            if (child == null) continue;
+            try {
+                AccessibilityNodeInfo match = firstClickableByExactText(child, expected);
+                if (match != null) return match;
+            } finally { child.recycle(); }
+        }
+        return null;
     }
 
     private static AccessibilityNodeInfo firstEditable(AccessibilityNodeInfo node) {

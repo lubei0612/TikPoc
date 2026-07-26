@@ -253,3 +253,5 @@ def test_profile_opening_result_releases_mobile_lease(
     assert assignment.phase.value == expected_phase
     assert assignment.lease_owner is None
     assert assignment.last_error_code == "search_no_exact_match"
+    if state == "deferred":
+        assert assignment.next_attempt_at_ms == 33_000

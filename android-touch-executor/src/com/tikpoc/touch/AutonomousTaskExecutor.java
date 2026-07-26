@@ -139,7 +139,8 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
         payload.put("evidence", evidence);
         try {
             return new DeviceTaskStore.Result(
-                    task.taskId + ":" + phase, task.taskId, Protocol.encodeObject(payload));
+                    task.taskId + ":" + task.leaseId + ":" + phase,
+                    task.taskId, Protocol.encodeObject(payload));
         } catch (Protocol.ProtocolException error) {
             throw new IllegalStateException("result encoding failed");
         }
@@ -156,7 +157,8 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
         payload.put("evidence", evidence);
         try {
             return new DeviceTaskStore.Result(
-                    task.taskId + ":" + phase, task.taskId, Protocol.encodeObject(payload));
+                    task.taskId + ":" + task.leaseId + ":" + phase,
+                    task.taskId, Protocol.encodeObject(payload));
         } catch (Protocol.ProtocolException error) {
             throw new IllegalStateException("result encoding failed");
         }
@@ -190,7 +192,7 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
         payload.put("evidence", evidence);
         try {
             return new DeviceTaskStore.Result(
-                    task.taskId + ":" + idempotencyPhase, task.taskId,
+                    task.taskId + ":" + task.leaseId + ":" + idempotencyPhase, task.taskId,
                     Protocol.encodeObject(payload));
         } catch (Protocol.ProtocolException error) {
             throw new IllegalStateException("result encoding failed");

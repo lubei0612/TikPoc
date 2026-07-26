@@ -275,7 +275,7 @@ public final class TouchCommandDispatcher {
         String expectedUsername = requiredArgument(request, "expected_username");
         String result = actuator.searchProfile(expectedUsername);
         if (!"exact".equals(result)) {
-            String code = "ambiguous".equals(result)
+            String code = result.startsWith("search_") ? result : "ambiguous".equals(result)
                     ? "search_ambiguous_exact_match"
                     : "no_match".equals(result)
                             ? "search_no_exact_match" : "search_surface_timeout";

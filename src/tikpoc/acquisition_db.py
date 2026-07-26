@@ -1091,7 +1091,7 @@ class AcquisitionRepository:
             assignment_id,
             owner_id,
             now_ms=now_ms,
-            retry_delay_ms=1_000,
+            retry_delay_ms=30_000,
             error_code=error_code,
             diagnostics=DeviceDiagnostics(),
         )

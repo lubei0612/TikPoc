@@ -47,7 +47,7 @@ public final class AutonomousTaskExecutorTest {
 
         DeviceTaskStore.Result result = executor.execute(planned);
 
-        check(result.idempotencyKey.equals("task-2:action_executing"),
+        check(result.idempotencyKey.equals("task-2:lease-2:action_executing"),
                 "action failure does not collide with profile evidence receipt");
         check(result.payload.contains("\"state\":\"uncertain\""),
                 "action evidence failure is reconciled once");
@@ -71,7 +71,8 @@ public final class AutonomousTaskExecutorTest {
 
         DeviceTaskStore.Result result = executor.execute(task);
 
-        check(result.idempotencyKey.equals("task-reconcile:action_reconciling"),
+        check(result.idempotencyKey.equals(
+                "task-reconcile:lease-reconcile:action_reconciling"),
                 "reconciliation failure has reconciliation idempotency key");
         check(result.payload.contains("\"state\":\"deferred\""),
                 "reconciliation failure is terminal after one read");
