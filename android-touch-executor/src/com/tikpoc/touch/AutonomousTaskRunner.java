@@ -3,6 +3,7 @@ package com.tikpoc.touch;
 import java.util.List;
 
 public final class AutonomousTaskRunner {
+    private static final int MAX_QUEUE_DEPTH = 2;
     public interface Client {
         void heartbeat(String appVersion, String phase, int queueDepth, long nowMs)
                 throws Exception;
@@ -55,8 +56,9 @@ public final class AutonomousTaskRunner {
                     depth = store.queueDepth(sessionEpoch, nowMs);
                 }
             }
-            if (depth < 20) {
-                for (DeviceTaskStore.Task task : client.pull(roundId, 20 - depth)) {
+            if (depth < MAX_QUEUE_DEPTH) {
+                for (DeviceTaskStore.Task task : client.pull(
+                        roundId, MAX_QUEUE_DEPTH - depth)) {
                     if (task.sessionEpoch != sessionEpoch) throw new Exception("stale task");
                     store.enqueue(task);
                 }

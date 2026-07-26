@@ -39,6 +39,7 @@ public final class AutonomousTaskRunnerTest {
         check(state == AutonomousTaskRunner.State.HEALTHY, "healthy state");
         check(client.heartbeats == 1, "heartbeat sent");
         check(client.uploads == 1, "outbox uploaded");
+        check(client.lastPullLimit == 2, "queue stays within lease-safe depth");
         check(store.pendingResults().isEmpty(), "duplicate acknowledged");
         check(store.next(7L, 1_000L).taskId.equals("task-1"), "task persisted");
     }
@@ -62,6 +63,7 @@ public final class AutonomousTaskRunnerTest {
         int heartbeats;
         int uploads;
         int pulls;
+        int lastPullLimit;
         boolean fail;
 
         @Override
@@ -74,6 +76,7 @@ public final class AutonomousTaskRunnerTest {
         @Override
         public List<DeviceTaskStore.Task> pull(String roundId, int limit) {
             pulls++;
+            lastPullLimit = limit;
             return tasks;
         }
 

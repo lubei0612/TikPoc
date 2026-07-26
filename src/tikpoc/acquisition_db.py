@@ -784,8 +784,10 @@ class AcquisitionRepository:
                 SELECT assignment_id FROM round_assignments
                 WHERE device_id = ? AND lease_owner = ?
                   AND lease_expires_at_ms > ?
-                  AND phase = 'identity_confirmed'
-                ORDER BY assignment_id LIMIT 1
+                  AND phase IN ('video_opening', 'identity_confirmed')
+                ORDER BY CASE phase WHEN 'video_opening' THEN 0 ELSE 1 END,
+                         assignment_id
+                LIMIT 1
                 """,
                 (device_id, owner_id, now_ms),
             ).fetchone()
@@ -794,6 +796,14 @@ class AcquisitionRepository:
             plan = self.action_plan(
                 assignment.round_id, assignment.identity_key, assignment.device_id
             )
+            if assignment.phase is AssignmentPhase.VIDEO_OPENING:
+                return (
+                    self._mobile_task_envelope(
+                        assignment,
+                        account_id=account_id,
+                        session_epoch=session_epoch,
+                    ),
+                )
             if plan is not None and plan.effective_outcome is OutcomeKind.TRACE:
                 self.confirm_trace_plan(plan.plan_id)
                 self.complete_assignment(

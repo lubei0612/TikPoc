@@ -255,6 +255,21 @@ def test_mobile_profile_result_creates_video_bound_follow_up_plan(
     assert plan.effective_outcome is OutcomeKind.TRACE
     assert plan.state is ActionPlanState.PLANNED
 
+    follow_up = api.post(
+        "/api/mobile/pull",
+        json={
+            "device_id": "device-1",
+            "session_epoch": 1,
+            "round_id": round_id,
+            "limit": 1,
+        },
+        headers=headers,
+    ).json()["tasks"]
+    assert len(follow_up) == 1
+    assert follow_up[0]["task_id"] == task["task_id"]
+    assert follow_up[0]["video_key"] == plan.video_key
+    assert follow_up[0]["action"] == "trace"
+
     completed = api.post(
         "/api/mobile/results",
         json={
