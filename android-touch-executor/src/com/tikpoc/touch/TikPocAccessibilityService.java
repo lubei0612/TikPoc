@@ -195,7 +195,10 @@ public final class TikPocAccessibilityService extends AccessibilityService
         } finally {
             input.recycle();
         }
-        if (!submitted && !clickSearchSubmit(3_000L)) return "search_submit_missing";
+        boolean visibleSubmit = clickExactSearchSubmit(800L);
+        if (!submitted && !visibleSubmit && !clickSearchSubmit(2_200L)) {
+            return "search_submit_missing";
+        }
         return waitForAndClickExactUsername(username, 8_000L);
     }
 
@@ -205,15 +208,15 @@ public final class TikPocAccessibilityService extends AccessibilityService
             if (root == null) continue;
             Rect searchBounds = new Rect();
             try {
-                AccessibilityNodeInfo input = firstEditable(root);
+                AccessibilityNodeInfo input = firstSearchEditable(root);
                 if (input != null) return input;
                 AccessibilityNodeInfo search = firstClickableByLabel(root, "search", "搜索");
                 if (search != null) {
                     search.getBoundsInScreen(searchBounds);
                     search.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-                    input = waitForEditable(2_000L);
+                    input = waitForSearchEditable(2_000L);
                     if (input == null && tapCenter(searchBounds)) {
-                        input = waitForEditable(2_000L);
+                        input = waitForSearchEditable(2_000L);
                     }
                     recycle(search);
                     search = null;
@@ -248,13 +251,13 @@ public final class TikPocAccessibilityService extends AccessibilityService
         return dispatchGesture(gesture, null, null);
     }
 
-    private AccessibilityNodeInfo waitForEditable(long timeoutMs) {
+    private AccessibilityNodeInfo waitForSearchEditable(long timeoutMs) {
         long deadline = SystemClock.elapsedRealtime() + timeoutMs;
         while (SystemClock.elapsedRealtime() < deadline) {
             AccessibilityNodeInfo root = getRootInActiveWindow();
             if (root != null) {
                 try {
-                    AccessibilityNodeInfo input = firstEditable(root);
+                    AccessibilityNodeInfo input = firstSearchEditable(root);
                     if (input != null) return input;
                 } finally { root.recycle(); }
             }
@@ -284,7 +287,8 @@ public final class TikPocAccessibilityService extends AccessibilityService
                         boolean clicked = tapCenter(bounds);
                         if (clicked) {
                             SystemClock.sleep(600L);
-                            AccessibilityNodeInfo stillSearching = waitForEditable(200L);
+                            AccessibilityNodeInfo stillSearching =
+                                    waitForSearchEditable(200L);
                             if (stillSearching != null) {
                                 stillSearching.recycle();
                                 clicked = (clickable != null && clickable.performAction(
@@ -331,11 +335,32 @@ public final class TikPocAccessibilityService extends AccessibilityService
         return false;
     }
 
+    private boolean clickExactSearchSubmit(long timeoutMs) {
+        long deadline = SystemClock.elapsedRealtime() + timeoutMs;
+        while (SystemClock.elapsedRealtime() < deadline) {
+            AccessibilityNodeInfo root = getRootInActiveWindow();
+            if (root != null) {
+                try {
+                    AccessibilityNodeInfo submit = firstClickableByExactText(root, "搜索");
+                    if (submit != null) {
+                        Rect bounds = new Rect();
+                        submit.getBoundsInScreen(bounds);
+                        boolean clicked = tapCenter(bounds)
+                                || submit.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                        submit.recycle();
+                        if (clicked) return true;
+                    }
+                } finally { root.recycle(); }
+            }
+            SystemClock.sleep(100L);
+        }
+        return false;
+    }
+
     private static AccessibilityNodeInfo firstClickableByExactText(
             AccessibilityNodeInfo node, String expected) {
-        if (node.isVisibleToUser() && node.isClickable()
-                && string(node.getText()).trim().equals(expected)) {
-            return AccessibilityNodeInfo.obtain(node);
+        if (node.isVisibleToUser() && string(node.getText()).trim().equals(expected)) {
+            return clickableAncestor(node);
         }
         for (int index = 0; index < node.getChildCount(); index++) {
             AccessibilityNodeInfo child = node.getChild(index);
@@ -348,13 +373,16 @@ public final class TikPocAccessibilityService extends AccessibilityService
         return null;
     }
 
-    private static AccessibilityNodeInfo firstEditable(AccessibilityNodeInfo node) {
-        if (node.isVisibleToUser() && node.isEditable()) return AccessibilityNodeInfo.obtain(node);
+    private static AccessibilityNodeInfo firstSearchEditable(AccessibilityNodeInfo node) {
+        if (node.isVisibleToUser() && node.isEditable()
+                && string(node.getViewIdResourceName()).endsWith(":id/fu9")) {
+            return AccessibilityNodeInfo.obtain(node);
+        }
         for (int index = 0; index < node.getChildCount(); index++) {
             AccessibilityNodeInfo child = node.getChild(index);
             if (child == null) continue;
             try {
-                AccessibilityNodeInfo match = firstEditable(child);
+                AccessibilityNodeInfo match = firstSearchEditable(child);
                 if (match != null) return match;
             } finally { child.recycle(); }
         }
