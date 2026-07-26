@@ -949,6 +949,14 @@ class AcquisitionRepository:
         plan = self.action_plan(
             assignment.round_id, assignment.identity_key, assignment.device_id
         )
+        with self._connect_read_only() as connection:
+            row = connection.execute(
+                "SELECT navigation_mode FROM exposure_rounds WHERE round_id = ?",
+                (assignment.round_id,),
+            ).fetchone()
+        if row is None:
+            raise ValueError("mobile task round does not exist")
+        navigation_mode = NavigationMode.parse(str(row["navigation_mode"]))
         return MobileTaskEnvelope(
             task_id=str(assignment.assignment_id),
             assignment_id=assignment.assignment_id,
@@ -965,6 +973,7 @@ class AcquisitionRepository:
             target_id=assignment.target_id,
             username=assignment.username,
             profile_url=assignment.profile_url,
+            navigation_mode=navigation_mode.value,
             plan_id=0 if plan is None else plan.plan_id,
             action="" if plan is None else plan.effective_outcome.value,
             video_key="" if plan is None or plan.video_key is None else plan.video_key,

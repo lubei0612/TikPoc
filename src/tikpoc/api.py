@@ -451,6 +451,7 @@ def create_app(
                         "target_id": task.target_id,
                         "username": task.username,
                         "profile_url": task.profile_url,
+                        "navigation_mode": task.navigation_mode,
                         "plan_id": task.plan_id,
                         "action": task.action,
                         "video_key": task.video_key,
