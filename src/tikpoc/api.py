@@ -47,6 +47,7 @@ from .api_models import (
     RetryCommand,
     RoundCreateRequest,
 )
+from .runtime_metadata import runtime_metadata
 from .browser_dm import BrowserConversationBusy, BrowserDmService, BrowserInbound
 from .browser_welcome import BrowserWelcomeService
 from .db import Database, OperatorCommandConflict
@@ -320,6 +321,10 @@ def create_app(
         payload = database.dashboard_snapshot()
         payload["latest_event"] = database.latest_runtime_event()
         return _json(payload)
+
+    @app.get("/api/runtime")
+    def runtime() -> JSONResponse:
+        return _json(runtime_metadata())
 
     @app.get("/api/recent")
     def recent(limit: str = "10") -> JSONResponse:

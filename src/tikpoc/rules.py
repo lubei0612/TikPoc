@@ -2,6 +2,8 @@ from dataclasses import dataclass
 
 from .models import ProfileMetrics
 
+POLICY_VERSION = "following-gt-followers-posts-gte-1-v1"
+
 
 @dataclass(frozen=True)
 class RuleDecision:
