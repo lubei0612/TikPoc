@@ -20,6 +20,58 @@ them here.
 
 ## Mission
 
+### Product Ownership Contract
+
+- Treat TikPoc as an owned production product, not as a sequence of isolated
+  prompts. Proactively inspect runtime evidence, choose the next highest-value
+  task, implement it, verify it, commit it, deploy it, and measure the result.
+- The primary delivery objective is a stable measured capacity of more than
+  `10,000` confirmed targets per enabled mobile account in 24 hours while
+  preserving the business rules in this file. With seven enabled accounts this
+  means more than `70,000` confirmed device-profile visits per day.
+- Do not wait for the user to select ordinary engineering steps. Continue from
+  the latest durable checkpoint, keep a concise task queue, and stop for user
+  input only when credentials, account login, paid infrastructure, or a visible
+  human decision is genuinely required.
+- Optimize the real bottleneck shown by durable stage timings and visible-device
+  evidence. Do not spend time on cosmetic polish, speculative abstractions, or
+  small-value refactors while correctness, stability, or capacity gates remain
+  open.
+- Own production quality: preserve secrets and user changes, keep rollback
+  points, use GitHub for coherent commits, deploy only verified changes, and
+  distinguish measured throughput from projections.
+
+### Autonomous Capacity Work Queue
+
+Execute these gates in order, repeating the diagnose/fix/verify loop at the
+first failing gate:
+
+1. **Single-device correctness:** fresh 20-target VMOS round; exact identity,
+   visit, eligibility, immutable video choice, due interaction, one read-only
+   uncertain reconciliation, and terminal accounting all pass with no duplicate
+   interaction.
+2. **Single-device performance:** fresh 100-target round and then an unchanged
+   30-minute run; mean below `6.5 s`, p90 below `8.64 s`, zero stuck leases, and
+   no route/action integrity regression.
+3. **Two-device isolation:** both APK workers pull over HTTPS without runtime
+   ADB dependence; independent queues, sessions, order seeds, quotas, proxy
+   exits, and visible actions remain isolated.
+4. **Fleet scaling:** promote the same build to 6 devices, then 7 and 12 where
+   available. Server scheduling and database contention must not reduce
+   per-device throughput materially from the two-device baseline.
+5. **Durability:** run an unchanged-build soak through Mac network changes and
+   operator disconnects. APK checkpoints, server receipts, priority insertion,
+   and parent-round resumption must survive restarts without duplicate visits or
+   actions.
+6. **Production acceptance:** complete at least one measured 24-hour capacity
+   gate above `10,000` confirmed targets per enabled account, publish the
+   measured funnel/capacity report, and retain rollback and audit evidence.
+
+For each live gate, record target count, completed visits, confirmed action
+counts, uncertain/failure counts, mean, p50, p90, targets/hour, runtime version,
+device count, and whether the result is measured or projected. A short canary
+may prove correctness but never proves the daily capacity objective.
+
 TikPoc separates outbound mobile touch work from inbound web lead handling:
 
 1. A configurable set of paired mobile accounts processes the same imported
