@@ -265,3 +265,42 @@ def test_priority_batch_persists_across_repository_restart(tmp_path: Path) -> No
 
     assert reopened.priority_batch("priority-1") == created
     assert reopened.priority_queue(ordinary_round) == (created,)
+
+
+def test_priority_batch_persists_search_navigation_mode(tmp_path: Path) -> None:
+    repository, ordinary_round, priority_pool = _seeded_repository(tmp_path)
+
+    batch = _create_batch(
+        repository,
+        ordinary_round,
+        priority_pool,
+        navigation_mode="search",
+    )
+
+    assert batch.navigation_mode == "search"
+    with repository._connect_read_only() as connection:
+        assert (
+            connection.execute(
+                "SELECT navigation_mode FROM exposure_rounds WHERE round_id=?",
+                (batch.priority_round_id,),
+            ).fetchone()[0]
+            == "search"
+        )
+
+
+def test_priority_batch_replay_rejects_changed_navigation_mode(tmp_path: Path) -> None:
+    repository, ordinary_round, priority_pool = _seeded_repository(tmp_path)
+    _create_batch(
+        repository,
+        ordinary_round,
+        priority_pool,
+        navigation_mode="search",
+    )
+
+    with pytest.raises(ValueError, match="batch id already has different content"):
+        _create_batch(
+            repository,
+            ordinary_round,
+            priority_pool,
+            navigation_mode="deeplink",
+        )

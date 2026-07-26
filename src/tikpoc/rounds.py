@@ -3,10 +3,11 @@ import json
 from collections.abc import Mapping
 
 from .acquisition_db import AcquisitionRepository
+from .navigation import NavigationMode
 
 
 def device_order_key(round_id: str, device_seed: str, identity_key: str) -> str:
-    payload = "\0".join((round_id, device_seed, identity_key)).encode()
+    payload = f"{round_id}\0{device_seed}\0{identity_key}".encode()
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -18,7 +19,9 @@ def create_exposure_round(
     starts_at_ms: int,
     min_inter_device_gap_ms: int = 15 * 60 * 1000,
     min_repeat_gap_ms: int = 20 * 60 * 60 * 1000,
+    navigation_mode: NavigationMode | str = NavigationMode.DEEPLINK,
 ) -> str:
+    normalized_navigation = NavigationMode.parse(str(navigation_mode))
     normalized_items = [
         (str(device_id).strip(), str(seed).strip())
         for device_id, seed in device_seeds.items()
@@ -44,6 +47,7 @@ def create_exposure_round(
             "pool_id": pool_id,
             "starts_at_ms": int(starts_at_ms),
             "device_seeds": sorted(normalized_seeds.items()),
+            "navigation_mode": normalized_navigation.value,
         },
         separators=(",", ":"),
     )
@@ -64,5 +68,6 @@ def create_exposure_round(
         min_inter_device_gap_ms=int(min_inter_device_gap_ms),
         min_repeat_gap_ms=int(min_repeat_gap_ms),
         order_keys=order_keys,
+        navigation_mode=normalized_navigation,
     )
     return round_id

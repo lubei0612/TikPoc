@@ -38,6 +38,7 @@ from .capacity import AssignmentTiming, RoundCapacityAudit
 from .device_api import DeviceSession, MobileTaskEnvelope, MobileTaskResult
 from .importer import Target, target_identity_key
 from .models import ProfileMetrics
+from .navigation import NavigationMode
 from .rules import evaluate_profile
 
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
@@ -192,10 +193,24 @@ class AcquisitionRepository:
                     min_inter_device_gap_ms INTEGER NOT NULL DEFAULT 900000,
                     min_repeat_gap_ms INTEGER NOT NULL DEFAULT 72000000,
                     created_at_ms INTEGER NOT NULL,
+                    navigation_mode TEXT NOT NULL DEFAULT 'deeplink'
+                        CHECK(navigation_mode IN ('deeplink','search')),
                     FOREIGN KEY(pool_id) REFERENCES target_pools(pool_id)
                 )
                 """
             )
+            round_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(exposure_rounds)")
+            }
+            if "navigation_mode" not in round_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE exposure_rounds
+                    ADD COLUMN navigation_mode TEXT NOT NULL DEFAULT 'deeplink'
+                        CHECK(navigation_mode IN ('deeplink','search'))
+                    """
+                )
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS round_device_seeds (
@@ -255,6 +270,8 @@ class AcquisitionRepository:
                     pool_id TEXT NOT NULL,
                     source_live_id TEXT NOT NULL,
                     source_checksum TEXT NOT NULL,
+                    navigation_mode TEXT NOT NULL DEFAULT 'deeplink'
+                        CHECK(navigation_mode IN ('deeplink','search')),
                     batch_class TEXT NOT NULL DEFAULT 'live_interrupt'
                         CHECK(batch_class IN ('background','live_interrupt')),
                     queue_sequence INTEGER NOT NULL UNIQUE,
@@ -274,6 +291,14 @@ class AcquisitionRepository:
                     "PRAGMA table_info(priority_batches)"
                 ).fetchall()
             }
+            if "navigation_mode" not in priority_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE priority_batches
+                    ADD COLUMN navigation_mode TEXT NOT NULL DEFAULT 'deeplink'
+                        CHECK(navigation_mode IN ('deeplink','search'))
+                    """
+                )
             if "batch_class" not in priority_columns:
                 connection.execute(
                     """
@@ -1734,7 +1759,9 @@ class AcquisitionRepository:
         min_inter_device_gap_ms: int,
         min_repeat_gap_ms: int,
         order_keys: Mapping[tuple[str, str], str],
+        navigation_mode: NavigationMode | str = NavigationMode.DEEPLINK,
     ) -> None:
+        normalized_navigation = NavigationMode.parse(str(navigation_mode))
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
@@ -1763,6 +1790,7 @@ class AcquisitionRepository:
                     and int(existing["min_inter_device_gap_ms"])
                     == min_inter_device_gap_ms
                     and int(existing["min_repeat_gap_ms"]) == min_repeat_gap_ms
+                    and str(existing["navigation_mode"]) == normalized_navigation.value
                     and stored_seeds == dict(device_seeds)
                     and stored_orders == dict(order_keys)
                 )
@@ -1812,8 +1840,9 @@ class AcquisitionRepository:
                 """
                 INSERT INTO exposure_rounds(
                     round_id, pool_id, state, starts_at_ms,
-                    min_inter_device_gap_ms, min_repeat_gap_ms, created_at_ms
-                ) VALUES (?, ?, 'pending', ?, ?, ?, ?)
+                    min_inter_device_gap_ms, min_repeat_gap_ms, created_at_ms,
+                    navigation_mode
+                ) VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)
                 """,
                 (
                     round_id,
@@ -1822,6 +1851,7 @@ class AcquisitionRepository:
                     min_inter_device_gap_ms,
                     min_repeat_gap_ms,
                     int(self.clock_ms()),
+                    normalized_navigation.value,
                 ),
             )
             connection.executemany(
@@ -1942,6 +1972,7 @@ class AcquisitionRepository:
         source_checksum: str,
         device_seeds: Mapping[str, str],
         batch_class: PriorityBatchClass | str = PriorityBatchClass.LIVE_INTERRUPT,
+        navigation_mode: NavigationMode | str = NavigationMode.DEEPLINK,
         require_unique_active_parent: bool = False,
     ) -> PriorityBatch:
         normalized_batch_id = str(batch_id).strip()
@@ -1949,6 +1980,7 @@ class AcquisitionRepository:
         normalized_pool = str(pool_id).strip()
         normalized_live_id = str(source_live_id).strip()
         checksum = str(source_checksum).strip()
+        normalized_navigation = NavigationMode.parse(str(navigation_mode))
         try:
             normalized_batch_class = PriorityBatchClass(str(batch_class))
         except ValueError as error:
@@ -1986,6 +2018,7 @@ class AcquisitionRepository:
                 "pool_id": normalized_pool,
                 "source_checksum": checksum,
                 "batch_class": normalized_batch_class.value,
+                "navigation_mode": normalized_navigation.value,
                 "device_seeds": sorted(normalized_seeds.items()),
             },
             separators=(",", ":"),
@@ -2018,6 +2051,7 @@ class AcquisitionRepository:
                     and str(existing["source_live_id"]) == normalized_live_id
                     and str(existing["source_checksum"]) == checksum
                     and str(existing["batch_class"]) == normalized_batch_class.value
+                    and str(existing["navigation_mode"]) == normalized_navigation.value
                     and stored_seeds == normalized_seeds
                 )
                 if not same_content:
@@ -2108,8 +2142,9 @@ class AcquisitionRepository:
                 """
                 INSERT INTO exposure_rounds(
                     round_id, pool_id, state, starts_at_ms,
-                    min_inter_device_gap_ms, min_repeat_gap_ms, created_at_ms
-                ) VALUES (?, ?, 'pending', ?, ?, ?, ?)
+                    min_inter_device_gap_ms, min_repeat_gap_ms, created_at_ms,
+                    navigation_mode
+                ) VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)
                 """,
                 (
                     priority_round_id,
@@ -2118,6 +2153,7 @@ class AcquisitionRepository:
                     int(parent["min_inter_device_gap_ms"]),
                     int(parent["min_repeat_gap_ms"]),
                     now_ms,
+                    normalized_navigation.value,
                 ),
             )
             connection.executemany(
@@ -2136,7 +2172,7 @@ class AcquisitionRepository:
                     identity_key,
                     device_id,
                     hashlib.sha256(
-                        "\0".join((priority_round_id, seed, identity_key)).encode()
+                        f"{priority_round_id}\0{seed}\0{identity_key}".encode()
                     ).hexdigest(),
                 )
                 for identity_key in identities
@@ -2154,10 +2190,10 @@ class AcquisitionRepository:
                 """
                 INSERT INTO priority_batches(
                     batch_id, parent_round_id, priority_round_id, pool_id,
-                    source_live_id, source_checksum, batch_class,
+                    source_live_id, source_checksum, navigation_mode, batch_class,
                     queue_sequence, state,
                     created_at_ms
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)
                 """,
                 (
                     normalized_batch_id,
@@ -2166,6 +2202,7 @@ class AcquisitionRepository:
                     normalized_pool,
                     normalized_live_id,
                     checksum,
+                    normalized_navigation.value,
                     normalized_batch_class.value,
                     queue_sequence,
                     now_ms,
@@ -5014,6 +5051,7 @@ class AcquisitionRepository:
             pool_id=str(row["pool_id"]),
             source_live_id=str(row["source_live_id"]),
             source_checksum=str(row["source_checksum"]),
+            navigation_mode=str(row["navigation_mode"]),
             batch_class=PriorityBatchClass(str(row["batch_class"])),
             queue_sequence=int(row["queue_sequence"]),
             state=PriorityBatchState(str(row["state"])),

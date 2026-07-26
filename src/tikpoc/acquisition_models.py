@@ -104,6 +104,7 @@ class ExposureRound:
     min_inter_device_gap_ms: int
     min_repeat_gap_ms: int
     created_at_ms: int
+    navigation_mode: str = "deeplink"
 
 
 @dataclass(frozen=True)
@@ -114,6 +115,7 @@ class PriorityBatch:
     pool_id: str
     source_live_id: str
     source_checksum: str
+    navigation_mode: str
     batch_class: PriorityBatchClass
     queue_sequence: int
     state: PriorityBatchState

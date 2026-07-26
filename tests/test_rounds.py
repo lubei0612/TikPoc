@@ -200,3 +200,63 @@ def test_expired_assignment_lease_returns_to_pending(tmp_path: Path) -> None:
         )
         is not None
     )
+
+
+def test_round_persists_search_navigation_mode(tmp_path: Path) -> None:
+    repository, pool_id = _repository_with_targets(tmp_path, count=1)
+
+    round_id = create_exposure_round(
+        repository,
+        pool_id=pool_id,
+        device_seeds={"phone-01": "seed-a"},
+        starts_at_ms=1_000,
+        navigation_mode="search",
+    )
+
+    with sqlite3.connect(repository.path) as connection:
+        assert (
+            connection.execute(
+                "SELECT navigation_mode FROM exposure_rounds WHERE round_id=?",
+                (round_id,),
+            ).fetchone()[0]
+            == "search"
+        )
+
+
+def test_legacy_round_migration_defaults_navigation_to_deeplink(tmp_path: Path) -> None:
+    repository, pool_id = _repository_with_targets(tmp_path, count=1)
+    round_id = create_exposure_round(
+        repository,
+        pool_id=pool_id,
+        device_seeds={"phone-01": "seed-a"},
+        starts_at_ms=1_000,
+    )
+    with sqlite3.connect(repository.path) as connection:
+        connection.execute("ALTER TABLE exposure_rounds RENAME TO exposure_rounds_old")
+        connection.execute(
+            """
+            CREATE TABLE exposure_rounds (
+                round_id TEXT PRIMARY KEY, pool_id TEXT NOT NULL, state TEXT NOT NULL,
+                starts_at_ms INTEGER NOT NULL, min_inter_device_gap_ms INTEGER NOT NULL,
+                min_repeat_gap_ms INTEGER NOT NULL, created_at_ms INTEGER NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO exposure_rounds
+            SELECT round_id,pool_id,state,starts_at_ms,min_inter_device_gap_ms,
+                   min_repeat_gap_ms,created_at_ms FROM exposure_rounds_old
+            """
+        )
+        connection.execute("DROP TABLE exposure_rounds_old")
+        connection.execute("PRAGMA foreign_keys=OFF")
+    repository.migrate()
+    with sqlite3.connect(repository.path) as connection:
+        assert (
+            connection.execute(
+                "SELECT navigation_mode FROM exposure_rounds WHERE round_id=?",
+                (round_id,),
+            ).fetchone()[0]
+            == "deeplink"
+        )
