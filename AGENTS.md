@@ -236,6 +236,22 @@ user-approved document and update this guide in the same change.
 - Report measured throughput separately from projected throughput. Do not claim
   the daily target from unit tests or a short synthetic run.
 
+### Latest Capacity Checkpoint (2026-07-26)
+
+- The current autonomous VMOS APK completed a fresh 20-target correctness gate
+  with `20/20` confirmed visits and `20/20` terminal assignments.
+- Confirmed interactions were one like and two reposts; one favorite reached
+  `uncertain`, received exactly one read-only reconciliation, and remained
+  visibly auditable without a second interaction press. Sixteen outcomes were
+  trace-only and no duplicate interaction was recorded.
+- The interval from first confirmed visit to last completion was approximately
+  `194.6 s`, or about `370 targets/hour`. This is a correctness canary, not a
+  capacity pass: it is below the `416.7 targets/hour` minimum needed for
+  10,000/24h and below the promotion target implied by the `6.5 s` mean gate.
+- The next active task is a fresh 100-target performance run followed by an
+  unchanged-build 30-minute gate. Diagnose stage timings before changing code;
+  prioritize route/open-video latency and avoid altering business decisions.
+
 ## Repository Map
 
 - `src/tikpoc/`: Python domain logic, workers, SQLite persistence, HTTP service,
