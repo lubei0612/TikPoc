@@ -9,7 +9,6 @@ from openpyxl import load_workbook
 
 from .importer import Target, target_identity_key
 
-
 _REQUIRED_PRIORITY_WORKBOOK_COLUMNS = {
     "follower_handle",
     "follower_uid",
@@ -65,7 +64,7 @@ def _read_jsonl(path: Path, live_id: str) -> PriorityImportResult:
             except json.JSONDecodeError as error:
                 raise ValueError(f"JSONL line {line_number} is malformed") from error
             if not isinstance(row, dict):
-                raise ValueError(f"JSONL line {line_number} must be an object")
+                raise TypeError(f"JSONL line {line_number} must be an object")
             values = {
                 field: _json_text(row, field, line_number)
                 for field in _JSON_TEXT_FIELDS

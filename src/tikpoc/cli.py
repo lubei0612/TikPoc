@@ -725,7 +725,7 @@ def _require_file(path: Path, label: str) -> None:
 def _parse_iso8601_ms(value: str) -> int:
     normalized = str(value).strip()
     try:
-        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(normalized)
     except ValueError:
         raise SystemExit("starts-at must be a valid ISO-8601 timestamp") from None
     if parsed.tzinfo is None or parsed.utcoffset() is None:

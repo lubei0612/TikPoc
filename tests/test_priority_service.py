@@ -3,12 +3,11 @@ from pathlib import Path
 
 import pytest
 
+from tests.test_cli import _write_fleet_config
+from tests.test_priority_cli import _seed_active_round
 from tikpoc.acquisition_db import AcquisitionRepository
 from tikpoc.fleet import FleetConfig
 from tikpoc.priority_service import PriorityBatchService
-
-from tests.test_cli import _write_fleet_config
-from tests.test_priority_cli import _seed_active_round
 
 
 def _write_live_file(path: Path) -> None:

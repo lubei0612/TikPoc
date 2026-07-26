@@ -5,13 +5,12 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import pytest
 from openpyxl import Workbook
 
+from tests.test_cli import _write_fleet_config
 from tikpoc import priority_service
 from tikpoc.acquisition_db import AcquisitionRepository
 from tikpoc.cli import main
 from tikpoc.importer import Target
 from tikpoc.rounds import create_exposure_round
-
-from tests.test_cli import _write_fleet_config
 
 
 def _target(name: str) -> Target:

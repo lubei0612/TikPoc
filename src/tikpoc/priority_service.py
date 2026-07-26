@@ -113,13 +113,11 @@ class PriorityBatchService:
 
         imported = self.repository.import_pool(source.name, checksum, parsed.targets)
         batch_digest = hashlib.sha256(
-            "\0".join((parent_round_id, live_id, checksum)).encode()
+            f"{parent_round_id}\0{live_id}\0{checksum}".encode()
         ).hexdigest()
         batch_id = f"priority-{batch_digest[:16]}"
         device_seeds = {
-            device_id: hashlib.sha256(
-                "\0".join((batch_id, device_id)).encode()
-            ).hexdigest()
+            device_id: hashlib.sha256(f"{batch_id}\0{device_id}".encode()).hexdigest()
             for device_id in participant_device_ids
         }
         self.repository.create_priority_batch(
