@@ -10,6 +10,7 @@ public final class AutonomousTaskExecutorTest {
         activeModeTreatsEmptyEnvelopePlanFieldsAsUnplanned();
         activeTraceOpensVideoWithoutApplyingAnInteraction();
         preservesDeviceEvidenceErrorCode();
+        terminalSearchMissOnlySkipsInitialProfileOpening();
         activeModeVerifiesVideoAndAction();
         actionFailureUsesActionPhaseIdempotencyKey();
         reconciliationFailureRetainsActionPlan();
@@ -156,6 +157,28 @@ public final class AutonomousTaskExecutorTest {
         check(result.payload.contains("stale_tree"), "semantic failure preserved");
     }
 
+    private static void terminalSearchMissOnlySkipsInitialProfileOpening() throws Exception {
+        FakeUi ui = new FakeUi("target_user", true);
+        ui.openError = new AccessibilityUiAdapter.UiException(
+                "profile_identity_mismatch");
+        AutonomousTaskExecutor executor = new AutonomousTaskExecutor(
+                ui, AutonomousTaskExecutor.Mode.ACTIVE);
+        String payload = "{\"username\":\"target_user\",\"plan_id\":42,"
+                + "\"video_key\":\"post:0\",\"action\":\"like\"}";
+
+        DeviceTaskStore.Result initial = executor.execute(new DeviceTaskStore.Task(
+                "task-initial", "lease-initial", 7L, 9_000L,
+                "profile_opening", payload));
+        DeviceTaskStore.Result continuation = executor.execute(new DeviceTaskStore.Task(
+                "task-continuation", "lease-continuation", 7L, 9_000L,
+                "video_opening", payload));
+
+        check(initial.payload.contains("\"state\":\"skipped\""),
+                "initial exact search miss is terminal");
+        check(continuation.payload.contains("\"state\":\"deferred\""),
+                "continuation reacquisition miss remains retryable");
+    }
+
     private static DeviceTaskStore.Task task(String username, String payload) {
         return new DeviceTaskStore.Task("task-1", "lease-1", 7L, 9_000L,
                 "pending", "{\"username\":\"" + username + "\"}");
@@ -167,6 +190,7 @@ public final class AutonomousTaskExecutorTest {
         int actions;
         int videos;
         RuntimeException observeError;
+        RuntimeException openError;
         RuntimeException actionError;
         RuntimeException reconciliationError;
 
@@ -176,7 +200,9 @@ public final class AutonomousTaskExecutorTest {
         }
 
         @Override
-        public void openProfile(Map<String, Object> target) {}
+        public void openProfile(Map<String, Object> target) {
+            if (openError != null) throw openError;
+        }
 
         @Override
         public AutonomousTaskExecutor.Profile observeProfile() {

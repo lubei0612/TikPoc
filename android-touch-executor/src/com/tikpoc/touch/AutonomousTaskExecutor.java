@@ -103,7 +103,8 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
                 return actionResult(task, target, "action_reconciling",
                         error.code, "deferred");
             }
-            if (isTerminalSearchResolution(error.code)) {
+            if ("profile_opening".equals(task.phase)
+                    && isTerminalSearchResolution(error.code)) {
                 return result(task, "skipped", phase, error.code);
             }
             return result(task, "deferred", phase, error.code);
