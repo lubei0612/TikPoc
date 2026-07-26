@@ -1,0 +1,23 @@
+[Unit]
+Description=TikPoc VMOS autonomous task API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tikpoc
+Group=tikpoc
+WorkingDirectory=/opt/tikpoc/current
+EnvironmentFile=/etc/tikpoc/tikpoc.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/tikpoc/current/venv/bin/tikpoc dashboard --db /var/lib/tikpoc/tikpoc.db --host 127.0.0.1 --port 8765
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/tikpoc /var/log/tikpoc
+
+[Install]
+WantedBy=multi-user.target
