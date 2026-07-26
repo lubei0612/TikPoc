@@ -6,8 +6,24 @@ import java.util.List;
 public final class AutonomousTaskRunnerTest {
     public static void main(String[] args) throws Exception {
         pullsTasksAndFlushesIdempotentOutbox();
+        executesOnePersistedTaskAndQueuesResult();
         opensCircuitAfterTwoConsecutiveFailures();
         System.out.println("AutonomousTaskRunnerTest PASS");
+    }
+
+    private static void executesOnePersistedTaskAndQueuesResult() throws Exception {
+        DeviceTaskStore store = new DeviceTaskStore(new DeviceTaskStore.MemoryBackend());
+        store.enqueue(new DeviceTaskStore.Task(
+                "task-1", "lease-1", 7L, 9_000L, "pending", "{}"));
+        FakeClient client = new FakeClient();
+        AutonomousTaskRunner runner = new AutonomousTaskRunner(
+                client, store, "round-1", 7L,
+                task -> new DeviceTaskStore.Result("result-1", task.taskId, "{}"));
+
+        runner.runOnce(1_000L);
+
+        check(store.next(7L, 1_000L) == null, "completed task removed");
+        check(store.pendingResults().size() == 1, "result persisted before upload");
     }
 
     private static void pullsTasksAndFlushesIdempotentOutbox() throws Exception {

@@ -1,0 +1,118 @@
+package com.tikpoc.touch;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.UUID;
+
+public class AccessibilityUiAdapter implements AutonomousTaskExecutor.Ui {
+    public interface Invoker {
+        Protocol.Response invoke(Protocol.Request request) throws Exception;
+    }
+
+    private final String deviceId;
+    private final String accountId;
+    private final long fenceToken;
+    private final long nowMs;
+    private final Invoker invoker;
+    private Map<String, Object> target = new LinkedHashMap<String, Object>();
+
+    public AccessibilityUiAdapter(String deviceId, String accountId, long fenceToken,
+            long nowMs, Invoker invoker) {
+        this.deviceId = deviceId;
+        this.accountId = accountId;
+        this.fenceToken = fenceToken;
+        this.nowMs = nowMs;
+        this.invoker = invoker;
+    }
+
+    @Override
+    public void openProfile(Map<String, Object> target) throws Exception {
+        this.target = new LinkedHashMap<String, Object>(target);
+        String targetId = string(target, "target_id");
+        String route = targetId.isEmpty()
+                ? string(target, "profile_url")
+                : "snssdk1233://user/profile/" + targetId;
+        request("open_profile", "profile_opening", map(
+                "route", route, "expected_username", string(target, "username")));
+    }
+
+    @Override
+    public AutonomousTaskExecutor.Profile observeProfile() throws Exception {
+        Protocol.Response response = request(
+                "observe_profile", "identity_confirmed",
+                map("expected_username", string(target, "username")));
+        Map<String, Object> evidence = evidence(response);
+        return new AutonomousTaskExecutor.Profile(
+                string(evidence, "username"),
+                "available".equals(string(evidence, "access_state")));
+    }
+
+    @Override
+    public void openAndConfirmVideo(String videoKey) throws Exception {
+        request("open_video", "video_opening", map("video_key", videoKey));
+    }
+
+    @Override
+    public boolean applyAndConfirmAction(String action) throws Exception {
+        Protocol.Response response = request(
+                "apply_action", "action_executing", map("action", action));
+        Map<String, Object> evidence = evidence(response);
+        return "on".equals(string(evidence, "after"));
+    }
+
+    protected Protocol.Response invoke(Protocol.Request request) throws Exception {
+        return invoker.invoke(request);
+    }
+
+    private Protocol.Response request(String command, String phase,
+            Map<String, Object> arguments) throws Exception {
+        Map<String, Object> values = new LinkedHashMap<String, Object>();
+        values.put("version", 1L);
+        values.put("command_id", UUID.randomUUID().toString());
+        values.put("command", command);
+        values.put("device_id", deviceId);
+        values.put("account_id", accountId);
+        values.put("fence_token", fenceToken);
+        values.put("assignment_id", assignmentId());
+        values.put("phase", phase);
+        values.put("deadline_elapsed_ms", nowMs + 10_000L);
+        values.put("arguments", arguments);
+        Protocol.Request request = Protocol.parseRequest(Protocol.encodeObject(values), nowMs);
+        Protocol.Response response = invoke(request);
+        if (!"ok".equals(response.values.get("status"))) {
+            throw new IllegalStateException("device evidence unavailable");
+        }
+        return response;
+    }
+
+    private long assignmentId() {
+        try { return Long.parseLong(string(target, "task_id")); }
+        catch (NumberFormatException error) { return 1L; }
+    }
+
+    private static Map<String, Object> evidence(Protocol.Response response) throws Exception {
+        Object raw = response.values.get("evidence");
+        if (!(raw instanceof Map)) throw new IllegalStateException("evidence missing");
+        @SuppressWarnings("unchecked") Map<String, Object> values = (Map<String, Object>) raw;
+        return values;
+    }
+
+    private static Map<String, Object> map(String firstKey, String firstValue,
+            String secondKey, String secondValue) {
+        Map<String, Object> result = new LinkedHashMap<String, Object>();
+        result.put(firstKey, firstValue);
+        result.put(secondKey, secondValue);
+        return result;
+    }
+
+    private static Map<String, Object> map(String key, String value) {
+        Map<String, Object> result = new LinkedHashMap<String, Object>();
+        result.put(key, value);
+        return result;
+    }
+
+    private static String string(Map<String, Object> values, String key) {
+        Object value = values.get(key);
+        return value instanceof String ? (String) value : "";
+    }
+}

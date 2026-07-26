@@ -10,6 +10,7 @@ public final class DeviceTaskStore {
     public interface Backend {
         void saveTask(Task task);
         List<Task> loadTasks();
+        void deleteTask(String taskId);
         void saveResult(Result result);
         List<Result> loadResults();
         void deleteResult(String idempotencyKey);
@@ -74,6 +75,10 @@ public final class DeviceTaskStore {
         backend.saveTask(task);
     }
 
+    public synchronized void removeTask(String taskId) {
+        backend.deleteTask(taskId);
+    }
+
     public synchronized Task next(long sessionEpoch, long nowMs) {
         for (Task task : backend.loadTasks()) {
             if (task.sessionEpoch == sessionEpoch && task.leaseExpiresAtMs > nowMs) {
@@ -125,6 +130,9 @@ public final class DeviceTaskStore {
 
         @Override
         public List<Task> loadTasks() { return new ArrayList<Task>(tasks.values()); }
+
+        @Override
+        public void deleteTask(String taskId) { tasks.remove(taskId); }
 
         @Override
         public void saveResult(Result result) { results.put(result.idempotencyKey, result); }

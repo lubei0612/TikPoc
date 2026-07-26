@@ -3,7 +3,7 @@ package com.tikpoc.touch;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-public final class AutonomousTaskExecutor {
+public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Executor {
     public enum Mode { SHADOW, ACTIVE }
 
     public interface Ui {
@@ -32,6 +32,7 @@ public final class AutonomousTaskExecutor {
         this.mode = mode;
     }
 
+    @Override
     public DeviceTaskStore.Result execute(DeviceTaskStore.Task task) {
         String phase = "profile_opening";
         try {

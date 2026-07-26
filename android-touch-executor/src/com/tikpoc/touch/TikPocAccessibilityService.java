@@ -22,6 +22,7 @@ public final class TikPocAccessibilityService extends AccessibilityService
     private volatile String activityName = "";
     private volatile String packageName = "";
     private LoopbackCommandServer server;
+    private Thread autonomousThread;
 
     @Override
     protected void onServiceConnected() {
@@ -29,6 +30,7 @@ public final class TikPocAccessibilityService extends AccessibilityService
         try {
             TouchCommandDispatcher dispatcher = new TouchCommandDispatcher(
                     this, this, this, this);
+            startAutonomousWorker(dispatcher);
             CommandGate gate = new CommandGate(this::elapsedRealtimeMs);
             server = new LoopbackCommandServer("127.0.0.1", 47101, gate, dispatcher, this);
             server.start();
@@ -58,6 +60,15 @@ public final class TikPocAccessibilityService extends AccessibilityService
 
     @Override
     public void onDestroy() {
+        if (autonomousThread != null) {
+            autonomousThread.interrupt();
+            try {
+                autonomousThread.join(2_000L);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+            autonomousThread = null;
+        }
         if (server != null) {
             try {
                 server.close();
@@ -66,6 +77,39 @@ public final class TikPocAccessibilityService extends AccessibilityService
             }
         }
         super.onDestroy();
+    }
+
+    private void startAutonomousWorker(TouchCommandDispatcher dispatcher) {
+        try {
+            DeviceProvisioning.Settings settings = DeviceProvisioning.load(
+                    new AndroidProvisioningStore(this), new AndroidTokenVault(this));
+            if (settings == null) return;
+            DeviceTaskStore store = new DeviceTaskStore(new AndroidTaskBackend(this));
+            DeviceApiClient client = new DeviceApiClient(
+                    settings.baseUrl, settings.deviceId, settings.accessToken,
+                    settings.sessionEpoch, new DeviceApiClient.HttpsExchange());
+            AccessibilityUiAdapter ui = new AccessibilityUiAdapter(
+                    settings.deviceId, settings.accountId, settings.sessionEpoch,
+                    elapsedRealtimeMs(), dispatcher::dispatch);
+            AutonomousTaskExecutor executor = new AutonomousTaskExecutor(
+                    ui, AutonomousTaskExecutor.Mode.SHADOW);
+            AutonomousTaskRunner runner = new AutonomousTaskRunner(
+                    client, store, settings.roundId, settings.sessionEpoch, executor);
+            autonomousThread = new Thread(() -> {
+                while (!Thread.currentThread().isInterrupted()) {
+                    AutonomousTaskRunner.State state = runner.runOnce(elapsedRealtimeMs());
+                    if (state == AutonomousTaskRunner.State.PAUSED) return;
+                    try {
+                        Thread.sleep(1_000L);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            }, "tikpoc-autonomous-mobile-worker");
+            autonomousThread.start();
+        } catch (Exception error) {
+            android.util.Log.w("TikPocTouch", "autonomous worker not started");
+        }
     }
 
     @Override

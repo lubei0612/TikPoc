@@ -40,6 +40,11 @@ public final class AndroidTaskBackend implements DeviceTaskStore.Backend {
     }
 
     @Override
+    public synchronized void deleteTask(String taskId) {
+        database.getWritableDatabase().delete("tasks", "task_id = ?", new String[] {taskId});
+    }
+
+    @Override
     public synchronized List<DeviceTaskStore.Task> loadTasks() {
         List<DeviceTaskStore.Task> tasks = new ArrayList<DeviceTaskStore.Task>();
         Cursor cursor = database.getReadableDatabase().query(
