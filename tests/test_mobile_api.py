@@ -256,8 +256,7 @@ def test_mobile_profile_result_creates_video_bound_follow_up_plan(
     assert plan.state is ActionPlanState.PLANNED
     with sqlite3.connect(path) as connection:
         connection.execute(
-            "UPDATE round_assignments SET lease_expires_at_ms=1 "
-            "WHERE assignment_id=?",
+            "UPDATE round_assignments SET lease_expires_at_ms=1 WHERE assignment_id=?",
             (int(task["task_id"]),),
         )
 
