@@ -88,6 +88,12 @@ public final class AndroidTaskBackend implements DeviceTaskStore.Backend {
         return results;
     }
 
+    @Override
+    public synchronized void deleteResult(String idempotencyKey) {
+        database.getWritableDatabase().delete(
+                "results", "idempotency_key = ?", new String[] {idempotencyKey});
+    }
+
     private static final class QueueDatabase extends SQLiteOpenHelper {
         QueueDatabase(Context context) { super(context, DB_NAME, null, 1); }
 

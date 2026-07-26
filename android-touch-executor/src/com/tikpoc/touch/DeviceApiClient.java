@@ -12,7 +12,7 @@ import java.util.List;
 import java.util.Map;
 import javax.net.ssl.HttpsURLConnection;
 
-public final class DeviceApiClient {
+public final class DeviceApiClient implements AutonomousTaskRunner.Client {
     public interface Exchange {
         HttpResponse post(String baseUrl, String path, String bearer, String body)
                 throws Exception;

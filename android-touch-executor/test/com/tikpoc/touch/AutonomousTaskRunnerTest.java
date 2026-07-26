@@ -1,0 +1,74 @@
+package com.tikpoc.touch;
+
+import java.util.ArrayList;
+import java.util.List;
+
+public final class AutonomousTaskRunnerTest {
+    public static void main(String[] args) throws Exception {
+        pullsTasksAndFlushesIdempotentOutbox();
+        opensCircuitAfterTwoConsecutiveFailures();
+        System.out.println("AutonomousTaskRunnerTest PASS");
+    }
+
+    private static void pullsTasksAndFlushesIdempotentOutbox() throws Exception {
+        DeviceTaskStore store = new DeviceTaskStore(new DeviceTaskStore.MemoryBackend());
+        store.enqueueResult(new DeviceTaskStore.Result("result-1", "task-old", "{}"));
+        FakeClient client = new FakeClient();
+        client.tasks.add(new DeviceTaskStore.Task(
+                "task-1", "lease-1", 7L, 9_000L, "pending", "{}"));
+        AutonomousTaskRunner runner = new AutonomousTaskRunner(client, store, "round-1", 7L);
+
+        AutonomousTaskRunner.State state = runner.runOnce(1_000L);
+
+        check(state == AutonomousTaskRunner.State.HEALTHY, "healthy state");
+        check(client.heartbeats == 1, "heartbeat sent");
+        check(client.uploads == 1, "outbox uploaded");
+        check(store.pendingResults().isEmpty(), "duplicate acknowledged");
+        check(store.next(7L, 1_000L).taskId.equals("task-1"), "task persisted");
+    }
+
+    private static void opensCircuitAfterTwoConsecutiveFailures() throws Exception {
+        FakeClient client = new FakeClient();
+        client.fail = true;
+        AutonomousTaskRunner runner = new AutonomousTaskRunner(
+                client, new DeviceTaskStore(new DeviceTaskStore.MemoryBackend()),
+                "round-1", 7L);
+
+        check(runner.runOnce(1_000L) == AutonomousTaskRunner.State.DEGRADED,
+                "first failure degraded");
+        check(runner.runOnce(2_000L) == AutonomousTaskRunner.State.PAUSED,
+                "second failure paused");
+        check(client.pulls == 0, "no claim after failed heartbeat");
+    }
+
+    private static final class FakeClient implements AutonomousTaskRunner.Client {
+        final List<DeviceTaskStore.Task> tasks = new ArrayList<DeviceTaskStore.Task>();
+        int heartbeats;
+        int uploads;
+        int pulls;
+        boolean fail;
+
+        @Override
+        public void heartbeat(String appVersion, String phase, int queueDepth, long nowMs)
+                throws Exception {
+            heartbeats++;
+            if (fail) throw new Exception("network");
+        }
+
+        @Override
+        public List<DeviceTaskStore.Task> pull(String roundId, int limit) {
+            pulls++;
+            return tasks;
+        }
+
+        @Override
+        public String uploadResult(DeviceTaskStore.Result result) {
+            uploads++;
+            return "duplicate";
+        }
+    }
+
+    private static void check(boolean condition, String label) {
+        if (!condition) throw new AssertionError(label);
+    }
+}

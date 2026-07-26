@@ -12,6 +12,7 @@ public final class DeviceTaskStore {
         List<Task> loadTasks();
         void saveResult(Result result);
         List<Result> loadResults();
+        void deleteResult(String idempotencyKey);
     }
 
     public static final class Task {
@@ -103,6 +104,18 @@ public final class DeviceTaskStore {
         return new ArrayList<Result>(backend.loadResults());
     }
 
+    public synchronized void acknowledgeResult(String idempotencyKey) {
+        backend.deleteResult(idempotencyKey);
+    }
+
+    public synchronized int queueDepth(long sessionEpoch, long nowMs) {
+        int count = 0;
+        for (Task task : backend.loadTasks()) {
+            if (task.sessionEpoch == sessionEpoch && task.leaseExpiresAtMs > nowMs) count++;
+        }
+        return count;
+    }
+
     public static final class MemoryBackend implements Backend {
         private final Map<String, Task> tasks = new LinkedHashMap<String, Task>();
         private final Map<String, Result> results = new LinkedHashMap<String, Result>();
@@ -118,5 +131,8 @@ public final class DeviceTaskStore {
 
         @Override
         public List<Result> loadResults() { return new ArrayList<Result>(results.values()); }
+
+        @Override
+        public void deleteResult(String idempotencyKey) { results.remove(idempotencyKey); }
     }
 }
