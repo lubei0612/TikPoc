@@ -46,6 +46,17 @@ from .rules import (
     evaluate_search_profile,
 )
 
+
+def _select_stable_post_handle(
+    post_handles: tuple[str, ...], *, assignment_id: int
+) -> str:
+    """Select from the grid row that remains visible after profile reacquisition."""
+    stable_handles = post_handles[:3]
+    if not stable_handles:
+        raise ValueError("post handles are required")
+    return stable_handles[assignment_id % len(stable_handles)]
+
+
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 MANUAL_RETRY_AT_MS = 2**63 - 1
 _ALLOWED_PHASE_TRANSITIONS = {
@@ -1274,7 +1285,9 @@ class AcquisitionRepository:
             return
         if not post_handles:
             raise ValueError("mobile profile post handles are incomplete")
-        selected = post_handles[assignment.assignment_id % len(post_handles)]
+        selected = _select_stable_post_handle(
+            post_handles, assignment_id=assignment.assignment_id
+        )
         self.set_plan_video(plan.plan_id, selected)
         self.transition_assignment(
             assignment_id,

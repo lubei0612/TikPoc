@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from tikpoc.acquisition_db import AcquisitionRepository
+from tikpoc.acquisition_db import AcquisitionRepository, _select_stable_post_handle
 from tikpoc.device_api import MobileTaskResult
 from tikpoc.importer import Target
 from tikpoc.rounds import create_exposure_round
@@ -18,6 +18,15 @@ def repository(tmp_path: Path) -> AcquisitionRepository:
     )
     result.migrate()
     return result
+
+
+def test_stable_post_selection_stays_in_the_first_visible_grid_row() -> None:
+    assert (
+        _select_stable_post_handle(
+            ("post:0", "post:1", "post:2", "post:3"), assignment_id=3
+        )
+        == "post:0"
+    )
 
 
 def test_register_device_rotates_session_epoch_and_revokes_old_token(
