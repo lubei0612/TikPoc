@@ -31,6 +31,7 @@ mkdir -p "$OUT/classes" "$OUT/test-classes" "$OUT/dex" "$OUT/compiled-res"
   "$ROOT/src/com/tikpoc/touch/AndroidProvisioningStore.java" \
   "$ROOT/src/com/tikpoc/touch/AndroidTokenVault.java" \
   "$ROOT/src/com/tikpoc/touch/ProvisioningActivity.java" \
+  "$ROOT/src/com/tikpoc/touch/SessionPacingPlanner.java" \
   "$ROOT/src/com/tikpoc/touch/AutonomousTaskRunner.java" \
   "$ROOT/src/com/tikpoc/touch/AutonomousTaskExecutor.java" \
   "$ROOT/src/com/tikpoc/touch/AccessibilityUiAdapter.java" \
@@ -50,6 +51,7 @@ mkdir -p "$OUT/classes" "$OUT/test-classes" "$OUT/dex" "$OUT/compiled-res"
   "$ROOT/test/com/tikpoc/touch/AndroidTaskBackendTest.java" \
   "$ROOT/test/com/tikpoc/touch/DeviceApiClientTest.java" \
   "$ROOT/test/com/tikpoc/touch/DeviceProvisioningTest.java" \
+  "$ROOT/test/com/tikpoc/touch/SessionPacingPlannerTest.java" \
   "$ROOT/test/com/tikpoc/touch/AutonomousTaskRunnerTest.java" \
   "$ROOT/test/com/tikpoc/touch/AutonomousTaskExecutorTest.java" \
   "$ROOT/test/com/tikpoc/touch/AccessibilityUiAdapterTest.java"
@@ -74,6 +76,8 @@ mkdir -p "$OUT/classes" "$OUT/test-classes" "$OUT/dex" "$OUT/compiled-res"
   com.tikpoc.touch.DeviceApiClientTest
 "$JDK/bin/java" -cp "$PLATFORM:$OUT/classes:$OUT/test-classes" \
   com.tikpoc.touch.DeviceProvisioningTest
+"$JDK/bin/java" -cp "$PLATFORM:$OUT/classes:$OUT/test-classes" \
+  com.tikpoc.touch.SessionPacingPlannerTest
 "$JDK/bin/java" -cp "$PLATFORM:$OUT/classes:$OUT/test-classes" \
   com.tikpoc.touch.AutonomousTaskRunnerTest
 "$JDK/bin/java" -cp "$PLATFORM:$OUT/classes:$OUT/test-classes" \
