@@ -139,8 +139,8 @@ public final class TouchCommandDispatcher {
         evidence.put("action", action);
         evidence.put("before", beforeState);
         evidence.put("control_resource_id", control.resourceId);
-        for (int attempt = 0; attempt < 5; attempt++) {
-            after = snapshots.awaitAfter(after.eventSequence, 400L);
+        for (int attempt = 0; attempt < 10; attempt++) {
+            after = snapshots.awaitAfter(after.eventSequence, 500L);
             try {
                 SemanticSnapshot.Node afterControl = TikTokSemantics.uniqueControl(after, action);
                 String afterState = TikTokSemantics.actionState(afterControl);

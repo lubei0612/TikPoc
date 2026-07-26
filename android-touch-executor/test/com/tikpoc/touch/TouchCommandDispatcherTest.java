@@ -23,6 +23,7 @@ public final class TouchCommandDispatcherTest {
         searchNoMatchIsTerminalEvidence();
         actionClicksOnceAndVerifiesResult();
         actionWaitsPastAStalePostClickSnapshot();
+        actionWaitsForDelayedPlatformStatePropagation();
         actionConfirmsFromVisibleCounterIncrement();
         alreadySelectedActionIsConfirmedWithoutClick();
         repostUsesShareSurfaceAndVerifiesResult();
@@ -232,6 +233,21 @@ public final class TouchCommandDispatcherTest {
         Map<String, Object> evidence = (Map<String, Object>) response.values.get("evidence");
         check(evidence.get("before_count").equals(2L), "counter before evidence");
         check(evidence.get("after_count").equals(3L), "counter after evidence");
+    }
+
+    private static void actionWaitsForDelayedPlatformStatePropagation() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.source.snapshots = Arrays.asList(
+                actionSnapshot(false, 1), actionSnapshot(false, 1),
+                actionSnapshot(false, 1), actionSnapshot(false, 1),
+                actionSnapshot(false, 1), actionSnapshot(false, 1),
+                actionSnapshot(true, 2));
+
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("apply_action", map("action", "like")));
+
+        check(response.values.get("status").equals("ok"), "delayed platform state verified");
+        check(fixture.actuator.clicks == 1, "delayed platform state clicked once");
     }
 
     private static void alreadySelectedActionIsConfirmedWithoutClick() throws Exception {
