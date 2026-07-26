@@ -151,7 +151,8 @@ user-approved document and update this guide in the same change.
   Never substitute a reachable MYT slot or another VMOS account when one VMOS
   instance is unavailable.
 - The phone/device backend imports and visits CSV targets.
-- Historical Deeplink policy uses `following > followers` and `video_count >= 1`.
+- Deeplink eligibility is `video_count >= 1`; following and follower metrics are
+  retained for observation and reporting but do not gate interaction.
 - Search experiments use immutable policy `search-posts-gte-1-composite-v1`: an exact profile with at least one visible post receives one planned like/favorite/repost outcome; a zero-post profile is trace-only. Search never clicks a similar username and never falls back to Deeplink.
 - For an eligible profile, open one randomly selected video. Durable per-action
   token buckets and rolling quota headroom select a due like, favorite, or
