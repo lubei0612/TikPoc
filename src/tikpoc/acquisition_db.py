@@ -2671,6 +2671,14 @@ class AcquisitionRepository:
                       WHERE window_assignment.round_id = assignment.round_id
                         AND window_assignment.phase NOT IN ('completed', 'skipped')
                         AND instr(window_assignment.order_key, ':') > 0
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM operator_control_states AS window_device_control
+                            WHERE window_device_control.scope = 'device'
+                              AND window_device_control.scope_id =
+                                  window_assignment.device_id
+                              AND window_device_control.state IN ('paused', 'stopped')
+                        )
                   )
               )
               AND NOT EXISTS (

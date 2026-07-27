@@ -116,11 +116,10 @@ def test_fast_device_may_lead_shared_window_by_three_hundred(
     with sqlite3.connect(repository.path) as connection:
         connection.execute(
             """
-            UPDATE round_assignments SET phase = 'skipped', completed_at_ms = 1200
-            WHERE round_id = ? AND device_id = 'phone-02'
-              AND order_key LIKE '00000000:%'
+            INSERT INTO operator_control_states(
+                scope, scope_id, state, updated_at_ms, command_id
+            ) VALUES ('device', 'phone-02', 'paused', 1251, 'pause-slow-device')
             """,
-            (round_id,),
         )
     claimed = repository.claim_next_assignment(
         round_id, "phone-01", "worker-1", now_ms=1_300
