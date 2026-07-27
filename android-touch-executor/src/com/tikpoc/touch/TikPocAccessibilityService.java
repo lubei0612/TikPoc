@@ -99,13 +99,7 @@ public final class TikPocAccessibilityService extends AccessibilityService
                             ? AutonomousTaskExecutor.Mode.ACTIVE
                             : AutonomousTaskExecutor.Mode.SHADOW);
             AutonomousTaskRunner runner = new AutonomousTaskRunner(
-                    client, store, settings.roundId, settings.sessionEpoch, executor,
-                    completedTargets -> {
-                        SessionPacingPlanner.Plan plan = SessionPacingPlanner.plan(
-                                settings.deviceId, completedTargets);
-                        SystemClock.sleep(plan.delayMs);
-                        if (plan.homeBrowseDue) executor.browseHomeReadOnly();
-                    });
+                    client, store, settings.roundId, settings.sessionEpoch, executor);
             autonomousThread = new Thread(() -> {
                 while (!Thread.currentThread().isInterrupted()) {
                     AutonomousTaskRunner.State state = runner.runOnce(System.currentTimeMillis());
