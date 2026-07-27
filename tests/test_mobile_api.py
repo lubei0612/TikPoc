@@ -414,48 +414,30 @@ def test_mobile_profile_result_creates_video_bound_follow_up_plan(
             "lease_id": task["lease_id"],
             "idempotency_key": "action-uncertain-1",
             "state": "uncertain",
-            "phase": "action_reconciling",
+            "phase": "action_executing",
             "evidence": {"code": "action_unverified", "plan_id": plan.plan_id},
         },
         headers=headers,
     )
 
     assert uncertain.status_code == 200
-    assert (
-        repo.assignment(int(task["task_id"])).phase
-        is AssignmentPhase.ACTION_RECONCILING
-    )
+    terminal = repo.assignment(int(task["task_id"]))
+    assert terminal.phase is AssignmentPhase.COMPLETED
+    assert terminal.last_error_code == "action_uncertain_terminal"
     assert repo.action_plan_by_id(plan.plan_id).state is ActionPlanState.UNCERTAIN
-    reconciliation = api.post(
-        "/api/mobile/pull",
-        json={
-            "device_id": "device-1",
-            "session_epoch": 1,
-            "round_id": round_id,
-            "limit": 1,
-        },
-        headers=headers,
-    ).json()["tasks"][0]
-    assert reconciliation["phase"] == "action_reconciling"
-
-    completed = api.post(
-        "/api/mobile/results",
-        json={
-            "device_id": "device-1",
-            "session_epoch": 1,
-            "task_id": task["task_id"],
-            "lease_id": task["lease_id"],
-            "idempotency_key": "action-reconciled-1",
-            "state": "completed",
-            "phase": "action_reconciling",
-            "evidence": {"code": "action_reconciled", "plan_id": plan.plan_id},
-        },
-        headers=headers,
+    assert (
+        api.post(
+            "/api/mobile/pull",
+            json={
+                "device_id": "device-1",
+                "session_epoch": 1,
+                "round_id": round_id,
+                "limit": 1,
+            },
+            headers=headers,
+        ).json()["tasks"]
+        == []
     )
-
-    assert completed.status_code == 200
-    assert repo.assignment(int(task["task_id"])).phase is AssignmentPhase.COMPLETED
-    assert repo.action_plan_by_id(plan.plan_id).state is ActionPlanState.CONFIRMED
 
 
 def test_mobile_ineligible_profile_confirms_trace_and_completes(

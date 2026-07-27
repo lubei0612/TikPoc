@@ -14,7 +14,6 @@ public final class AutonomousTaskExecutorTest {
         activeModeVerifiesVideoAndAction();
         actionFailureUsesActionPhaseIdempotencyKey();
         reconciliationFailureRetainsActionPlan();
-        reconciliationVideoFailureIsTerminal();
         System.out.println("AutonomousTaskExecutorTest PASS");
     }
 
@@ -53,8 +52,8 @@ public final class AutonomousTaskExecutorTest {
                 "action failure does not collide with profile evidence receipt");
         check(result.payload.contains("\"state\":\"uncertain\""),
                 "action evidence failure is reconciled once");
-        check(result.payload.contains("\"phase\":\"action_reconciling\""),
-                "action evidence failure enters reconciliation");
+        check(result.payload.contains("\"phase\":\"action_executing\""),
+                "action evidence failure terminates in execution phase");
         check(result.payload.contains("\"plan_id\":42"),
                 "action evidence failure retains its immutable plan");
     }
@@ -80,30 +79,8 @@ public final class AutonomousTaskExecutorTest {
                 "reconciliation failure is terminal after one read");
         check(result.payload.contains("\"plan_id\":43"),
                 "reconciliation failure retains its immutable plan");
-    }
-
-    private static void reconciliationVideoFailureIsTerminal() throws Exception {
-        FakeUi ui = new FakeUi("target_user", true);
-        ui.videoError = new AccessibilityUiAdapter.UiException("missing_post_handle");
-        AutonomousTaskExecutor executor = new AutonomousTaskExecutor(ui,
-                AutonomousTaskExecutor.Mode.ACTIVE);
-        DeviceTaskStore.Task task = new DeviceTaskStore.Task(
-                "task-video-reconcile", "lease-video-reconcile", 7L, 9_000L,
-                "action_reconciling",
-                "{\"username\":\"target_user\",\"plan_id\":44,"
-                + "\"video_key\":\"post:1\",\"action\":\"favorite\"}");
-
-        DeviceTaskStore.Result result = executor.execute(task);
-
-        check(result.idempotencyKey.equals(
-                "task-video-reconcile:lease-video-reconcile:action_reconciling"),
-                "reconciliation video failure uses terminal idempotency phase");
-        check(result.payload.contains("\"phase\":\"action_reconciling\""),
-                "reconciliation video failure retains task phase");
-        check(result.payload.contains("\"state\":\"deferred\""),
-                "reconciliation video failure is terminal");
-        check(result.payload.contains("\"plan_id\":44"),
-                "reconciliation video failure retains immutable plan");
+        check(ui.profiles == 0 && ui.videos == 0 && ui.actions == 0,
+                "historical reconciliation only observes current action surface");
     }
 
     private static void shadowModeConfirmsIdentityWithoutAction() throws Exception {
@@ -214,6 +191,7 @@ public final class AutonomousTaskExecutorTest {
         final boolean publicProfile;
         int actions;
         int videos;
+        int profiles;
         RuntimeException observeError;
         RuntimeException openError;
         RuntimeException actionError;
@@ -228,6 +206,7 @@ public final class AutonomousTaskExecutorTest {
         @Override
         public void openProfile(Map<String, Object> target) {
             if (openError != null) throw openError;
+            profiles++;
         }
 
         @Override

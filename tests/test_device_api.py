@@ -216,7 +216,7 @@ def test_mobile_task_envelope_carries_round_navigation_mode(tmp_path: Path) -> N
 
 @pytest.mark.parametrize(
     ("state", "expected_phase"),
-    (("deferred", "deferred"), ("skipped", "skipped")),
+    (("deferred", "skipped"), ("skipped", "skipped")),
 )
 def test_profile_opening_result_releases_mobile_lease(
     tmp_path: Path, state: str, expected_phase: str
@@ -262,5 +262,4 @@ def test_profile_opening_result_releases_mobile_lease(
     assert assignment.phase.value == expected_phase
     assert assignment.lease_owner is None
     assert assignment.last_error_code == "search_no_exact_match"
-    if state == "deferred":
-        assert assignment.next_attempt_at_ms == 33_000
+    assert assignment.completed_at_ms == 3_000

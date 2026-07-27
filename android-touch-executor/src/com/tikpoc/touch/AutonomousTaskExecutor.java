@@ -65,6 +65,14 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
         Map<String, Object> target = null;
         try {
             target = Protocol.decodeObject(task.payload);
+            if ("action_reconciling".equals(task.phase)) {
+                phase = "action_reconciling";
+                if (ui.observeAction(requiredString(target, "action"))) {
+                    return actionResult(task, target, phase, "action_reconciled");
+                }
+                return actionResult(task, target, phase, "action_not_confirmed",
+                        "deferred");
+            }
             String expected = requiredString(target, "username");
             ui.openProfile(target);
             phase = "identity_confirmed";
@@ -85,18 +93,10 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
             if ("trace".equals(target.get("action"))) {
                 return actionResult(task, target, "trace_confirmed");
             }
-            if ("action_reconciling".equals(task.phase)) {
-                phase = "action_reconciling";
-                if (ui.observeAction((String) target.get("action"))) {
-                    return actionResult(task, target, phase, "action_reconciled");
-                }
-                return actionResult(task, target, phase, "action_not_confirmed",
-                        "deferred");
-            }
             phase = "action_executing";
             if (!ui.applyAndConfirmAction((String) target.get("action"))) {
-                return actionResult(task, target, "action_reconciling",
-                        "action_unverified", "uncertain", "action_executing");
+                return actionResult(task, target, "action_executing",
+                        "action_unverified", "uncertain");
             }
             return actionResult(task, target, "action_confirmed");
         } catch (AccessibilityUiAdapter.UiException error) {
@@ -105,8 +105,8 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
                         error.code, "deferred");
             }
             if ("action_executing".equals(phase) && target != null) {
-                return actionResult(task, target, "action_reconciling",
-                        error.code, "uncertain", "action_executing");
+                return actionResult(task, target, "action_executing",
+                        error.code, "uncertain");
             }
             if ("action_reconciling".equals(phase) && target != null) {
                 return actionResult(task, target, "action_reconciling",

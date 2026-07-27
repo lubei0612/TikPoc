@@ -1067,7 +1067,11 @@ class AcquisitionRepository:
         ):
             self._apply_mobile_action_result(result, now_ms=now_ms)
         elif (
-            result.phase == AssignmentPhase.ACTION_RECONCILING.value
+            result.phase
+            in {
+                AssignmentPhase.ACTION_EXECUTING.value,
+                AssignmentPhase.ACTION_RECONCILING.value,
+            }
             and result.state == "uncertain"
         ):
             self._apply_mobile_uncertain_action_result(result, now_ms=now_ms)
@@ -1152,12 +1156,13 @@ class AcquisitionRepository:
             )
         self.mark_action_executing(plan_id)
         self.record_action_result(plan_id, ActionResult.UNCERTAIN, now_ms=now_ms)
-        self.transition_assignment(
+        self.complete_assignment(
             assignment_id,
             owner_id,
             AssignmentPhase.ACTION_EXECUTING,
-            AssignmentPhase.ACTION_RECONCILING,
             now_ms=now_ms,
+            terminal_error_code="action_uncertain_terminal",
+            completion_details={"reason": "action_uncertain"},
         )
 
     def _apply_mobile_reconciled_action_result(
