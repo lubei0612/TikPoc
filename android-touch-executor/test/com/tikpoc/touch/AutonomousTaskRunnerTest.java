@@ -9,6 +9,7 @@ public final class AutonomousTaskRunnerTest {
         executesOnePersistedTaskAndQueuesResult();
         appliesPacingAfterACompletedTarget();
         activeQueueUsesShortDelayWithoutHeartbeatFlooding();
+        heartbeatDoesNotConsumeControlPlanePerTarget();
         transientFailuresRemainDegradedAndRecover();
         System.out.println("AutonomousTaskRunnerTest PASS");
     }
@@ -60,6 +61,19 @@ public final class AutonomousTaskRunnerTest {
 
         check(runner.recommendedDelayMs() == 0L, "queued work continues immediately");
         check(client.heartbeats == 1, "heartbeats remain throttled during short cycles");
+    }
+
+    private static void heartbeatDoesNotConsumeControlPlanePerTarget() throws Exception {
+        FakeClient client = new FakeClient();
+        AutonomousTaskRunner runner = new AutonomousTaskRunner(
+                client, new DeviceTaskStore(new DeviceTaskStore.MemoryBackend()),
+                "round-1", 7L);
+
+        runner.runOnce(1_000L);
+        runner.runOnce(60_999L);
+        check(client.heartbeats == 1, "heartbeat stays quiet for one minute");
+        runner.runOnce(61_000L);
+        check(client.heartbeats == 2, "heartbeat resumes at one minute");
     }
 
     private static void pullsTasksAndFlushesIdempotentOutbox() throws Exception {

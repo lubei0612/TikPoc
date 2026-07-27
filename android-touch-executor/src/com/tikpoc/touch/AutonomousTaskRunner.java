@@ -4,7 +4,7 @@ import java.util.List;
 
 public final class AutonomousTaskRunner {
     private static final int MAX_QUEUE_DEPTH = 1;
-    private static final long HEARTBEAT_INTERVAL_MS = 5_000L;
+    private static final long HEARTBEAT_INTERVAL_MS = 60_000L;
     private static final long ACTIVE_DELAY_MS = 0L;
     private static final long IDLE_DELAY_MS = 1_000L;
     public interface Client {
