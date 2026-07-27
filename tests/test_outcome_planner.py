@@ -4,7 +4,12 @@ from pathlib import Path
 import pytest
 
 from tikpoc.acquisition_db import AcquisitionRepository
-from tikpoc.acquisition_models import ActionPlanState, ActionResult, OutcomeKind
+from tikpoc.acquisition_models import (
+    ActionPlanState,
+    ActionResult,
+    AssignmentPhase,
+    OutcomeKind,
+)
 from tikpoc.importer import Target
 from tikpoc.models import ProfileMetrics
 from tikpoc.outcome_planner import (
@@ -63,8 +68,11 @@ def _eligible_repository(
                 f"worker-{device_id}",
                 now_ms=1_000 + device_index,
             )
-            repository.release_assignment_lease(
-                assignment.assignment_id, f"worker-{device_id}"
+            repository.complete_assignment(
+                assignment.assignment_id,
+                f"worker-{device_id}",
+                AssignmentPhase.IDENTITY_CONFIRMED,
+                now_ms=1_000 + device_index,
             )
     metrics = ProfileMetrics(20, 10, 5) if eligible else ProfileMetrics(10, 20, 0)
     for target in targets:
