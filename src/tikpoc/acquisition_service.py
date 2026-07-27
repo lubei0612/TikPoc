@@ -565,15 +565,61 @@ class AcquisitionService:
             durations.setdefault(str(row["device_id"]), []).append(
                 int(row["duration_ms"])
             )
-        devices = []
         now_ms = self.clock_ms()
+        visit_times: dict[str, list[int]] = {}
+        for row in connection.execute(
+            """
+            SELECT device_id, visit_confirmed_at_ms
+            FROM round_assignments
+            WHERE round_id = ? AND visit_confirmed_at_ms IS NOT NULL
+            """,
+            (round_id,),
+        ):
+            visit_times.setdefault(str(row["device_id"]), []).append(
+                int(row["visit_confirmed_at_ms"])
+            )
+        stuck_by_device = {
+            str(row["device_id"]): int(row["stuck_count"])
+            for row in connection.execute(
+                """
+                SELECT assignment.device_id, COUNT(*) AS stuck_count
+                FROM round_assignments AS assignment
+                WHERE assignment.round_id = ?
+                  AND assignment.phase NOT IN ('completed', 'skipped')
+                  AND (
+                    assignment.attempt_count > 1
+                    OR ? - COALESCE((
+                        SELECT MAX(history.changed_at_ms)
+                        FROM assignment_phase_history AS history
+                        WHERE history.assignment_id = assignment.assignment_id
+                          AND history.to_phase = assignment.phase
+                    ), ?) > ?
+                  )
+                GROUP BY assignment.device_id
+                """,
+                (round_id, now_ms, now_ms, 2 * _MOBILE_PHASE_STALL_MS),
+            )
+        }
+        devices = []
         for row in rows:
             values = durations.get(str(row["device_id"]), [])
             mean_ms = 0.0 if not values else sum(values) / len(values)
+            p50_ms = (
+                0.0
+                if not values
+                else float(values[max(0, math.ceil(len(values) * 0.5) - 1)])
+            )
             p90_ms = (
                 0.0
                 if not values
                 else float(values[max(0, math.ceil(len(values) * 0.9) - 1)])
+            )
+            confirmed = visit_times.get(str(row["device_id"]), [])
+            confirmed_visits_15m = sum(
+                timestamp > now_ms - 15 * 60_000 for timestamp in confirmed
+            )
+            confirmed_visits_60m = sum(
+                timestamp > now_ms - 60 * 60_000 for timestamp in confirmed
             )
             assignment = None
             if row["assignment_id"] is not None:
@@ -650,7 +696,13 @@ class AcquisitionService:
                     "control_state": str(row["control_state"]),
                     "current_assignment": assignment,
                     "mean_ms": mean_ms,
+                    "p50_ms": p50_ms,
                     "p90_ms": p90_ms,
+                    "confirmed_visits_15m": confirmed_visits_15m,
+                    "confirmed_visits_60m": confirmed_visits_60m,
+                    "confirmed_rate_15m": float(confirmed_visits_15m * 4),
+                    "confirmed_rate_60m": float(confirmed_visits_60m),
+                    "stuck_assignments": stuck_by_device.get(str(row["device_id"]), 0),
                 }
             )
         return devices
@@ -741,6 +793,10 @@ class AcquisitionService:
         fully_completed = sum(
             int(row["completed_devices"]) == required_devices for row in rows
         )
+        distribution: dict[str, int] = {}
+        for row in rows:
+            key = f"{int(row['confirmed_devices'])}/{required_devices}"
+            distribution[key] = distribution.get(key, 0) + 1
         return {
             "targets": targets,
             "required_devices": required_devices,
@@ -748,6 +804,7 @@ class AcquisitionService:
             "completed_assignments": completed_assignments,
             "fully_covered": fully_covered,
             "fully_completed": fully_completed,
+            "distribution": distribution,
             "coverage_rate": 0.0 if targets == 0 else fully_covered / targets,
             "completion_rate": 0.0 if targets == 0 else fully_completed / targets,
         }

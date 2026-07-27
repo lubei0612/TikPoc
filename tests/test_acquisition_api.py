@@ -126,8 +126,10 @@ def _seeded_operations_app(
             """,
             (
                 plan_id,
-                '{"screenshot_path":"/private/customer/screen.png",'
-                '"ui_summary":"visible selector missing"}',
+                (
+                    '{"screenshot_path":"/private/customer/screen.png",'
+                    '"ui_summary":"visible selector missing"}'
+                ),
             ),
         )
     database = Database(path)
@@ -277,10 +279,23 @@ def test_operations_snapshot_contains_dynamic_round_devices_and_traces(
         "health",
         "current_assignment",
         "mean_ms",
+        "p50_ms",
         "p90_ms",
+        "confirmed_visits_15m",
+        "confirmed_visits_60m",
+        "confirmed_rate_15m",
+        "confirmed_rate_60m",
+        "stuck_assignments",
     }
     assert payload["devices"][0]["mean_ms"] == 1_000
+    assert payload["devices"][0]["p50_ms"] == 1_000
     assert payload["devices"][0]["p90_ms"] == 1_000
+    assert payload["devices"][0]["confirmed_visits_15m"] == 1
+    assert payload["devices"][0]["confirmed_visits_60m"] == 1
+    assert payload["devices"][0]["confirmed_rate_15m"] == 4.0
+    assert payload["devices"][0]["confirmed_rate_60m"] == 1.0
+    assert payload["devices"][-1]["stuck_assignments"] == 1
+    assert payload["coverage"]["distribution"] == {"0/3": 1, "1/3": 1}
     assert set(payload["quotas"][0]) >= {
         "device_id",
         "outcome",
