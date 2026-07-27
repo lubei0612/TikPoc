@@ -14,6 +14,7 @@ public final class AutonomousTaskExecutorTest {
         activeModeVerifiesVideoAndAction();
         actionFailureUsesActionPhaseIdempotencyKey();
         reconciliationFailureRetainsActionPlan();
+        reconciliationVideoFailureIsTerminal();
         System.out.println("AutonomousTaskExecutorTest PASS");
     }
 
@@ -79,6 +80,30 @@ public final class AutonomousTaskExecutorTest {
                 "reconciliation failure is terminal after one read");
         check(result.payload.contains("\"plan_id\":43"),
                 "reconciliation failure retains its immutable plan");
+    }
+
+    private static void reconciliationVideoFailureIsTerminal() throws Exception {
+        FakeUi ui = new FakeUi("target_user", true);
+        ui.videoError = new AccessibilityUiAdapter.UiException("missing_post_handle");
+        AutonomousTaskExecutor executor = new AutonomousTaskExecutor(ui,
+                AutonomousTaskExecutor.Mode.ACTIVE);
+        DeviceTaskStore.Task task = new DeviceTaskStore.Task(
+                "task-video-reconcile", "lease-video-reconcile", 7L, 9_000L,
+                "action_reconciling",
+                "{\"username\":\"target_user\",\"plan_id\":44,"
+                + "\"video_key\":\"post:1\",\"action\":\"favorite\"}");
+
+        DeviceTaskStore.Result result = executor.execute(task);
+
+        check(result.idempotencyKey.equals(
+                "task-video-reconcile:lease-video-reconcile:action_reconciling"),
+                "reconciliation video failure uses terminal idempotency phase");
+        check(result.payload.contains("\"phase\":\"action_reconciling\""),
+                "reconciliation video failure retains task phase");
+        check(result.payload.contains("\"state\":\"deferred\""),
+                "reconciliation video failure is terminal");
+        check(result.payload.contains("\"plan_id\":44"),
+                "reconciliation video failure retains immutable plan");
     }
 
     private static void shadowModeConfirmsIdentityWithoutAction() throws Exception {
@@ -193,6 +218,7 @@ public final class AutonomousTaskExecutorTest {
         RuntimeException openError;
         RuntimeException actionError;
         RuntimeException reconciliationError;
+        RuntimeException videoError;
 
         FakeUi(String observedUsername, boolean publicProfile) {
             this.observedUsername = observedUsername;
@@ -211,7 +237,10 @@ public final class AutonomousTaskExecutorTest {
         }
 
         @Override
-        public void openAndConfirmVideo(String videoKey) { videos++; }
+        public void openAndConfirmVideo(String videoKey) {
+            if (videoError != null) throw videoError;
+            videos++;
+        }
 
         @Override
         public boolean applyAndConfirmAction(String action) {

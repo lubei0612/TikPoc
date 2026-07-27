@@ -100,6 +100,10 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
             }
             return actionResult(task, target, "action_confirmed");
         } catch (AccessibilityUiAdapter.UiException error) {
+            if ("action_reconciling".equals(task.phase) && target != null) {
+                return actionResult(task, target, "action_reconciling",
+                        error.code, "deferred");
+            }
             if ("action_executing".equals(phase) && target != null) {
                 return actionResult(task, target, "action_reconciling",
                         error.code, "uncertain", "action_executing");
