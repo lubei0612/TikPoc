@@ -6,7 +6,25 @@ import pytest
 from tikpoc.acquisition_db import AcquisitionRepository
 from tikpoc.acquisition_models import AssignmentPhase
 from tikpoc.importer import Target
-from tikpoc.rounds import create_exposure_round
+from tikpoc.rounds import coverage_window, create_exposure_round, windowed_order_key
+
+
+def test_windowed_order_key_groups_stable_hundreds_before_device_shuffle() -> None:
+    keys = [
+        windowed_order_key("round", "seed", f"target-{index}", index)
+        for index in (100, 2, 99, 200, 101, 0)
+    ]
+
+    assert coverage_window(99) == 0
+    assert coverage_window(100) == 1
+    assert [key.split(":", 1)[0] for key in sorted(keys)] == [
+        "00000000",
+        "00000000",
+        "00000000",
+        "00000001",
+        "00000001",
+        "00000002",
+    ]
 
 
 def _repository_with_targets(
@@ -44,6 +62,54 @@ def test_round_materializes_every_target_for_every_device(tmp_path: Path) -> Non
     second_order = repository.device_target_order(round_id, "phone-02")
     assert set(first_order) == set(second_order)
     assert first_order != second_order
+
+
+def test_devices_wait_for_shared_window_before_claiming_next_hundred(
+    tmp_path: Path,
+) -> None:
+    repository, pool_id = _repository_with_targets(tmp_path, count=201)
+    round_id = create_exposure_round(
+        repository,
+        pool_id=pool_id,
+        device_seeds={"phone-01": "seed-a", "phone-02": "seed-b"},
+        starts_at_ms=1_000,
+        min_inter_device_gap_ms=0,
+        min_repeat_gap_ms=0,
+    )
+    with sqlite3.connect(repository.path) as connection:
+        connection.execute(
+            """
+            UPDATE round_assignments SET phase = 'completed', completed_at_ms = 1100
+            WHERE round_id = ? AND device_id = 'phone-01'
+              AND order_key LIKE '00000000:%'
+            """,
+            (round_id,),
+        )
+
+    assert (
+        repository.claim_next_assignment(round_id, "phone-01", "worker-1", now_ms=1_200)
+        is None
+    )
+
+    with sqlite3.connect(repository.path) as connection:
+        connection.execute(
+            """
+            UPDATE round_assignments SET phase = 'skipped', completed_at_ms = 1200
+            WHERE round_id = ? AND device_id = 'phone-02'
+              AND order_key LIKE '00000000:%'
+            """,
+            (round_id,),
+        )
+    claimed = repository.claim_next_assignment(
+        round_id, "phone-01", "worker-1", now_ms=1_300
+    )
+    assert claimed is not None
+    with sqlite3.connect(repository.path) as connection:
+        order_key = connection.execute(
+            "SELECT order_key FROM round_assignments WHERE assignment_id = ?",
+            (claimed.assignment_id,),
+        ).fetchone()[0]
+    assert str(order_key).startswith("00000001:")
 
 
 def test_assignment_schema_indexes_global_target_activity(tmp_path: Path) -> None:

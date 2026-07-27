@@ -5,10 +5,29 @@ from collections.abc import Mapping
 from .acquisition_db import AcquisitionRepository
 from .navigation import NavigationMode
 
+WINDOW_SIZE = 100
+
 
 def device_order_key(round_id: str, device_seed: str, identity_key: str) -> str:
     payload = f"{round_id}\0{device_seed}\0{identity_key}".encode()
     return hashlib.sha256(payload).hexdigest()
+
+
+def coverage_window(index: int, *, size: int = WINDOW_SIZE) -> int:
+    if index < 0 or size <= 0:
+        raise ValueError("invalid coverage window")
+    return index // size
+
+
+def windowed_order_key(
+    round_id: str,
+    device_seed: str,
+    identity_key: str,
+    target_index: int,
+) -> str:
+    window = coverage_window(target_index)
+    shuffled = device_order_key(round_id, device_seed, identity_key)
+    return f"{window:08d}:{shuffled}"
 
 
 def create_exposure_round(
@@ -54,10 +73,10 @@ def create_exposure_round(
     digest = hashlib.sha256(round_payload.encode()).hexdigest()
     round_id = f"round-{digest[:20]}"
     order_keys = {
-        (target.identity_key, device_id): device_order_key(
-            round_id, seed, target.identity_key
+        (target.identity_key, device_id): windowed_order_key(
+            round_id, seed, target.identity_key, target_index
         )
-        for target in repository.pool_targets(pool_id)
+        for target_index, target in enumerate(repository.pool_targets(pool_id))
         for device_id, seed in normalized_seeds.items()
     }
     repository.create_round(

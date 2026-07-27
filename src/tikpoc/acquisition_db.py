@@ -2645,6 +2645,22 @@ class AcquisitionRepository:
               AND assignment.next_attempt_at_ms <= ?
               AND round.state IN ('pending', 'running')
               AND round.starts_at_ms <= ?
+              AND (
+                  instr(assignment.order_key, ':') = 0
+                  OR substr(
+                      assignment.order_key, 1,
+                      instr(assignment.order_key, ':') - 1
+                  ) = (
+                      SELECT MIN(substr(
+                          window_assignment.order_key, 1,
+                          instr(window_assignment.order_key, ':') - 1
+                      ))
+                      FROM round_assignments AS window_assignment
+                      WHERE window_assignment.round_id = assignment.round_id
+                        AND window_assignment.phase NOT IN ('completed', 'skipped')
+                        AND instr(window_assignment.order_key, ':') > 0
+                  )
+              )
               AND NOT EXISTS (
                   SELECT 1 FROM operator_control_states AS device_control
                   WHERE device_control.scope = 'device'
