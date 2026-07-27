@@ -246,8 +246,10 @@ public final class TouchCommandDispatcherTest {
         Protocol.Response response = fixture.dispatcher.dispatch(
                 request("apply_action", map("action", "like")));
 
-        check(response.values.get("status").equals("ok"), "delayed platform state verified");
+        check(response.values.get("status").equals("uncertain"),
+                "late platform state remains outside bounded observation");
         check(fixture.actuator.clicks == 1, "delayed platform state clicked once");
+        check(fixture.source.index == 4, "late platform state stops after three polls");
     }
 
     private static void alreadySelectedActionIsConfirmedWithoutClick() throws Exception {
@@ -289,6 +291,7 @@ public final class TouchCommandDispatcherTest {
                 request("apply_action", map("action", "like")));
         check(fixture.actuator.clicks == 1, "no second click");
         check(response.values.get("status").equals("uncertain"), "uncertain status");
+        check(fixture.source.index == 4, "action observation capped at three polls");
     }
 
     private static void diagnosticsContainsNoVisibleText() throws Exception {
