@@ -64,7 +64,7 @@ def test_round_materializes_every_target_for_every_device(tmp_path: Path) -> Non
     assert first_order != second_order
 
 
-def test_devices_wait_for_shared_window_before_claiming_next_hundred(
+def test_fast_device_may_lead_shared_window_by_one_hundred(
     tmp_path: Path,
 ) -> None:
     repository, pool_id = _repository_with_targets(tmp_path, count=201)
@@ -86,8 +86,29 @@ def test_devices_wait_for_shared_window_before_claiming_next_hundred(
             (round_id,),
         )
 
+    claimed = repository.claim_next_assignment(
+        round_id, "phone-01", "worker-1", now_ms=1_200
+    )
+    assert claimed is not None
+    with sqlite3.connect(repository.path) as connection:
+        order_key = connection.execute(
+            "SELECT order_key FROM round_assignments WHERE assignment_id = ?",
+            (claimed.assignment_id,),
+        ).fetchone()[0]
+    assert str(order_key).startswith("00000001:")
+
+    repository.release_assignment_lease(claimed.assignment_id, "worker-1")
+    with sqlite3.connect(repository.path) as connection:
+        connection.execute(
+            """
+            UPDATE round_assignments SET phase = 'completed', completed_at_ms = 1200
+            WHERE round_id = ? AND device_id = 'phone-01'
+              AND order_key LIKE '00000001:%'
+            """,
+            (round_id,),
+        )
     assert (
-        repository.claim_next_assignment(round_id, "phone-01", "worker-1", now_ms=1_200)
+        repository.claim_next_assignment(round_id, "phone-01", "worker-1", now_ms=1_250)
         is None
     )
 
@@ -109,7 +130,7 @@ def test_devices_wait_for_shared_window_before_claiming_next_hundred(
             "SELECT order_key FROM round_assignments WHERE assignment_id = ?",
             (claimed.assignment_id,),
         ).fetchone()[0]
-    assert str(order_key).startswith("00000001:")
+    assert str(order_key).startswith("00000002:")
 
 
 def test_assignment_schema_indexes_global_target_activity(tmp_path: Path) -> None:
@@ -265,6 +286,35 @@ def test_expired_assignment_lease_returns_to_pending(tmp_path: Path) -> None:
             round_id, "phone-01", "worker-2", now_ms=1_051, lease_ttl_ms=50
         )
         is not None
+    )
+
+
+def test_expired_assignment_after_confirmed_visit_finishes_without_retry(
+    tmp_path: Path,
+) -> None:
+    repository, pool_id = _repository_with_targets(tmp_path, count=1)
+    round_id = create_exposure_round(
+        repository,
+        pool_id=pool_id,
+        device_seeds={"phone-01": "seed-a"},
+        starts_at_ms=1_000,
+    )
+    claimed = repository.claim_next_assignment(
+        round_id, "phone-01", "worker-1", now_ms=1_000, lease_ttl_ms=50
+    )
+    assert claimed is not None
+    repository.record_visit_confirmed(claimed.assignment_id, "worker-1", now_ms=1_010)
+
+    assert repository.recover_expired_assignment_leases(now_ms=1_050) == 1
+    assignment = repository.assignment(claimed.assignment_id)
+    assert assignment.phase is AssignmentPhase.COMPLETED
+    assert assignment.last_error_code == "lease_expired_after_confirmed_visit"
+    assert assignment.completed_at_ms == 1_050
+    assert (
+        repository.claim_next_assignment(
+            round_id, "phone-01", "worker-2", now_ms=1_051, lease_ttl_ms=50
+        )
+        is None
     )
 
 

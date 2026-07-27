@@ -2608,10 +2608,11 @@ class AcquisitionRepository:
         for expired in expired_rows:
             assignment_id = int(expired["assignment_id"])
             previous = AssignmentPhase(str(expired["phase"]))
+            visit_confirmed = expired["visit_confirmed_at_ms"] is not None
             next_phase = (
-                AssignmentPhase.PENDING
-                if expired["visit_confirmed_at_ms"] is None
-                else AssignmentPhase.DEFERRED
+                AssignmentPhase.COMPLETED
+                if visit_confirmed
+                else AssignmentPhase.PENDING
             )
             next_attempt_at_ms = max(
                 int(expired["next_attempt_at_ms"]), effective_now_ms
@@ -2620,10 +2621,21 @@ class AcquisitionRepository:
                 """
                 UPDATE round_assignments
                 SET phase = ?, lease_owner = NULL,
-                    lease_expires_at_ms = 0, next_attempt_at_ms = ?
+                    lease_expires_at_ms = 0, next_attempt_at_ms = ?,
+                    completed_at_ms = CASE WHEN ? THEN ? ELSE completed_at_ms END,
+                    last_error_code = CASE WHEN ?
+                        THEN 'lease_expired_after_confirmed_visit'
+                        ELSE last_error_code END
                 WHERE assignment_id = ?
                 """,
-                (next_phase.value, next_attempt_at_ms, assignment_id),
+                (
+                    next_phase.value,
+                    next_attempt_at_ms,
+                    visit_confirmed,
+                    effective_now_ms,
+                    visit_confirmed,
+                    assignment_id,
+                ),
             )
             self._insert_phase_history(
                 connection,
@@ -2647,14 +2659,14 @@ class AcquisitionRepository:
               AND round.starts_at_ms <= ?
               AND (
                   instr(assignment.order_key, ':') = 0
-                  OR substr(
+                  OR CAST(substr(
                       assignment.order_key, 1,
                       instr(assignment.order_key, ':') - 1
-                  ) = (
-                      SELECT MIN(substr(
+                  ) AS INTEGER) <= (
+                      SELECT CAST(MIN(substr(
                           window_assignment.order_key, 1,
                           instr(window_assignment.order_key, ':') - 1
-                      ))
+                      )) AS INTEGER) + 1
                       FROM round_assignments AS window_assignment
                       WHERE window_assignment.round_id = assignment.round_id
                         AND window_assignment.phase NOT IN ('completed', 'skipped')
@@ -2879,20 +2891,32 @@ class AcquisitionRepository:
             for row in rows:
                 assignment_id = int(row["assignment_id"])
                 previous = AssignmentPhase(str(row["phase"]))
+                visit_confirmed = row["visit_confirmed_at_ms"] is not None
                 next_phase = (
-                    AssignmentPhase.PENDING
-                    if row["visit_confirmed_at_ms"] is None
-                    else AssignmentPhase.DEFERRED
+                    AssignmentPhase.COMPLETED
+                    if visit_confirmed
+                    else AssignmentPhase.PENDING
                 )
                 next_attempt_at_ms = max(int(row["next_attempt_at_ms"]), now_ms)
                 connection.execute(
                     """
                     UPDATE round_assignments
                     SET phase = ?, lease_owner = NULL,
-                        lease_expires_at_ms = 0, next_attempt_at_ms = ?
+                        lease_expires_at_ms = 0, next_attempt_at_ms = ?,
+                        completed_at_ms = CASE WHEN ? THEN ? ELSE completed_at_ms END,
+                        last_error_code = CASE WHEN ?
+                            THEN 'lease_expired_after_confirmed_visit'
+                            ELSE last_error_code END
                     WHERE assignment_id = ?
                     """,
-                    (next_phase.value, next_attempt_at_ms, assignment_id),
+                    (
+                        next_phase.value,
+                        next_attempt_at_ms,
+                        visit_confirmed,
+                        now_ms,
+                        visit_confirmed,
+                        assignment_id,
+                    ),
                 )
                 self._insert_phase_history(
                     connection,
