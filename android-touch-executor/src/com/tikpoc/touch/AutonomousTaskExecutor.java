@@ -74,7 +74,7 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
                         "deferred");
             }
             String expected = requiredString(target, "username");
-            ui.openProfile(target);
+            if (!"video_opening".equals(task.phase)) ui.openProfile(target);
             phase = "identity_confirmed";
             Profile profile = ui.observeProfile();
             if (!expected.equals(profile.username)) {

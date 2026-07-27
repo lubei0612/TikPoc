@@ -10,7 +10,8 @@ public final class AutonomousTaskExecutorTest {
         activeModeTreatsEmptyEnvelopePlanFieldsAsUnplanned();
         activeTraceOpensVideoWithoutApplyingAnInteraction();
         preservesDeviceEvidenceErrorCode();
-        terminalSearchMissOnlySkipsInitialProfileOpening();
+        terminalSearchMissDoesNotBlockVerifiedContinuation();
+        continuationReusesAlreadyVerifiedProfileSurface();
         activeModeVerifiesVideoAndAction();
         actionFailureUsesActionPhaseIdempotencyKey();
         reconciliationFailureRetainsActionPlan();
@@ -159,7 +160,7 @@ public final class AutonomousTaskExecutorTest {
         check(result.payload.contains("stale_tree"), "semantic failure preserved");
     }
 
-    private static void terminalSearchMissOnlySkipsInitialProfileOpening() throws Exception {
+    private static void terminalSearchMissDoesNotBlockVerifiedContinuation() throws Exception {
         FakeUi ui = new FakeUi("target_user", true);
         ui.openError = new AccessibilityUiAdapter.UiException(
                 "profile_identity_mismatch");
@@ -177,8 +178,25 @@ public final class AutonomousTaskExecutorTest {
 
         check(initial.payload.contains("\"state\":\"skipped\""),
                 "initial exact search miss is terminal");
-        check(continuation.payload.contains("\"state\":\"deferred\""),
-                "continuation reacquisition miss remains retryable");
+        check(continuation.payload.contains("action_confirmed"),
+                "verified continuation does not repeat failed navigation");
+    }
+
+    private static void continuationReusesAlreadyVerifiedProfileSurface() throws Exception {
+        FakeUi ui = new FakeUi("target_user", true);
+        AutonomousTaskExecutor executor = new AutonomousTaskExecutor(
+                ui, AutonomousTaskExecutor.Mode.ACTIVE);
+        DeviceTaskStore.Task continuation = new DeviceTaskStore.Task(
+                "task-continuation", "lease-continuation", 7L, 9_000L,
+                "video_opening",
+                "{\"username\":\"target_user\",\"plan_id\":42,"
+                + "\"video_key\":\"post:0\",\"action\":\"like\"}");
+
+        DeviceTaskStore.Result result = executor.execute(continuation);
+
+        check(result.payload.contains("action_confirmed"), "continuation completes action");
+        check(ui.profiles == 0, "continuation does not repeat verified profile navigation");
+        check(ui.videos == 1 && ui.actions == 1, "continuation verifies planned action");
     }
 
     private static DeviceTaskStore.Task task(String username, String payload) {
