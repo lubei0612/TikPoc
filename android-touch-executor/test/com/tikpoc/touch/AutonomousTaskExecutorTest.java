@@ -12,6 +12,7 @@ public final class AutonomousTaskExecutorTest {
         preservesDeviceEvidenceErrorCode();
         terminalSearchMissDoesNotBlockVerifiedContinuation();
         continuationReusesAlreadyVerifiedProfileSurface();
+        continuationReacquiresProfileWhenCurrentSurfaceIsStale();
         activeModeVerifiesVideoAndAction();
         actionFailureUsesActionPhaseIdempotencyKey();
         reconciliationFailureRetainsActionPlan();
@@ -199,6 +200,23 @@ public final class AutonomousTaskExecutorTest {
         check(ui.videos == 1 && ui.actions == 1, "continuation verifies planned action");
     }
 
+    private static void continuationReacquiresProfileWhenCurrentSurfaceIsStale()
+            throws Exception {
+        FakeUi ui = new FakeUi("target_user", true);
+        ui.observeFailuresRemaining = 1;
+        AutonomousTaskExecutor executor = new AutonomousTaskExecutor(
+                ui, AutonomousTaskExecutor.Mode.ACTIVE);
+        DeviceTaskStore.Task continuation = new DeviceTaskStore.Task(
+                "task-stale", "lease-stale", 7L, 9_000L, "video_opening",
+                "{\"username\":\"target_user\",\"plan_id\":42,"
+                + "\"video_key\":\"post:0\",\"action\":\"like\"}");
+
+        DeviceTaskStore.Result result = executor.execute(continuation);
+
+        check(result.payload.contains("action_confirmed"), "stale continuation recovers");
+        check(ui.profiles == 1, "stale continuation reacquires exact profile once");
+    }
+
     private static DeviceTaskStore.Task task(String username, String payload) {
         return new DeviceTaskStore.Task("task-1", "lease-1", 7L, 9_000L,
                 "pending", "{\"username\":\"" + username + "\"}");
@@ -215,6 +233,7 @@ public final class AutonomousTaskExecutorTest {
         RuntimeException actionError;
         RuntimeException reconciliationError;
         RuntimeException videoError;
+        int observeFailuresRemaining;
 
         FakeUi(String observedUsername, boolean publicProfile) {
             this.observedUsername = observedUsername;
@@ -229,6 +248,10 @@ public final class AutonomousTaskExecutorTest {
 
         @Override
         public AutonomousTaskExecutor.Profile observeProfile() {
+            if (observeFailuresRemaining > 0) {
+                observeFailuresRemaining--;
+                throw new AccessibilityUiAdapter.UiException("incomplete_profile_evidence");
+            }
             if (observeError != null) throw observeError;
             return new AutonomousTaskExecutor.Profile(observedUsername, publicProfile);
         }

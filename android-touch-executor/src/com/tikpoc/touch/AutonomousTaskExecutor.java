@@ -74,9 +74,23 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
                         "deferred");
             }
             String expected = requiredString(target, "username");
-            if (!"video_opening".equals(task.phase)) ui.openProfile(target);
             phase = "identity_confirmed";
-            Profile profile = ui.observeProfile();
+            Profile profile;
+            if ("video_opening".equals(task.phase)) {
+                try {
+                    profile = ui.observeProfile();
+                    if (!expected.equals(profile.username)) {
+                        ui.openProfile(target);
+                        profile = ui.observeProfile();
+                    }
+                } catch (AccessibilityUiAdapter.UiException staleSurface) {
+                    ui.openProfile(target);
+                    profile = ui.observeProfile();
+                }
+            } else {
+                ui.openProfile(target);
+                profile = ui.observeProfile();
+            }
             if (!expected.equals(profile.username)) {
                 return result(task, "deferred", phase, "target_identity_mismatch");
             }
