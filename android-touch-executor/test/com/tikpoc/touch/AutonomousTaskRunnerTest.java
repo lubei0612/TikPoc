@@ -58,7 +58,7 @@ public final class AutonomousTaskRunnerTest {
         runner.runOnce(1_000L);
         runner.runOnce(1_100L);
 
-        check(runner.recommendedDelayMs() == 100L, "queued work uses short delay");
+        check(runner.recommendedDelayMs() == 0L, "queued work continues immediately");
         check(client.heartbeats == 1, "heartbeats remain throttled during short cycles");
     }
 
