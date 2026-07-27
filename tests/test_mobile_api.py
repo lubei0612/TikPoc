@@ -165,6 +165,135 @@ def test_mobile_pull_and_result_replay_are_idempotent(tmp_path: Path) -> None:
 
     assert first.json() == {"accepted": True, "state": "accepted"}
     assert replay.json() == {"accepted": False, "state": "duplicate"}
+    assignment = repo.assignment(int(task["task_id"]))
+    assert assignment.phase is AssignmentPhase.SKIPPED
+    assert assignment.last_error_code == "network_lost"
+    assert (
+        api.post(
+            "/api/mobile/pull",
+            json={
+                "device_id": "device-1",
+                "session_epoch": 1,
+                "round_id": round_id,
+                "limit": 1,
+            },
+            headers=headers,
+        ).json()["tasks"]
+        == []
+    )
+
+
+def test_mobile_video_error_completes_but_preserves_confirmed_visit(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "mobile.db"
+    repo = AcquisitionRepository(path)
+    repo.migrate()
+    pool = repo.import_pool(
+        "targets.csv",
+        "e" * 64,
+        (
+            Target(
+                target_id="target-1",
+                username="target_user",
+                profile_url="https://www.tiktok.com/@target_user",
+                source_video_id="video-1",
+                sec_uid="sec-1",
+                identity_key="sec:sec-1",
+                source_line_numbers=(2,),
+            ),
+        ),
+    )
+    round_id = create_exposure_round(
+        repo,
+        pool_id=pool.pool_id,
+        device_seeds={"device-1": "seed-1"},
+        starts_at_ms=0,
+        min_inter_device_gap_ms=0,
+        min_repeat_gap_ms=0,
+    )
+    api = TestClient(
+        create_app(
+            path,
+            clock=lambda: 2_000_000_000.0,
+            mobile_bootstrap_token="bootstrap-secret",
+        )
+    )
+    registered = api.post(
+        "/api/mobile/register",
+        json={"device_id": "device-1", "account_id": "account-1"},
+        headers={"Authorization": "Bearer bootstrap-secret"},
+    ).json()
+    headers = {"Authorization": f"Bearer {registered['access_token']}"}
+    task = api.post(
+        "/api/mobile/pull",
+        json={
+            "device_id": "device-1",
+            "session_epoch": 1,
+            "round_id": round_id,
+            "limit": 1,
+        },
+        headers=headers,
+    ).json()["tasks"][0]
+    common = {
+        "device_id": "device-1",
+        "session_epoch": 1,
+        "task_id": task["task_id"],
+        "lease_id": task["lease_id"],
+    }
+    profile = api.post(
+        "/api/mobile/results",
+        json={
+            **common,
+            "idempotency_key": "profile-1",
+            "state": "completed",
+            "phase": "identity_confirmed",
+            "evidence": {
+                "observed_username": "target_user",
+                "access_state": "available",
+                "following": 20,
+                "followers": 10,
+                "video_count": 2,
+                "post_handles": ["post:0", "post:1"],
+            },
+        },
+        headers=headers,
+    )
+    assert profile.status_code == 200
+    before = repo.assignment(int(task["task_id"]))
+    assert before.phase is AssignmentPhase.VIDEO_OPENING
+    assert before.visit_confirmed_at_ms is not None
+
+    failed = api.post(
+        "/api/mobile/results",
+        json={
+            **common,
+            "idempotency_key": "video-1",
+            "state": "deferred",
+            "phase": "video_opening",
+            "evidence": {"code": "missing_post_handle"},
+        },
+        headers=headers,
+    )
+
+    assert failed.json() == {"accepted": True, "state": "accepted"}
+    after = repo.assignment(int(task["task_id"]))
+    assert after.phase is AssignmentPhase.COMPLETED
+    assert after.visit_confirmed_at_ms == before.visit_confirmed_at_ms
+    assert after.last_error_code == "missing_post_handle"
+    assert (
+        api.post(
+            "/api/mobile/pull",
+            json={
+                "device_id": "device-1",
+                "session_epoch": 1,
+                "round_id": round_id,
+                "limit": 1,
+            },
+            headers=headers,
+        ).json()["tasks"]
+        == []
+    )
 
 
 def test_mobile_profile_result_creates_video_bound_follow_up_plan(

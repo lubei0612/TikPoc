@@ -78,6 +78,7 @@ _ALLOWED_PHASE_TRANSITIONS = {
     },
     AssignmentPhase.VIDEO_OPENING: {
         AssignmentPhase.VIDEO_CONFIRMED,
+        AssignmentPhase.COMPLETED,
         AssignmentPhase.DEFERRED,
     },
     AssignmentPhase.VIDEO_CONFIRMED: {
@@ -1049,13 +1050,17 @@ class AcquisitionRepository:
                 )
             except sqlite3.IntegrityError:
                 return "duplicate"
-        if result.phase == AssignmentPhase.IDENTITY_CONFIRMED.value:
+        if (
+            result.phase == AssignmentPhase.IDENTITY_CONFIRMED.value
+            and result.state == "completed"
+        ):
             self._apply_mobile_profile_result(result, now_ms=now_ms)
-        elif result.phase == AssignmentPhase.PROFILE_OPENING.value and result.state in {
-            "deferred",
-            "skipped",
-        }:
-            self._apply_mobile_profile_opening_result(result, now_ms=now_ms)
+        elif result.phase in {
+            AssignmentPhase.PROFILE_OPENING.value,
+            AssignmentPhase.IDENTITY_CONFIRMED.value,
+            AssignmentPhase.VIDEO_OPENING.value,
+        } and result.state in {"deferred", "skipped"}:
+            self._apply_mobile_terminal_error(result, now_ms=now_ms)
         elif (
             result.phase == AssignmentPhase.ACTION_EXECUTING.value
             and result.state == "completed"
@@ -1078,7 +1083,7 @@ class AcquisitionRepository:
             self._complete_mobile_unresolved_action(result, now_ms=now_ms)
         return "accepted"
 
-    def _apply_mobile_profile_opening_result(
+    def _apply_mobile_terminal_error(
         self, result: MobileTaskResult, *, now_ms: int
     ) -> None:
         assignment_id = int(result.task_id)
@@ -1086,8 +1091,12 @@ class AcquisitionRepository:
         if assignment.device_id != result.device_id:
             raise ValueError("mobile result device mismatch")
         owner_id = f"mobile:{result.device_id}:{result.session_epoch}"
-        error_code = str(result.evidence.get("code") or "mobile_profile_unavailable")
-        if result.state == "skipped":
+        error_code = str(
+            result.evidence.get("code")
+            or result.evidence.get("error_code")
+            or "mobile_task_failed"
+        )
+        if assignment.visit_confirmed_at_ms is None:
             self.skip_unreachable_assignment(
                 assignment_id,
                 owner_id,
@@ -1098,13 +1107,13 @@ class AcquisitionRepository:
                 diagnostics=DeviceDiagnostics(),
             )
             return
-        self.defer_assignment(
+        self.complete_assignment(
             assignment_id,
             owner_id,
+            assignment.phase,
             now_ms=now_ms,
-            retry_delay_ms=30_000,
-            error_code=error_code,
-            diagnostics=DeviceDiagnostics(),
+            terminal_error_code=error_code,
+            completion_details={"reason": "fast_path_error"},
         )
 
     def _mobile_action_result_identity(
