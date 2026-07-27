@@ -64,10 +64,10 @@ def test_round_materializes_every_target_for_every_device(tmp_path: Path) -> Non
     assert first_order != second_order
 
 
-def test_fast_device_may_lead_shared_window_by_one_hundred(
+def test_fast_device_may_lead_shared_window_by_three_hundred(
     tmp_path: Path,
 ) -> None:
-    repository, pool_id = _repository_with_targets(tmp_path, count=201)
+    repository, pool_id = _repository_with_targets(tmp_path, count=401)
     round_id = create_exposure_round(
         repository,
         pool_id=pool_id,
@@ -86,27 +86,28 @@ def test_fast_device_may_lead_shared_window_by_one_hundred(
             (round_id,),
         )
 
-    claimed = repository.claim_next_assignment(
-        round_id, "phone-01", "worker-1", now_ms=1_200
-    )
-    assert claimed is not None
-    with sqlite3.connect(repository.path) as connection:
-        order_key = connection.execute(
-            "SELECT order_key FROM round_assignments WHERE assignment_id = ?",
-            (claimed.assignment_id,),
-        ).fetchone()[0]
-    assert str(order_key).startswith("00000001:")
-
-    repository.release_assignment_lease(claimed.assignment_id, "worker-1")
-    with sqlite3.connect(repository.path) as connection:
-        connection.execute(
-            """
-            UPDATE round_assignments SET phase = 'completed', completed_at_ms = 1200
-            WHERE round_id = ? AND device_id = 'phone-01'
-              AND order_key LIKE '00000001:%'
-            """,
-            (round_id,),
+    for window in range(1, 4):
+        claimed = repository.claim_next_assignment(
+            round_id, "phone-01", "worker-1", now_ms=1_200 + window
         )
+        assert claimed is not None
+        with sqlite3.connect(repository.path) as connection:
+            order_key = connection.execute(
+                "SELECT order_key FROM round_assignments WHERE assignment_id = ?",
+                (claimed.assignment_id,),
+            ).fetchone()[0]
+        assert str(order_key).startswith(f"{window:08d}:")
+        repository.release_assignment_lease(claimed.assignment_id, "worker-1")
+        with sqlite3.connect(repository.path) as connection:
+            connection.execute(
+                """
+                UPDATE round_assignments
+                SET phase = 'completed', completed_at_ms = 1200
+                WHERE round_id = ? AND device_id = 'phone-01'
+                  AND order_key LIKE ?
+                """,
+                (round_id, f"{window:08d}:%"),
+            )
     assert (
         repository.claim_next_assignment(round_id, "phone-01", "worker-1", now_ms=1_250)
         is None
@@ -130,7 +131,7 @@ def test_fast_device_may_lead_shared_window_by_one_hundred(
             "SELECT order_key FROM round_assignments WHERE assignment_id = ?",
             (claimed.assignment_id,),
         ).fetchone()[0]
-    assert str(order_key).startswith("00000002:")
+    assert str(order_key).startswith("00000004:")
 
 
 def test_assignment_schema_indexes_global_target_activity(tmp_path: Path) -> None:

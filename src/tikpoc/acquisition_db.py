@@ -2666,7 +2666,7 @@ class AcquisitionRepository:
                       SELECT CAST(MIN(substr(
                           window_assignment.order_key, 1,
                           instr(window_assignment.order_key, ':') - 1
-                      )) AS INTEGER) + 1
+                      )) AS INTEGER) + 3
                       FROM round_assignments AS window_assignment
                       WHERE window_assignment.round_id = assignment.round_id
                         AND window_assignment.phase NOT IN ('completed', 'skipped')
