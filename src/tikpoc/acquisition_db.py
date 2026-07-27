@@ -1257,29 +1257,45 @@ class AcquisitionRepository:
         assignment = self.assignment(assignment_id)
         if assignment.device_id != result.device_id:
             raise ValueError("mobile result device mismatch")
+        if self._normalize_username(observed_username) != self._normalize_username(
+            assignment.username
+        ):
+            raise ValueError("mobile profile identity mismatch")
         owner_id = f"mobile:{result.device_id}:{result.session_epoch}"
         self.record_visit_confirmed(assignment_id, owner_id, now_ms=now_ms)
-        self.claim_snapshot_lease(
-            assignment.round_id,
-            assignment.identity_key,
-            assignment.device_id,
-            now_ms=now_ms,
-            ttl_ms=30_000,
-        )
-        snapshot = self.publish_profile_snapshot(
-            assignment.round_id,
-            assignment.identity_key,
-            device_id=assignment.device_id,
-            observed_username=observed_username,
-            metrics=ProfileMetrics(
-                following=following,
-                followers=followers,
-                posts=video_count,
-            ),
-            private_account=False,
-            observed_at_ms=now_ms,
-            access_state=ProfileAccessState.PUBLIC,
-        )
+        snapshot = self.profile_snapshot(assignment.round_id, assignment.identity_key)
+        if snapshot is None:
+            self.claim_snapshot_lease(
+                assignment.round_id,
+                assignment.identity_key,
+                assignment.device_id,
+                now_ms=now_ms,
+                ttl_ms=30_000,
+            )
+            snapshot = self.publish_profile_snapshot(
+                assignment.round_id,
+                assignment.identity_key,
+                device_id=assignment.device_id,
+                observed_username=observed_username,
+                metrics=ProfileMetrics(
+                    following=following,
+                    followers=followers,
+                    posts=video_count,
+                ),
+                private_account=False,
+                observed_at_ms=now_ms,
+                access_state=ProfileAccessState.PUBLIC,
+            )
+        if snapshot.eligible and not post_handles:
+            self.complete_assignment(
+                assignment_id,
+                owner_id,
+                AssignmentPhase.IDENTITY_CONFIRMED,
+                now_ms=now_ms,
+                terminal_error_code="profile_post_handles_incomplete",
+                completion_details={"reason": "profile_evidence_incomplete"},
+            )
+            return
         plan = self.create_paced_action_plan(
             round_id=assignment.round_id,
             identity_key=assignment.identity_key,
@@ -1297,8 +1313,6 @@ class AcquisitionRepository:
                 now_ms=now_ms,
             )
             return
-        if not post_handles:
-            raise ValueError("mobile profile post handles are incomplete")
         selected = _select_stable_post_handle(
             post_handles, assignment_id=assignment.assignment_id
         )
