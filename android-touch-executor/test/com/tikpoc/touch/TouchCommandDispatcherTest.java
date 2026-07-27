@@ -18,6 +18,7 @@ public final class TouchCommandDispatcherTest {
         alreadyOpenExactProfileDoesNotRequireANavigationEvent();
         waitsForProfileEventBeforeVerifyingIdentity();
         waitsThroughSlowProfileIntermediateEvents();
+        stopsProfileVerificationAfterFifteenChecks();
         searchRequiresExactProfileEvidence();
         searchAcceptsAnAlreadyLoadedExactProfile();
         searchNoMatchIsTerminalEvidence();
@@ -127,6 +128,17 @@ public final class TouchCommandDispatcherTest {
 
         check(response.values.get("status").equals("ok"), "slow profile verified");
         check(fixture.source.index == 14, "slow profile snapshots polled");
+    }
+
+    private static void stopsProfileVerificationAfterFifteenChecks() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.source.snapshots = Collections.singletonList(actionSnapshot(false, 1));
+
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("open_profile", map("route", "https://www.tiktok.com/@target_user")));
+
+        check(response.values.get("status").equals("error"), "profile timeout status");
+        check(fixture.source.index == 16, "profile verification is bounded to fifteen checks");
     }
 
     private static void healthReadsCurrentSurface() throws Exception {

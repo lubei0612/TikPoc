@@ -270,7 +270,7 @@ public final class TouchCommandDispatcher {
         }
         boolean observedNewEvent = false;
         long observedSequence = before.eventSequence;
-        for (int attempt = 0; attempt < 25; attempt++) {
+        for (int attempt = 0; attempt < 15; attempt++) {
             SemanticSnapshot snapshot = snapshots.awaitAfter(observedSequence, 400L);
             if (snapshot.eventSequence > before.eventSequence) {
                 observedNewEvent = true;
