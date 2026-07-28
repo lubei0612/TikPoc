@@ -16,10 +16,11 @@ them here.
   publishes at most 20 first-level comments per Asia/Shanghai day; the Android
   worker browses relevant feed content between due comments and pulls work over
   HTTPS without a persistent ADB dependency.
-- A verification challenge pauses the affected device without interacting with
-  the challenge. After the operator resolves it and acknowledges recovery,
-  require visible stable TikTok Home evidence before resuming. VMOS Auto and
-  TikPoc must not hold the accessibility-executor role at the same time.
+- A verification challenge stops comment gestures and triggers one bounded
+  page reset using exactly two Android Back actions. Resume only after visible
+  stable TikTok Home evidence; if the challenge remains, pause the affected
+  device without a reset loop. VMOS Auto and TikPoc must not hold the
+  accessibility-executor role at the same time.
 - **Production mobile runtime decision (2026-07-26):** the user moved the
   project from MYT to VMOS. All new mobile account binding, acquisition,
   capacity, diagnostics, and catalog-publishing work must use VMOS devices.

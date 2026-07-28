@@ -20,6 +20,7 @@ public final class TouchCommandDispatcher {
         default boolean dismissOrdinaryInterruption(String kind) throws Exception {
             return false;
         }
+        default boolean resetVerification() throws Exception { return false; }
         default boolean returnToHome() throws Exception { return false; }
         default boolean openCommentVideo(String videoId, String videoUrl) throws Exception {
             return false;
@@ -107,8 +108,26 @@ public final class TouchCommandDispatcher {
         SemanticSnapshot snapshot = snapshots.current();
         String interruption = TikTokInterruptionSemantics.classify(snapshot);
         if (TikTokInterruptionSemantics.VERIFICATION_REQUIRED.equals(interruption)) {
+            if (!actuator.resetVerification()) {
+                return Protocol.Response.error(
+                        request, "verification_reset_failed", "verification reset unavailable");
+            }
+            SemanticSnapshot observed = snapshot;
+            for (int attempt = 0; attempt < 5; attempt++) {
+                observed = snapshots.awaitAfter(observed.eventSequence, 400L);
+                if (!TikTokInterruptionSemantics.VERIFICATION_REQUIRED.equals(
+                                TikTokInterruptionSemantics.classify(observed))
+                        && TikTokInterruptionSemantics.isHomeVisible(observed)) {
+                    Map<String, Object> evidence = new LinkedHashMap<String, Object>();
+                    evidence.put("interruption", interruption);
+                    evidence.put("home_visible", true);
+                    evidence.put("recovery_performed", true);
+                    evidence.put("verification_reset_count", 2L);
+                    return success(request, startedAt, observed, evidence);
+                }
+            }
             return Protocol.Response.error(
-                    request, "verification_required", "operator verification required");
+                    request, "verification_required", "verification remains after reset");
         }
         if (!TikTokInterruptionSemantics.NONE.equals(interruption)
                 && !actuator.dismissOrdinaryInterruption(interruption)) {

@@ -236,6 +236,14 @@ public final class TikPocAccessibilityService extends AccessibilityService
     }
 
     @Override
+    public boolean resetVerification() {
+        boolean first = performGlobalAction(GLOBAL_ACTION_BACK);
+        SystemClock.sleep(250L);
+        boolean second = performGlobalAction(GLOBAL_ACTION_BACK);
+        return first && second;
+    }
+
+    @Override
     public boolean returnToHome() {
         if (!TIKTOK_PACKAGE.equals(packageName)) {
             Intent launch = getPackageManager().getLaunchIntentForPackage(TIKTOK_PACKAGE);

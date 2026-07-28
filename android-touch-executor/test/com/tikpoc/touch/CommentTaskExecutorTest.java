@@ -8,7 +8,8 @@ public final class CommentTaskExecutorTest {
         checkpointsBeforeSingleSubmitAndConfirmsVisibleText();
         uncertainContinuationOnlyObserves();
         transportLossAfterSubmitBecomesReadOnlyReconciliation();
-        verificationPausesBeforeEveryMutation();
+        verificationResetsBeforeMutationWhenHomeIsVerified();
+        verificationPausesWhenResetDoesNotClearChallenge();
         System.out.println("CommentTaskExecutorTest PASS");
     }
 
@@ -57,9 +58,23 @@ public final class CommentTaskExecutorTest {
                 "uncertain phase persisted");
     }
 
-    private static void verificationPausesBeforeEveryMutation() throws Exception {
+    private static void verificationResetsBeforeMutationWhenHomeIsVerified()
+            throws Exception {
         FakeUi ui = new FakeUi();
         ui.interruption = "verification_required";
+        CommentTaskExecutor executor = new CommentTaskExecutor(ui, new FakeCheckpoints());
+        CommentTaskExecutor.Result result = executor.execute(task("video_opening"));
+
+        check(result.state.equals("visible_confirmed"), "verification reset recovered");
+        check(ui.verificationResets == 1, "verification reset performed once");
+        check(ui.videoOpens == 1 && ui.submits == 1,
+                "mutation resumes only after reset");
+    }
+
+    private static void verificationPausesWhenResetDoesNotClearChallenge() throws Exception {
+        FakeUi ui = new FakeUi();
+        ui.interruption = "verification_required";
+        ui.resetLeavesVerification = true;
         CommentTaskExecutor executor = new CommentTaskExecutor(ui, new FakeCheckpoints());
         try {
             executor.execute(task("video_opening"));
@@ -67,6 +82,7 @@ public final class CommentTaskExecutorTest {
         } catch (AccessibilityUiAdapter.UiException error) {
             check(error.code.equals("verification_required"), "verification propagated");
         }
+        check(ui.verificationResets == 1, "verification reset attempted once");
         check(ui.videoOpens == 0 && ui.submits == 0, "verification blocks mutations");
     }
 
@@ -89,8 +105,11 @@ public final class CommentTaskExecutorTest {
         int submits;
         int observations;
         int browses;
+        int recoveries;
+        int verificationResets;
         boolean visible = true;
         String interruption = "none";
+        boolean resetLeavesVerification;
         Exception submitFailure;
 
         @Override
@@ -112,7 +131,12 @@ public final class CommentTaskExecutorTest {
         }
 
         @Override
-        public void recoverAndBrowseHome() { browses++; }
+        public void recoverAndBrowseHome() {
+            recoveries++;
+            if ("verification_required".equals(interruption)) verificationResets++;
+            browses++;
+            if (!resetLeavesVerification) interruption = "none";
+        }
     }
 
     private static void check(boolean condition, String label) {

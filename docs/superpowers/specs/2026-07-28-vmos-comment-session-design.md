@@ -135,6 +135,12 @@ delivery, checkpoints, and semantic UI control. It will not depend on the VMOS
 template parser or copy its task implementation. TikPoc owns a smaller typed
 state machine with explicit evidence and failure states.
 
+The 2026-07-28 VMOS canary verified the bounded reset path against a live image
+verification surface: the helper classified `verification_required`, issued
+exactly two Android Back actions, and confirmed Home/Recommended evidence in
+679 ms. A later challenge still follows the same bounded path rather than
+creating a continuous reset loop.
+
 ## Interruption and Recovery Policy
 
 Before browsing, navigation, or comment submission, the APK classifies the
@@ -157,22 +163,23 @@ On detection the APK:
 1. stops all gestures, navigation, and comment submission;
 2. preserves the current task and idempotency state;
 3. records timestamp, account, device, surface digest, and a redacted screenshot;
-4. reports the device as requiring operator attention;
-5. keeps other devices independent and running.
+4. performs at most one bounded recovery: two Android global Back actions;
+5. verifies a stable TikTok Home/Recommended surface;
+6. reports the device as requiring attention if the challenge remains;
+7. keeps other devices independent and running.
 
-The challenge widget is handled by the operator. The observed left-bottom reset
-action may be performed manually twice when appropriate. After operator
-confirmation, the APK performs a clean recovery:
+The challenge widget itself is never targeted. The Android Back navigation key
+is used as a bounded page reset, matching the VMOS device navigation control.
+After the two Back actions, the APK performs a clean recovery:
 
-1. return to the Android home surface;
-2. stop the current TikTok activity without clearing application data;
-3. relaunch TikTok;
-4. require a stable Home/Recommended surface;
-5. resume read-only browsing first;
-6. return to the preserved comment task only in a later clean session.
+1. require the challenge classification to disappear;
+2. require a stable TikTok Home/Recommended surface;
+3. perform one bounded read-only Home browse;
+4. re-check for a verification surface;
+5. resume the preserved comment task only after both checks pass.
 
-If the challenge remains after relaunch, the account stays
-`verification_required`; no automatic reset loop is created.
+If the challenge remains after the two Back actions and relaunch, the account
+stays `verification_required`; no repeated reset loop is created.
 
 ## Evidence and Metrics
 
@@ -224,4 +231,3 @@ from the number of planned or submitted tasks.
   every successful task.
 - A measured one-account day reports completion, uncertainty, verification,
   comment engagement, and funnel outcomes before six-device promotion.
-

@@ -97,7 +97,11 @@ public final class CommentTaskExecutor {
     private void requireNoVerification() throws Exception {
         if (TikTokInterruptionSemantics.VERIFICATION_REQUIRED.equals(
                 ui.observeInterruption())) {
-            throw new AccessibilityUiAdapter.UiException("verification_required");
+            ui.recoverAndBrowseHome();
+            if (TikTokInterruptionSemantics.VERIFICATION_REQUIRED.equals(
+                    ui.observeInterruption())) {
+                throw new AccessibilityUiAdapter.UiException("verification_required");
+            }
         }
     }
 

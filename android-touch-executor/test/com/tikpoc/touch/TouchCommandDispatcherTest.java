@@ -11,7 +11,8 @@ public final class TouchCommandDispatcherTest {
         healthReadsCurrentSurface();
         homeBrowseIsBoundedAndReadOnly();
         interruptionObservationIsReadOnly();
-        verificationBlocksHomeRecovery();
+        verificationResetsWithTwoAndroidBackActions();
+        verificationResetRequiresChallengeToDisappear();
         ordinaryDialogRecoversOnceToHome();
         failedHomeRecoveryIsBounded();
         opensCanonicalCommentVideoAndVerifiesIdentity();
@@ -69,21 +70,41 @@ public final class TouchCommandDispatcherTest {
         check(fixture.actuator.homeRecoveries == 0, "observation does not navigate");
     }
 
-    private static void verificationBlocksHomeRecovery() throws Exception {
+    private static void verificationResetsWithTwoAndroidBackActions() throws Exception {
         Fixture fixture = new Fixture();
-        fixture.source.snapshots = Collections.singletonList(
-                interruptionSnapshot("Verify to continue", 1));
+        fixture.source.snapshots = Arrays.asList(
+                interruptionSnapshot("Verify to continue", 1), homeSnapshot(2));
 
         Protocol.Response response = fixture.dispatcher.dispatch(
                 request("recover_home", empty()));
 
-        check(response.values.get("status").equals("error"), "verification blocks recovery");
+        check(response.values.get("status").equals("ok"), "verification reset recovery");
+        check(fixture.actuator.verificationBacks == 2, "two Android back actions");
+        @SuppressWarnings("unchecked") Map<String, Object> evidence =
+                (Map<String, Object>) response.values.get("evidence");
+        check(evidence.get("verification_reset_count").equals(2L),
+                "verification reset evidence");
+    }
+
+    private static void verificationResetRequiresChallengeToDisappear() throws Exception {
+        Fixture fixture = new Fixture();
+        SemanticSnapshot blockedHome = controlsSnapshot(
+                2, label("interruption", "Verify to continue"),
+                label("home", "Home"), label("feed", "For You"));
+        fixture.source.snapshots = Arrays.asList(
+                interruptionSnapshot("Verify to continue", 1), blockedHome);
+
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("recover_home", empty()));
+
+        check(response.values.get("status").equals("error"),
+                "visible challenge blocks false home success");
         @SuppressWarnings("unchecked") Map<String, Object> error =
                 (Map<String, Object>) response.values.get("error");
         check(error.get("code").equals("verification_required"),
-                "verification error preserved");
-        check(fixture.actuator.dismissals == 0, "challenge not dismissed");
-        check(fixture.actuator.homeRecoveries == 0, "challenge not navigated");
+                "remaining challenge preserved");
+        check(fixture.actuator.verificationBacks == 2,
+                "remaining challenge does not create reset loop");
     }
 
     private static void ordinaryDialogRecoversOnceToHome() throws Exception {
@@ -460,6 +481,7 @@ public final class TouchCommandDispatcherTest {
         int homeBrowses;
         int dismissals;
         int homeRecoveries;
+        int verificationBacks;
         int commentVideoOpens;
         int commentSubmits;
         RuntimeException failure;
@@ -490,6 +512,12 @@ public final class TouchCommandDispatcherTest {
         @Override
         public boolean dismissOrdinaryInterruption(String kind) {
             dismissals++;
+            return true;
+        }
+
+        @Override
+        public boolean resetVerification() {
+            verificationBacks += 2;
             return true;
         }
 

@@ -56,13 +56,17 @@ next task is read-only reconciliation rather than a second send.
 
 ## Verification Handling And Recovery
 
-When TikTok shows a verification challenge, the APK stops gestures, preserves
-the queued task, records `verification_required`, and suppresses new claims for
-that device. Other devices continue independently.
+When TikTok shows a verification challenge, the APK stops comment gestures,
+preserves the queued task, and performs one bounded page reset using exactly two
+Android Back navigation actions. It never targets the puzzle widget itself.
+After the reset it requires stable Home/Recommended evidence. If the challenge
+remains, it records `verification_required` and suppresses new claims for that
+device. Other devices continue independently.
 
-1. Handle the visible challenge manually. The lower-left reset action may be
-   used manually when appropriate; TikPoc does not operate the challenge widget.
-2. Acknowledge recovery:
+1. The two Back actions are automatic and bounded; no repeated reset loop is
+   created.
+2. If the challenge remains, acknowledge the paused device for a later operator
+   review:
 
    ```bash
    tikpoc comment-recovery-ack --db DB --device-id DEVICE \
