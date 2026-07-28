@@ -157,6 +157,8 @@ public final class TouchCommandDispatcher {
             throws Exception {
         String videoId = requiredArgument(request, "video_id");
         String videoUrl = requiredArgument(request, "video_url");
+        String creatorUsername = optionalArgument(request, "creator_username");
+        String captionAnchor = optionalArgument(request, "caption_anchor");
         SemanticSnapshot before = snapshots.current();
         if (!actuator.openCommentVideo(videoId, videoUrl)) {
             return Protocol.Response.error(request, "video_open_rejected", "route rejected");
@@ -164,10 +166,10 @@ public final class TouchCommandDispatcher {
         SemanticSnapshot observed = before;
         for (int attempt = 0; attempt < 10; attempt++) {
             observed = snapshots.awaitAfter(observed.eventSequence, 400L);
-            if (TikTokSemantics.hasVideoControls(observed)
-                    && TikTokInterruptionSemantics.containsExactVisibleText(
-                            observed, videoId)) {
-                return commentVideoEvidence(request, startedAt, observed, videoId);
+            if (commentVideoVisible(
+                    observed, videoId, creatorUsername, captionAnchor)) {
+                return commentVideoEvidence(request, startedAt, observed, videoId,
+                        creatorUsername, captionAnchor);
             }
         }
         return Protocol.Response.error(
@@ -177,21 +179,35 @@ public final class TouchCommandDispatcher {
     private Protocol.Response observeCommentVideo(Protocol.Request request, long startedAt)
             throws Exception {
         String videoId = requiredArgument(request, "video_id");
+        String creatorUsername = optionalArgument(request, "creator_username");
+        String captionAnchor = optionalArgument(request, "caption_anchor");
         SemanticSnapshot snapshot = snapshots.current();
-        if (!TikTokSemantics.hasVideoControls(snapshot)
-                || !TikTokInterruptionSemantics.containsExactVisibleText(snapshot, videoId)) {
+        if (!commentVideoVisible(snapshot, videoId, creatorUsername, captionAnchor)) {
             return Protocol.Response.error(
                     request, "comment_video_not_verified", "exact video evidence unavailable");
         }
-        return commentVideoEvidence(request, startedAt, snapshot, videoId);
+        return commentVideoEvidence(request, startedAt, snapshot, videoId,
+                creatorUsername, captionAnchor);
+    }
+
+    private boolean commentVideoVisible(SemanticSnapshot snapshot, String videoId,
+            String creatorUsername, String captionAnchor) {
+        if (!TikTokSemantics.hasVideoControls(snapshot)) return false;
+        if (!creatorUsername.isEmpty() && !captionAnchor.isEmpty()) {
+            return TikTokInterruptionSemantics.hasVisibleVideoIdentity(
+                    snapshot, creatorUsername, captionAnchor);
+        }
+        return TikTokInterruptionSemantics.containsExactVisibleText(snapshot, videoId);
     }
 
     private Protocol.Response commentVideoEvidence(
             Protocol.Request request, long startedAt, SemanticSnapshot snapshot,
-            String videoId) {
+            String videoId, String creatorUsername, String captionAnchor) {
         Map<String, Object> evidence = new LinkedHashMap<String, Object>();
         evidence.put("video_id", videoId);
         evidence.put("exact_video_visible", true);
+        evidence.put("creator_visible", !creatorUsername.isEmpty());
+        evidence.put("caption_anchor_visible", !captionAnchor.isEmpty());
         return success(request, startedAt, snapshot, evidence);
     }
 
@@ -559,6 +575,16 @@ public final class TouchCommandDispatcher {
             throws Protocol.ProtocolException {
         Object value = request.arguments.get(name);
         if (!(value instanceof String) || ((String) value).trim().isEmpty()) {
+            throw new Protocol.ProtocolException("invalid_argument_" + name);
+        }
+        return ((String) value).trim();
+    }
+
+    private static String optionalArgument(Protocol.Request request, String name)
+            throws Protocol.ProtocolException {
+        Object value = request.arguments.get(name);
+        if (value == null) return "";
+        if (!(value instanceof String)) {
             throw new Protocol.ProtocolException("invalid_argument_" + name);
         }
         return ((String) value).trim();

@@ -150,6 +150,8 @@ def _parser() -> argparse.ArgumentParser:
     comment_video_add = commands.add_parser("comment-video-add")
     comment_video_add.add_argument("--db", type=Path, required=True)
     comment_video_add.add_argument("--url", required=True)
+    comment_video_add.add_argument("--creator-username", default="")
+    comment_video_add.add_argument("--caption-anchor", default="")
     comment_video_add.add_argument("--command-id", required=True)
     comment_evidence_import = commands.add_parser("comment-evidence-import")
     comment_evidence_import.add_argument("--db", type=Path, required=True)
@@ -227,8 +229,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         try:
             if args.command == "comment-video-add":
-                video = service.add_video(args.url)
-                payload = {"video_id": video.video_id, "source_url": video.source_url}
+                video = service.add_video(
+                    args.url,
+                    creator_username=args.creator_username,
+                    caption_anchor=args.caption_anchor,
+                )
+                payload = {
+                    "video_id": video.video_id,
+                    "source_url": video.source_url,
+                    "creator_username": video.creator_username,
+                    "caption_anchor": video.caption_anchor,
+                }
             elif args.command == "comment-evidence-import":
                 rows = [
                     json.loads(line)

@@ -53,8 +53,13 @@ public final class AccessibilityUiAdapterTest {
 
         adapter.openAndVerifyVideo(
                 "7523456789012345678",
-                "https://www.tiktok.com/@bag/video/7523456789012345678");
+                "https://www.tiktok.com/@bag/video/7523456789012345678",
+                "bag", "rare archive piece");
         check(last[0].command.equals("open_comment_video"), "comment video command");
+        check(last[0].arguments.get("creator_username").equals("bag"),
+                "creator evidence bound");
+        check(last[0].arguments.get("caption_anchor").equals("rare archive piece"),
+                "caption evidence bound");
         adapter.submitFirstLevel("Original comment");
         check(last[0].command.equals("submit_first_level_comment"), "single submit command");
         check(adapter.observeSubmitted("Original comment"), "visible comment evidence");

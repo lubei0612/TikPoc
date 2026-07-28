@@ -3,7 +3,8 @@ package com.tikpoc.touch;
 public final class CommentTaskExecutor {
     public interface Ui {
         String observeInterruption() throws Exception;
-        void openAndVerifyVideo(String videoId, String videoUrl) throws Exception;
+        void openAndVerifyVideo(String videoId, String videoUrl,
+                String creatorUsername, String captionAnchor) throws Exception;
         void submitFirstLevel(String text) throws Exception;
         boolean observeSubmitted(String text) throws Exception;
         void recoverAndBrowseHome() throws Exception;
@@ -18,11 +19,14 @@ public final class CommentTaskExecutor {
         public final long planId;
         public final String videoId;
         public final String videoUrl;
+        public final String creatorUsername;
+        public final String captionAnchor;
         public final String publishText;
         public final String phase;
 
         public Task(String taskId, long planId, String videoId, String videoUrl,
-                String publishText, String phase) {
+                String creatorUsername, String captionAnchor, String publishText,
+                String phase) {
             if (empty(taskId) || planId <= 0L || empty(videoId) || empty(videoUrl)
                     || empty(publishText) || empty(phase)) {
                 throw new IllegalArgumentException("invalid comment task");
@@ -31,6 +35,8 @@ public final class CommentTaskExecutor {
             this.planId = planId;
             this.videoId = videoId;
             this.videoUrl = videoUrl;
+            this.creatorUsername = creatorUsername == null ? "" : creatorUsername.trim();
+            this.captionAnchor = captionAnchor == null ? "" : captionAnchor.trim();
             this.publishText = publishText;
             this.phase = phase;
         }
@@ -64,7 +70,8 @@ public final class CommentTaskExecutor {
                 || "comment_submitting".equals(task.phase)) {
             return reconcile(task);
         }
-        ui.openAndVerifyVideo(task.videoId, task.videoUrl);
+        ui.openAndVerifyVideo(task.videoId, task.videoUrl,
+                task.creatorUsername, task.captionAnchor);
         checkpoints.save(task.taskId, "video_verified");
         requireNoVerification();
         checkpoints.save(task.taskId, "comment_submitting");

@@ -19,9 +19,15 @@ def test_comment_operator_intake_review_and_redacted_status(tmp_path: Path) -> N
     api = TestClient(create_app(tmp_path / "comments.db", clock=lambda: 12.0))
     video = api.post(
         "/api/comment-videos",
-        json={"source_url": "https://www.tiktok.com/@bag/video/7523456789012345678"},
+        json={
+            "source_url": "https://www.tiktok.com/@bag/video/7523456789012345678",
+            "creator_username": "bag",
+            "caption_anchor": "rare archive piece",
+        },
     )
     assert video.status_code == 200
+    assert video.json()["creator_username"] == "bag"
+    assert video.json()["caption_anchor"] == "rare archive piece"
     video_id = video.json()["video_id"]
     evidence = api.post(
         f"/api/comment-videos/{video_id}/evidence",

@@ -654,10 +654,22 @@ class AcquisitionRepository:
                 CREATE TABLE IF NOT EXISTS comment_videos (
                     video_id TEXT PRIMARY KEY,
                     source_url TEXT NOT NULL,
+                    creator_username TEXT NOT NULL DEFAULT '',
+                    caption_anchor TEXT NOT NULL DEFAULT '',
                     created_at_ms INTEGER NOT NULL
                 )
                 """
             )
+            comment_video_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(comment_videos)")
+            }
+            for name in ("creator_username", "caption_anchor"):
+                if name not in comment_video_columns:
+                    connection.execute(
+                        f"ALTER TABLE comment_videos ADD COLUMN {name} "
+                        "TEXT NOT NULL DEFAULT ''"
+                    )
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS comment_evidence (

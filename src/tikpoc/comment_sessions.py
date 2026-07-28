@@ -19,6 +19,8 @@ from .hot_comment_planner import (
 class CommentVideo:
     video_id: str
     source_url: str
+    creator_username: str = ""
+    caption_anchor: str = ""
 
 
 @dataclass(frozen=True)
@@ -61,23 +63,43 @@ class CommentSessionService:
                 )
             )
 
-    def add_video(self, source: str) -> CommentVideo:
+    def add_video(
+        self,
+        source: str,
+        *,
+        creator_username: str = "",
+        caption_anchor: str = "",
+    ) -> CommentVideo:
         video_id = canonical_video_id(source)
         source_url = str(source).strip()
+        creator = str(creator_username).strip().removeprefix("@").casefold()
+        anchor = str(caption_anchor).strip()
         now_ms = self.clock_ms()
         with self.repository._connect() as connection:
             connection.execute(
                 """
-                INSERT INTO comment_videos(video_id, source_url, created_at_ms)
-                VALUES (?, ?, ?)
-                ON CONFLICT(video_id) DO NOTHING
+                INSERT INTO comment_videos(
+                    video_id, source_url, creator_username, caption_anchor,
+                    created_at_ms
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(video_id) DO UPDATE SET
+                    creator_username = CASE
+                        WHEN excluded.creator_username <> ''
+                        THEN excluded.creator_username
+                        ELSE comment_videos.creator_username
+                    END,
+                    caption_anchor = CASE
+                        WHEN excluded.caption_anchor <> ''
+                        THEN excluded.caption_anchor
+                        ELSE comment_videos.caption_anchor
+                    END
                 """,
-                (video_id, source_url, now_ms),
+                (video_id, source_url, creator, anchor, now_ms),
             )
             row = connection.execute(
-                "SELECT source_url FROM comment_videos WHERE video_id = ?", (video_id,)
+                "SELECT * FROM comment_videos WHERE video_id = ?", (video_id,)
             ).fetchone()
-        return CommentVideo(video_id, str(row["source_url"]))
+        return self._video(row)
 
     def video(self, video_id: str) -> CommentVideo:
         canonical = canonical_video_id(video_id)
@@ -87,7 +109,16 @@ class CommentSessionService:
             ).fetchone()
         if row is None:
             raise ValueError("video_not_found")
-        return CommentVideo(canonical, str(row["source_url"]))
+        return self._video(row)
+
+    @staticmethod
+    def _video(row: sqlite3.Row) -> CommentVideo:
+        return CommentVideo(
+            str(row["video_id"]),
+            str(row["source_url"]),
+            str(row["creator_username"]),
+            str(row["caption_anchor"]),
+        )
 
     def import_evidence(
         self, video_id: str, evidence: Iterable[CommentEvidence]

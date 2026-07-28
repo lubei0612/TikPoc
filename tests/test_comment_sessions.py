@@ -51,6 +51,20 @@ def test_evidence_is_deduplicated_globally_by_cid(tmp_path: Path) -> None:
     assert sessions.import_evidence(second.video_id, [item]) == 0
 
 
+def test_video_preserves_visible_identity_evidence(tmp_path: Path) -> None:
+    sessions = service(tmp_path)
+
+    saved = sessions.add_video(
+        "https://www.tiktok.com/@loveluxury.com/video/7666880218623118624",
+        creator_username="loveluxury.com",
+        caption_anchor="14 years ago",
+    )
+
+    loaded = sessions.video(saved.video_id)
+    assert loaded.creator_username == "loveluxury.com"
+    assert loaded.caption_anchor == "14 years ago"
+
+
 def test_approved_plan_is_immutable_and_unique_per_account_video(
     tmp_path: Path,
 ) -> None:

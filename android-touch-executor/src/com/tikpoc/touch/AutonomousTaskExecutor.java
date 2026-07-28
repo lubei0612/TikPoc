@@ -182,6 +182,8 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
                         (Long) rawPlanId,
                         requiredString(payload, "video_id"),
                         requiredString(payload, "video_url"),
+                        optionalString(payload, "creator_username"),
+                        optionalString(payload, "caption_anchor"),
                         requiredString(payload, "publish_text"),
                         task.phase));
         Map<String, Object> encoded = new LinkedHashMap<String, Object>();
@@ -292,6 +294,16 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
         if (!(value instanceof String) || ((String) value).trim().isEmpty())
             throw new Protocol.ProtocolException("missing_" + key);
         return (String) value;
+    }
+
+    private static String optionalString(Map<String, Object> values, String key)
+            throws Protocol.ProtocolException {
+        Object value = values.get(key);
+        if (value == null) return "";
+        if (!(value instanceof String)) {
+            throw new Protocol.ProtocolException("invalid_" + key);
+        }
+        return ((String) value).trim();
     }
 
     private static boolean nonemptyString(Object value) {

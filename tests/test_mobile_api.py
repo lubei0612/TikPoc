@@ -49,7 +49,11 @@ def test_mobile_claims_immutable_brand_comment_and_verification_preserves_it(
     api = client(tmp_path)
     sessions = api.app.state.comment_sessions
     sessions.save_persona("zoey", "account-1", "IKUN BAGS | ZOEY")
-    video = sessions.add_video("https://www.tiktok.com/@bag/video/7523456789012345678")
+    video = sessions.add_video(
+        "https://www.tiktok.com/@bag/video/7523456789012345678",
+        creator_username="bag",
+        caption_anchor="rare archive piece",
+    )
     draft = sessions.save_candidate(
         video.video_id,
         CommentCandidate(
@@ -81,6 +85,8 @@ def test_mobile_claims_immutable_brand_comment_and_verification_preserves_it(
     assert task["task_kind"] == "brand_comment"
     assert task["video_id"] == video.video_id
     assert task["video_url"].startswith("https://www.tiktok.com/")
+    assert task["creator_username"] == "bag"
+    assert task["caption_anchor"] == "rare archive piece"
     assert task["publish_text"].startswith("That structured")
     assert task["lease_expires_at_ms"] == 132_000
     blocked = api.post(

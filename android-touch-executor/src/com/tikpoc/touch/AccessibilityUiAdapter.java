@@ -138,9 +138,12 @@ public class AccessibilityUiAdapter implements AutonomousTaskExecutor.Ui, Commen
     }
 
     @Override
-    public void openAndVerifyVideo(String videoId, String videoUrl) throws Exception {
-        request("open_comment_video", "video_opening",
-                map("video_id", videoId, "video_url", videoUrl));
+    public void openAndVerifyVideo(String videoId, String videoUrl,
+            String creatorUsername, String captionAnchor) throws Exception {
+        Map<String, Object> arguments = map("video_id", videoId, "video_url", videoUrl);
+        arguments.put("creator_username", creatorUsername);
+        arguments.put("caption_anchor", captionAnchor);
+        request("open_comment_video", "video_opening", arguments);
     }
 
     @Override

@@ -16,6 +16,7 @@ public final class TouchCommandDispatcherTest {
         ordinaryDialogRecoversOnceToHome();
         failedHomeRecoveryIsBounded();
         opensCanonicalCommentVideoAndVerifiesIdentity();
+        rejectsCommentVideoWithoutVisibleCreatorAndCaption();
         submitsFirstLevelCommentOnceAndVerifiesVisibleText();
         submittedCommentObservationIsReadOnly();
         opensOnePostAndVerifiesVideoControls();
@@ -150,6 +151,20 @@ public final class TouchCommandDispatcherTest {
 
         check(response.values.get("status").equals("ok"), "comment video verified");
         check(fixture.actuator.commentVideoOpens == 1, "comment video opened once");
+    }
+
+    private static void rejectsCommentVideoWithoutVisibleCreatorAndCaption() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.source.snapshots = Arrays.asList(
+                actionSnapshot(false, 1),
+                controlsSnapshot(2, label("creator", "other.creator"),
+                        label("caption", "another video"), control("like_button", "Like")));
+
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("open_comment_video", map("video_id", "7523456789012345678")));
+
+        check(response.values.get("status").equals("error"),
+                "wrong visible video identity rejected");
     }
 
     private static void submitsFirstLevelCommentOnceAndVerifiesVisibleText()
@@ -611,7 +626,8 @@ public final class TouchCommandDispatcherTest {
     private static SemanticSnapshot commentVideoSnapshot(long sequence) {
         return controlsSnapshot(
                 sequence,
-                label("video_id", "7523456789012345678"),
+                label("creator", "@bag"),
+                label("caption", "A rare archive piece worth remembering"),
                 control("like_button", "Like"));
     }
 
@@ -669,7 +685,8 @@ public final class TouchCommandDispatcherTest {
         if (arguments.containsKey("video_id")) {
             argumentsJson = "{\"video_id\":\"7523456789012345678\","
                     + "\"video_url\":\"https://www.tiktok.com/@bag/video/"
-                    + "7523456789012345678\"}";
+                    + "7523456789012345678\",\"creator_username\":\"bag\","
+                    + "\"caption_anchor\":\"rare archive piece\"}";
         }
         if (arguments.containsKey("publish_text")) {
             argumentsJson = "{\"publish_text\":\"Original comment\"}";

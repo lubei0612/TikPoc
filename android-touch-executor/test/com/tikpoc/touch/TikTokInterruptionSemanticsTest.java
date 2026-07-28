@@ -1,6 +1,7 @@
 package com.tikpoc.touch;
 
 import java.util.Collections;
+import java.util.Arrays;
 
 public final class TikTokInterruptionSemanticsTest {
     public static void main(String[] args) throws Exception {
@@ -10,6 +11,7 @@ public final class TikTokInterruptionSemanticsTest {
         classifiesChineseVerification();
         classifiesEnglishVerification();
         ignoresHiddenChallengeText();
+        verifiesCreatorInsideVisibleControlDescription();
         System.out.println("TikTokInterruptionSemanticsTest PASS");
     }
 
@@ -40,6 +42,24 @@ public final class TikTokInterruptionSemanticsTest {
     private static void ignoresHiddenChallengeText() throws Exception {
         check(classify(node("Verify to continue", false)).equals("none"),
                 "hidden verification ignored");
+    }
+
+    private static void verifiesCreatorInsideVisibleControlDescription() throws Exception {
+        SemanticSnapshot.Node creator = new SemanticSnapshot.Node(
+                "", "android.widget.Button", "", "@loveluxury.com · creator profile",
+                new SemanticSnapshot.Bounds(0, 0, 300, 100), true, true, true, false,
+                Collections.emptyList());
+        SemanticSnapshot.Node caption = node(
+                "A rare archive piece worth remembering", true);
+        SemanticSnapshot.Node root = new SemanticSnapshot.Node(
+                "", "android.widget.FrameLayout", "", "",
+                new SemanticSnapshot.Bounds(0, 0, 720, 1280), true, false, true, false,
+                Arrays.asList(creator, caption));
+        SemanticSnapshot snapshot = SemanticSnapshot.fromRoot(root, 1L, 100L);
+
+        check(TikTokInterruptionSemantics.hasVisibleVideoIdentity(
+                        snapshot, "loveluxury.com", "rare archive piece"),
+                "creator token and caption anchor verified");
     }
 
     private static String classify(SemanticSnapshot.Node root) throws Exception {

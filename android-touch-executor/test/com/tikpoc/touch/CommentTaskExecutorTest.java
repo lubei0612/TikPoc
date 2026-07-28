@@ -90,6 +90,7 @@ public final class CommentTaskExecutorTest {
         return new CommentTaskExecutor.Task(
                 "comment:42", 42L, "7523456789012345678",
                 "https://www.tiktok.com/@bag/video/7523456789012345678",
+                "bag", "rare archive piece",
                 "That structured shape changes the whole outfit ✨", phase);
     }
 
@@ -116,7 +117,12 @@ public final class CommentTaskExecutorTest {
         public String observeInterruption() { return interruption; }
 
         @Override
-        public void openAndVerifyVideo(String videoId, String videoUrl) { videoOpens++; }
+        public void openAndVerifyVideo(String videoId, String videoUrl,
+                String creatorUsername, String captionAnchor) {
+            check(creatorUsername.equals("bag"), "creator identity propagated");
+            check(captionAnchor.equals("rare archive piece"), "caption anchor propagated");
+            videoOpens++;
+        }
 
         @Override
         public void submitFirstLevel(String text) throws Exception {

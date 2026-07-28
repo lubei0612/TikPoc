@@ -33,6 +33,8 @@ public final class AutonomousTaskExecutorTest {
                 "{\"task_kind\":\"brand_comment\",\"plan_id\":42,"
                 + "\"video_id\":\"7523456789012345678\","
                 + "\"video_url\":\"https://www.tiktok.com/@bag/video/7523456789012345678\","
+                + "\"creator_username\":\"bag\","
+                + "\"caption_anchor\":\"rare archive piece\","
                 + "\"publish_text\":\"Original comment\"}");
 
         DeviceTaskStore.Result result = executor.execute(task);
@@ -323,7 +325,8 @@ public final class AutonomousTaskExecutorTest {
         public String observeInterruption() { return "none"; }
 
         @Override
-        public void openAndVerifyVideo(String videoId, String videoUrl) {}
+        public void openAndVerifyVideo(String videoId, String videoUrl,
+                String creatorUsername, String captionAnchor) {}
 
         @Override
         public void submitFirstLevel(String text) { submits++; }

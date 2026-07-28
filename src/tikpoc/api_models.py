@@ -157,6 +157,8 @@ class MobileResultRequest(ApiRequest):
 
 class CommentVideoRequest(ApiRequest):
     source_url: BoundedText
+    creator_username: VisibleUsername = ""
+    caption_anchor: VisibleUsername = ""
     command_id: Identifier = "video-add"
 
 

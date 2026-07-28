@@ -398,10 +398,21 @@ def create_app(
     async def comment_video_add(request: Request) -> JSONResponse:
         try:
             body = CommentVideoRequest.model_validate(await _json_object(request))
-            video = comment_sessions.add_video(body.source_url)
+            video = comment_sessions.add_video(
+                body.source_url,
+                creator_username=body.creator_username,
+                caption_anchor=body.caption_anchor,
+            )
         except (TypeError, ValueError, ValidationError) as error:
             return _json({"error": str(error)}, 400)
-        return _json({"video_id": video.video_id, "source_url": video.source_url})
+        return _json(
+            {
+                "video_id": video.video_id,
+                "source_url": video.source_url,
+                "creator_username": video.creator_username,
+                "caption_anchor": video.caption_anchor,
+            }
+        )
 
     @app.post("/api/comment-videos/{video_id}/evidence")
     async def comment_evidence_import(video_id: str, request: Request) -> JSONResponse:
@@ -563,6 +574,8 @@ def create_app(
                             ),
                             "video_id": plan.video_id,
                             "video_url": video.source_url,
+                            "creator_username": video.creator_username,
+                            "caption_anchor": video.caption_anchor,
                             "publish_text": plan.english,
                         }
                     ]
