@@ -1,5 +1,7 @@
 package com.tikpoc.touch;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 
 public final class TikTokInterruptionSemantics {
@@ -47,6 +49,39 @@ public final class TikTokInterruptionSemantics {
             if (text.equals("推荐") || text.equals("for you")) feed = true;
         }
         return home && feed;
+    }
+
+    public static SemanticSnapshot.Node uniqueClickableAncestorOfExactText(
+            SemanticSnapshot snapshot, String expected) {
+        String normalized = expected == null
+                ? "" : expected.trim().toLowerCase(Locale.ROOT);
+        if (normalized.isEmpty()) return null;
+        List<SemanticSnapshot.Node> matches = new ArrayList<SemanticSnapshot.Node>();
+        collectClickableAncestors(snapshot.root, normalized,
+                new ArrayList<SemanticSnapshot.Node>(), matches);
+        if (matches.size() != 1) return null;
+        return matches.get(0);
+    }
+
+    private static void collectClickableAncestors(
+            SemanticSnapshot.Node node, String expected,
+            List<SemanticSnapshot.Node> path, List<SemanticSnapshot.Node> matches) {
+        path.add(node);
+        if (node.visible && node.enabled && node.bounds.hasArea()
+                && node.searchableText().trim().toLowerCase(Locale.ROOT).equals(expected)) {
+            for (int index = path.size() - 1; index >= 0; index--) {
+                SemanticSnapshot.Node candidate = path.get(index);
+                if (candidate.visible && candidate.enabled && candidate.clickable
+                        && candidate.bounds.hasArea()) {
+                    if (!matches.contains(candidate)) matches.add(candidate);
+                    break;
+                }
+            }
+        }
+        for (SemanticSnapshot.Node child : node.children) {
+            collectClickableAncestors(child, expected, path, matches);
+        }
+        path.remove(path.size() - 1);
     }
 
     public static boolean containsExactVisibleText(

@@ -106,14 +106,22 @@ public final class TikPocAccessibilityService extends AccessibilityService
             autonomousThread = new Thread(() -> {
                 if ("brand_comment".equals(settings.roundId)) {
                     try {
-                        ui.recoverHome();
+                        AutonomousStartupRecovery.Outcome outcome =
+                                AutonomousStartupRecovery.run(
+                                        ui::recoverHome, Thread::sleep, 3, 500L);
+                        if (outcome != AutonomousStartupRecovery.Outcome.READY) return;
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                    try {
                         client.heartbeat(
                                 "1.0.0", "stable_home",
                                 store.queueDepth(
                                         settings.sessionEpoch, System.currentTimeMillis()),
                                 System.currentTimeMillis());
-                    } catch (Exception recoveryBlocked) {
-                        return;
+                    } catch (Exception heartbeatUnavailable) {
+                        android.util.Log.w("TikPocTouch", "startup heartbeat deferred");
                     }
                 }
                 while (!Thread.currentThread().isInterrupted()) {
@@ -189,15 +197,11 @@ public final class TikPocAccessibilityService extends AccessibilityService
     public boolean browseHomeReadOnly() {
         AccessibilityNodeInfo root = waitForRoot(2_000L);
         if (root == null) return false;
-        AccessibilityNodeInfo home = null;
         try {
-            home = firstClickableByExactText(root, "首页");
-            if (home == null) home = firstClickableByExactText(root, "Home");
-            if (home == null || !home.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+            if (!clickUniqueExactControl(root, "首页", "Home")) {
                 return false;
             }
         } finally {
-            recycle(home);
             root.recycle();
         }
         SystemClock.sleep(400L);
@@ -254,13 +258,9 @@ public final class TikPocAccessibilityService extends AccessibilityService
         }
         AccessibilityNodeInfo root = waitForRoot(2_000L);
         if (root == null) return false;
-        AccessibilityNodeInfo home = null;
         try {
-            home = firstClickableByExactText(root, "首页");
-            if (home == null) home = firstClickableByExactText(root, "Home");
-            return home != null && home.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+            return clickUniqueExactControl(root, "首页", "Home");
         } finally {
-            recycle(home);
             root.recycle();
         }
     }
@@ -605,6 +605,31 @@ public final class TikPocAccessibilityService extends AccessibilityService
             } finally { child.recycle(); }
         }
         return null;
+    }
+
+    private static boolean clickUniqueExactControl(
+            AccessibilityNodeInfo root, String... labels) {
+        try {
+            SemanticSnapshot observed = SemanticSnapshot.fromRoot(copyNode(root), 0L, 0L);
+            SemanticSnapshot.Node expected = null;
+            for (String label : labels) {
+                expected = TikTokInterruptionSemantics
+                        .uniqueClickableAncestorOfExactText(observed, label);
+                if (expected != null) break;
+            }
+            if (expected == null) return false;
+            List<AccessibilityNodeInfo> matches = new ArrayList<AccessibilityNodeInfo>();
+            collectMatches(root, expected, matches);
+            if (matches.size() != 1) {
+                recycleAll(matches);
+                return false;
+            }
+            boolean clicked = matches.get(0).performAction(AccessibilityNodeInfo.ACTION_CLICK);
+            recycleAll(matches);
+            return clicked;
+        } catch (SemanticSnapshot.SnapshotException error) {
+            return false;
+        }
     }
 
     private static AccessibilityNodeInfo firstSearchEditable(AccessibilityNodeInfo node) {

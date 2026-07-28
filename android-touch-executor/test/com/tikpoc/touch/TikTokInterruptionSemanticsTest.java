@@ -12,6 +12,7 @@ public final class TikTokInterruptionSemanticsTest {
         classifiesEnglishVerification();
         ignoresHiddenChallengeText();
         verifiesCreatorInsideVisibleControlDescription();
+        selectsClickableParentOfExactHomeLabel();
         System.out.println("TikTokInterruptionSemanticsTest PASS");
     }
 
@@ -60,6 +61,23 @@ public final class TikTokInterruptionSemanticsTest {
         check(TikTokInterruptionSemantics.hasVisibleVideoIdentity(
                         snapshot, "loveluxury.com", "rare archive piece"),
                 "creator token and caption anchor verified");
+    }
+
+    private static void selectsClickableParentOfExactHomeLabel() throws Exception {
+        SemanticSnapshot.Node label = node("首页", true);
+        SemanticSnapshot.Node control = new SemanticSnapshot.Node(
+                "home-tab", "android.view.ViewGroup", "", "",
+                new SemanticSnapshot.Bounds(0, 1100, 144, 1280), true, true, true, false,
+                Collections.singletonList(label));
+        SemanticSnapshot.Node root = new SemanticSnapshot.Node(
+                "", "android.widget.FrameLayout", "", "",
+                new SemanticSnapshot.Bounds(0, 0, 720, 1280), true, false, true, false,
+                Collections.singletonList(control));
+        SemanticSnapshot snapshot = SemanticSnapshot.fromRoot(root, 1L, 100L);
+
+        check(TikTokInterruptionSemantics.uniqueClickableAncestorOfExactText(
+                        snapshot, "首页") == control,
+                "non-clickable exact label resolves to its clickable parent");
     }
 
     private static String classify(SemanticSnapshot.Node root) throws Exception {

@@ -98,3 +98,23 @@ To roll back, pause the device, retain its SQLite task store and server database
 install the previous signed APK, re-enable Accessibility visibly, and resume only
 after a stable-Home heartbeat. An unresolved submission continues to consume the
 daily quota until reconciliation.
+
+## Latest Canary Checkpoint (2026-07-29)
+
+- The live TikTok Home label was exposed on a non-clickable text child beneath
+  one clickable tab parent. Home recovery now resolves the unique nearest
+  clickable ancestor and verifies Home/Recommended after activation.
+- APK startup tolerates at most three ordinary transient Home-tree failures.
+  Any `verification_*` result stops after the first bounded verification reset,
+  so startup cannot create a repeated two-Back loop.
+- After an APK reinstall and Accessibility restart, the canary returned an
+  `idle` HTTPS heartbeat and continued authenticated task polling without an
+  active ADB forward.
+- One approved real-video canary reached exactly one submitted attempt and then
+  `uncertain`; exact visible-comment evidence was not obtained. It remains
+  quota-counted and is not resubmitted. This is evidence for the uncertainty
+  path, not completion of the single-device promotion gate.
+
+Before promotion, run a fresh plan and require `visible_confirmed`, then complete
+the five-comment session and full 20-comment-day gates with zero duplicate
+attempts.
