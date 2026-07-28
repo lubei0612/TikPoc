@@ -649,6 +649,97 @@ class AcquisitionRepository:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS comment_videos (
+                    video_id TEXT PRIMARY KEY,
+                    source_url TEXT NOT NULL,
+                    created_at_ms INTEGER NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS comment_evidence (
+                    cid TEXT PRIMARY KEY,
+                    video_id TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    likes INTEGER NOT NULL CHECK(likes >= 0),
+                    replies INTEGER NOT NULL CHECK(replies >= 0),
+                    created_at INTEGER NOT NULL,
+                    language TEXT NOT NULL,
+                    imported_at_ms INTEGER NOT NULL,
+                    FOREIGN KEY(video_id) REFERENCES comment_videos(video_id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS comment_personas (
+                    persona_id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL UNIQUE,
+                    display_name TEXT NOT NULL,
+                    created_at_ms INTEGER NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS comment_plans (
+                    plan_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    video_id TEXT NOT NULL,
+                    persona_id TEXT NOT NULL,
+                    account_id TEXT,
+                    english TEXT NOT NULL,
+                    chinese TEXT NOT NULL,
+                    emoji_count INTEGER NOT NULL CHECK(emoji_count BETWEEN 0 AND 2),
+                    state TEXT NOT NULL CHECK(state IN (
+                        'draft','approved','leased','submitted','uncertain',
+                        'visible_confirmed','failed','skipped'
+                    )),
+                    lease_owner TEXT,
+                    created_at_ms INTEGER NOT NULL,
+                    approved_at_ms INTEGER,
+                    updated_at_ms INTEGER NOT NULL,
+                    FOREIGN KEY(video_id) REFERENCES comment_videos(video_id),
+                    FOREIGN KEY(persona_id) REFERENCES comment_personas(persona_id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_comment_plan_account_video
+                ON comment_plans(account_id, video_id)
+                WHERE account_id IS NOT NULL AND state <> 'draft'
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS comment_attempts (
+                    attempt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    plan_id INTEGER NOT NULL UNIQUE,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    state TEXT NOT NULL CHECK(state IN (
+                        'submitted','uncertain','visible_confirmed','failed'
+                    )),
+                    submitted_at_ms INTEGER NOT NULL,
+                    reconciled_at_ms INTEGER,
+                    FOREIGN KEY(plan_id) REFERENCES comment_plans(plan_id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS comment_observations (
+                    observation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    plan_id INTEGER NOT NULL,
+                    likes INTEGER NOT NULL CHECK(likes >= 0),
+                    replies INTEGER NOT NULL CHECK(replies >= 0),
+                    observed_at_ms INTEGER NOT NULL,
+                    FOREIGN KEY(plan_id) REFERENCES comment_plans(plan_id)
+                )
+                """
+            )
 
     def register_mobile_device(
         self, device_id: str, account_id: str, *, now_ms: int
