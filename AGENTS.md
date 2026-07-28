@@ -7,6 +7,19 @@ them here.
 
 ## Current Control State
 
+- **Active product direction (2026-07-28):** the high-volume profile-visit
+  workflow is paused after repeated loss of visible visitor-record evidence.
+  Do not resume it merely to satisfy the historical capacity queue below.
+- Continue the VMOS brand-comment session defined in
+  `docs/superpowers/specs/2026-07-28-vmos-comment-session-design.md`: desktop
+  discovery and comment evidence produce reviewed immutable plans; each account
+  publishes at most 20 first-level comments per Asia/Shanghai day; the Android
+  worker browses relevant feed content between due comments and pulls work over
+  HTTPS without a persistent ADB dependency.
+- A verification challenge pauses the affected device without interacting with
+  the challenge. After the operator resolves it and acknowledges recovery,
+  require visible stable TikTok Home evidence before resuming. VMOS Auto and
+  TikPoc must not hold the accessibility-executor role at the same time.
 - **Production mobile runtime decision (2026-07-26):** the user moved the
   project from MYT to VMOS. All new mobile account binding, acquisition,
   capacity, diagnostics, and catalog-publishing work must use VMOS devices.
