@@ -10,6 +10,10 @@ public final class TouchCommandDispatcherTest {
         healthIsReadOnly();
         healthReadsCurrentSurface();
         homeBrowseIsBoundedAndReadOnly();
+        interruptionObservationIsReadOnly();
+        verificationBlocksHomeRecovery();
+        ordinaryDialogRecoversOnceToHome();
+        failedHomeRecoveryIsBounded();
         opensOnePostAndVerifiesVideoControls();
         waitsForVideoEventBeforeVerifyingControls();
         returnsBoundedErrorWhenVideoHandleIsMissing();
@@ -43,6 +47,73 @@ public final class TouchCommandDispatcherTest {
         Map<String, Object> evidence = (Map<String, Object>) response.values.get("evidence");
         check(evidence.get("home_visible").equals(true), "home visible evidence");
         check(evidence.get("browse_performed").equals(true), "browse performed evidence");
+    }
+
+    private static void interruptionObservationIsReadOnly() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.source.snapshots = Collections.singletonList(
+                interruptionSnapshot("请完成下列验证后继续", 1));
+
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("observe_interruption", empty()));
+
+        check(response.values.get("status").equals("ok"), "interruption observed");
+        @SuppressWarnings("unchecked") Map<String, Object> evidence =
+                (Map<String, Object>) response.values.get("evidence");
+        check(evidence.get("interruption").equals("verification_required"),
+                "verification classified");
+        check(fixture.actuator.dismissals == 0, "observation does not dismiss");
+        check(fixture.actuator.homeRecoveries == 0, "observation does not navigate");
+    }
+
+    private static void verificationBlocksHomeRecovery() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.source.snapshots = Collections.singletonList(
+                interruptionSnapshot("Verify to continue", 1));
+
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("recover_home", empty()));
+
+        check(response.values.get("status").equals("error"), "verification blocks recovery");
+        @SuppressWarnings("unchecked") Map<String, Object> error =
+                (Map<String, Object>) response.values.get("error");
+        check(error.get("code").equals("verification_required"),
+                "verification error preserved");
+        check(fixture.actuator.dismissals == 0, "challenge not dismissed");
+        check(fixture.actuator.homeRecoveries == 0, "challenge not navigated");
+    }
+
+    private static void ordinaryDialogRecoversOnceToHome() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.source.snapshots = Arrays.asList(
+                interruptionSnapshot("与好友一起使用 TikTok 会更有趣", 1),
+                homeSnapshot(2));
+
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("recover_home", empty()));
+
+        check(response.values.get("status").equals("ok"), "home recovery verified");
+        check(fixture.actuator.dismissals == 1, "ordinary dialog dismissed once");
+        check(fixture.actuator.homeRecoveries == 1, "home activated once");
+        @SuppressWarnings("unchecked") Map<String, Object> evidence =
+                (Map<String, Object>) response.values.get("evidence");
+        check(evidence.get("home_visible").equals(true), "home evidence visible");
+    }
+
+    private static void failedHomeRecoveryIsBounded() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.source.snapshots = Collections.singletonList(actionSnapshot(false, 1));
+
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("recover_home", empty()));
+
+        check(response.values.get("status").equals("error"), "failed recovery recorded");
+        @SuppressWarnings("unchecked") Map<String, Object> error =
+                (Map<String, Object>) response.values.get("error");
+        check(error.get("code").equals("home_recovery_failed"), "bounded recovery error");
+        check(fixture.actuator.dismissals == 0, "no ordinary interruption dismissal");
+        check(fixture.actuator.homeRecoveries == 1, "home activated only once");
+        check(fixture.source.index == 6, "home verification capped at five checks");
     }
 
     private static void searchRequiresExactProfileEvidence() throws Exception {
@@ -348,6 +419,8 @@ public final class TouchCommandDispatcherTest {
         int clicks;
         int profileOpens;
         int homeBrowses;
+        int dismissals;
+        int homeRecoveries;
         RuntimeException failure;
         String searchResult = "timeout";
 
@@ -370,6 +443,18 @@ public final class TouchCommandDispatcherTest {
         @Override
         public boolean browseHomeReadOnly() {
             homeBrowses++;
+            return true;
+        }
+
+        @Override
+        public boolean dismissOrdinaryInterruption(String kind) {
+            dismissals++;
+            return true;
+        }
+
+        @Override
+        public boolean returnToHome() {
+            homeRecoveries++;
             return true;
         }
     }
@@ -432,6 +517,14 @@ public final class TouchCommandDispatcherTest {
                 resourceId, "TextView", text, "",
                 new SemanticSnapshot.Bounds(0, 0, 100, 50), true, false, true, false,
                 Collections.<SemanticSnapshot.Node>emptyList());
+    }
+
+    private static SemanticSnapshot interruptionSnapshot(String text, long sequence) {
+        return controlsSnapshot(sequence, label("interruption", text));
+    }
+
+    private static SemanticSnapshot homeSnapshot(long sequence) {
+        return controlsSnapshot(sequence, label("home", "首页"), label("feed", "推荐"));
     }
 
     private static SemanticSnapshot profileSnapshot() {

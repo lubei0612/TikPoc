@@ -92,6 +92,15 @@ public final class AutonomousTaskRunner {
                     ? ACTIVE_DELAY_MS : IDLE_DELAY_MS;
             consecutiveFailures = 0;
             state = State.HEALTHY;
+        } catch (AccessibilityUiAdapter.UiException error) {
+            if ("verification_required".equals(error.code)) {
+                recommendedDelayMs = IDLE_DELAY_MS;
+                state = State.PAUSED;
+                return state;
+            }
+            consecutiveFailures++;
+            recommendedDelayMs = IDLE_DELAY_MS;
+            state = State.DEGRADED;
         } catch (Exception error) {
             consecutiveFailures++;
             recommendedDelayMs = IDLE_DELAY_MS;

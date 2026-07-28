@@ -16,7 +16,23 @@ public final class AutonomousTaskExecutorTest {
         activeModeVerifiesVideoAndAction();
         actionFailureUsesActionPhaseIdempotencyKey();
         reconciliationFailureRetainsActionPlan();
+        verificationRequiredEscapesWithoutTerminalResult();
         System.out.println("AutonomousTaskExecutorTest PASS");
+    }
+
+    private static void verificationRequiredEscapesWithoutTerminalResult() throws Exception {
+        FakeUi ui = new FakeUi("target_user", true);
+        ui.openError = new AccessibilityUiAdapter.UiException("verification_required");
+        AutonomousTaskExecutor executor = new AutonomousTaskExecutor(
+                ui, AutonomousTaskExecutor.Mode.ACTIVE);
+
+        try {
+            executor.execute(task("target_user", "{}"));
+            throw new AssertionError("verification should preserve the queued task");
+        } catch (AccessibilityUiAdapter.UiException error) {
+            check(error.code.equals("verification_required"),
+                    "verification propagated to runner");
+        }
     }
 
     private static void activeModeVerifiesVideoAndAction() throws Exception {

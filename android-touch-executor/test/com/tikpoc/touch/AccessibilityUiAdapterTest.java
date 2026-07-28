@@ -29,8 +29,26 @@ public final class AccessibilityUiAdapterTest {
         check(adapter.last.arguments.get("expected_username").equals("target_user"),
                 "expected username bound");
         check(adapter.last.deadlineElapsedMs == 13_000L, "fresh command deadline");
+        adapter.recoverHome();
+        check(adapter.last.command.equals("recover_home"), "typed home recovery command");
+        check(adapter.last.phase.equals("session_recovery"), "recovery phase preserved");
         uncertainActionReturnsUnverifiedInsteadOfThrowing();
+        verificationRequiredIsPropagated();
         System.out.println("AccessibilityUiAdapterTest PASS");
+    }
+
+    private static void verificationRequiredIsPropagated() throws Exception {
+        AccessibilityUiAdapter adapter = new AccessibilityUiAdapter(
+                "device-1", "account-1", 7L, () -> 1_000L, request ->
+                        Protocol.Response.error(request, "verification_required",
+                                "operator verification required"));
+        try {
+            adapter.recoverHome();
+            throw new AssertionError("verification should block recovery");
+        } catch (AccessibilityUiAdapter.UiException error) {
+            check(error.code.equals("verification_required"),
+                    "verification code propagated");
+        }
     }
 
     private static void uncertainActionReturnsUnverifiedInsteadOfThrowing()

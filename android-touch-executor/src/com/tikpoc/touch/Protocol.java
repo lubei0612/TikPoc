@@ -15,11 +15,13 @@ public final class Protocol {
     private static final int MAX_JSON_DEPTH = 12;
     private static final List<String> COMMANDS = Collections.unmodifiableList(Arrays.asList(
             "health", "open_profile", "open_profile_search", "observe_profile", "open_video",
-            "observe_action", "apply_action", "browse_home", "diagnostics"));
+            "observe_action", "apply_action", "browse_home", "observe_interruption",
+            "recover_home", "diagnostics"));
     private static final List<String> PHASES = Collections.unmodifiableList(Arrays.asList(
             "pending", "profile_opening", "identity_confirmed", "waiting_snapshot",
             "video_opening", "video_confirmed", "quota_reserved", "action_executing",
-            "action_reconciling", "session_pacing", "completed", "deferred", "skipped"));
+            "action_reconciling", "session_pacing", "session_recovery", "completed",
+            "deferred", "skipped"));
 
     private Protocol() {}
 

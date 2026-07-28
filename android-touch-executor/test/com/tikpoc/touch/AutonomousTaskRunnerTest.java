@@ -11,7 +11,28 @@ public final class AutonomousTaskRunnerTest {
         activeQueueUsesShortDelayWithoutHeartbeatFlooding();
         heartbeatDoesNotConsumeControlPlanePerTarget();
         transientFailuresRemainDegradedAndRecover();
+        verificationPausesClaimsAndPreservesCurrentTask();
         System.out.println("AutonomousTaskRunnerTest PASS");
+    }
+
+    private static void verificationPausesClaimsAndPreservesCurrentTask() throws Exception {
+        DeviceTaskStore store = new DeviceTaskStore(new DeviceTaskStore.MemoryBackend());
+        store.enqueue(new DeviceTaskStore.Task(
+                "task-1", "lease-1", 7L, 9_000L, "pending", "{}"));
+        FakeClient client = new FakeClient();
+        AutonomousTaskRunner runner = new AutonomousTaskRunner(
+                client, store, "round-1", 7L,
+                task -> { throw new AccessibilityUiAdapter.UiException(
+                        "verification_required"); });
+
+        check(runner.runOnce(1_000L) == AutonomousTaskRunner.State.PAUSED,
+                "verification pauses worker");
+        check(store.next(7L, 1_000L).taskId.equals("task-1"),
+                "verification preserves current task");
+        int pulls = client.pulls;
+        runner.runOnce(2_000L);
+        check(client.pulls == pulls, "paused worker suppresses new claims");
+        check(client.uploads == 0, "verification does not publish terminal result");
     }
 
     private static void appliesPacingAfterACompletedTarget() throws Exception {

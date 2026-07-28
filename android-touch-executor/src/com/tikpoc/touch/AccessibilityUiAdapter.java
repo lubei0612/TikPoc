@@ -125,6 +125,10 @@ public class AccessibilityUiAdapter implements AutonomousTaskExecutor.Ui {
         request("browse_home", "session_pacing", new LinkedHashMap<String, Object>());
     }
 
+    public void recoverHome() throws Exception {
+        request("recover_home", "session_recovery", new LinkedHashMap<String, Object>());
+    }
+
     protected Protocol.Response invoke(Protocol.Request request) throws Exception {
         return invoker.invoke(request);
     }

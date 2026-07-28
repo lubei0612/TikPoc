@@ -114,6 +114,7 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
             }
             return actionResult(task, target, "action_confirmed");
         } catch (AccessibilityUiAdapter.UiException error) {
+            if ("verification_required".equals(error.code)) throw error;
             if ("action_reconciling".equals(task.phase) && target != null) {
                 return actionResult(task, target, "action_reconciling",
                         error.code, "deferred");

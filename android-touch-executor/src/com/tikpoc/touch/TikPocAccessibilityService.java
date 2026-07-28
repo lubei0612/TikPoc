@@ -196,6 +196,53 @@ public final class TikPocAccessibilityService extends AccessibilityService
     }
 
     @Override
+    public boolean dismissOrdinaryInterruption(String kind) {
+        if (TikTokInterruptionSemantics.LONG_PRESS_MENU.equals(kind)) {
+            return performGlobalAction(GLOBAL_ACTION_BACK);
+        }
+        if (!TikTokInterruptionSemantics.ORDINARY_DIALOG.equals(kind)) return false;
+        AccessibilityNodeInfo root = waitForRoot(1_000L);
+        if (root == null) return false;
+        AccessibilityNodeInfo dismiss = null;
+        try {
+            String[] labels = {"不允许", "Not now", "关闭", "Close"};
+            for (String label : labels) {
+                dismiss = firstClickableByExactText(root, label);
+                if (dismiss != null) break;
+            }
+            if (dismiss != null) {
+                return dismiss.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+            }
+        } finally {
+            recycle(dismiss);
+            root.recycle();
+        }
+        return performGlobalAction(GLOBAL_ACTION_BACK);
+    }
+
+    @Override
+    public boolean returnToHome() {
+        if (!TIKTOK_PACKAGE.equals(packageName)) {
+            Intent launch = getPackageManager().getLaunchIntentForPackage(TIKTOK_PACKAGE);
+            if (launch == null) return false;
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(launch);
+            SystemClock.sleep(400L);
+        }
+        AccessibilityNodeInfo root = waitForRoot(2_000L);
+        if (root == null) return false;
+        AccessibilityNodeInfo home = null;
+        try {
+            home = firstClickableByExactText(root, "首页");
+            if (home == null) home = firstClickableByExactText(root, "Home");
+            return home != null && home.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+        } finally {
+            recycle(home);
+            root.recycle();
+        }
+    }
+
+    @Override
     public String searchProfile(String username) throws Exception {
         Intent launch = getPackageManager().getLaunchIntentForPackage(TIKTOK_PACKAGE);
         if (launch != null) {

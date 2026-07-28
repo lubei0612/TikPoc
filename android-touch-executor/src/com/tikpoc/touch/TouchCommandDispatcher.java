@@ -17,6 +17,10 @@ public final class TouchCommandDispatcher {
         boolean openProfile(String route) throws Exception;
         default String searchProfile(String username) throws Exception { return "timeout"; }
         default boolean browseHomeReadOnly() throws Exception { return false; }
+        default boolean dismissOrdinaryInterruption(String kind) throws Exception {
+            return false;
+        }
+        default boolean returnToHome() throws Exception { return false; }
     }
 
     public interface Clock {
@@ -59,6 +63,10 @@ public final class TouchCommandDispatcher {
         if (request.command.equals("health")) return health(request, startedAt);
         if (request.command.equals("diagnostics")) return diagnostics(request, startedAt);
         if (request.command.equals("browse_home")) return browseHome(request, startedAt);
+        if (request.command.equals("observe_interruption")) {
+            return observeInterruption(request, startedAt);
+        }
+        if (request.command.equals("recover_home")) return recoverHome(request, startedAt);
         if (request.command.equals("apply_action")) return applyAction(request, startedAt);
         if (request.command.equals("observe_action")) return observeAction(request, startedAt);
         if (request.command.equals("observe_profile")) return observeProfile(request, startedAt);
@@ -68,6 +76,46 @@ public final class TouchCommandDispatcher {
         }
         if (request.command.equals("open_video")) return openVideo(request, startedAt);
         return Protocol.Response.error(request, "unsupported_command", "command unavailable");
+    }
+
+    private Protocol.Response observeInterruption(Protocol.Request request, long startedAt)
+            throws Exception {
+        SemanticSnapshot snapshot = snapshots.current();
+        Map<String, Object> evidence = new LinkedHashMap<String, Object>();
+        evidence.put("interruption", TikTokInterruptionSemantics.classify(snapshot));
+        return success(request, startedAt, snapshot, evidence);
+    }
+
+    private Protocol.Response recoverHome(Protocol.Request request, long startedAt)
+            throws Exception {
+        SemanticSnapshot snapshot = snapshots.current();
+        String interruption = TikTokInterruptionSemantics.classify(snapshot);
+        if (TikTokInterruptionSemantics.VERIFICATION_REQUIRED.equals(interruption)) {
+            return Protocol.Response.error(
+                    request, "verification_required", "operator verification required");
+        }
+        if (!TikTokInterruptionSemantics.NONE.equals(interruption)
+                && !actuator.dismissOrdinaryInterruption(interruption)) {
+            return Protocol.Response.error(
+                    request, "interruption_dismiss_failed", "ordinary interruption remained");
+        }
+        if (!actuator.returnToHome()) {
+            return Protocol.Response.error(
+                    request, "home_recovery_failed", "home navigation unavailable");
+        }
+        SemanticSnapshot observed = snapshot;
+        for (int attempt = 0; attempt < 5; attempt++) {
+            observed = snapshots.awaitAfter(observed.eventSequence, 400L);
+            if (TikTokInterruptionSemantics.isHomeVisible(observed)) {
+                Map<String, Object> evidence = new LinkedHashMap<String, Object>();
+                evidence.put("interruption", interruption);
+                evidence.put("home_visible", true);
+                evidence.put("recovery_performed", true);
+                return success(request, startedAt, observed, evidence);
+            }
+        }
+        return Protocol.Response.error(
+                request, "home_recovery_failed", "home surface not verified");
     }
 
     private Protocol.Response browseHome(Protocol.Request request, long startedAt)

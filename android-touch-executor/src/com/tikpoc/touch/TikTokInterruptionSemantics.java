@@ -37,6 +37,18 @@ public final class TikTokInterruptionSemantics {
         return NONE;
     }
 
+    public static boolean isHomeVisible(SemanticSnapshot snapshot) {
+        boolean home = false;
+        boolean feed = false;
+        for (SemanticSnapshot.Node node : snapshot.nodes) {
+            if (!node.visible || !node.enabled || !node.bounds.hasArea()) continue;
+            String text = node.searchableText().trim().toLowerCase(Locale.ROOT);
+            if (text.equals("首页") || text.equals("home")) home = true;
+            if (text.equals("推荐") || text.equals("for you")) feed = true;
+        }
+        return home && feed;
+    }
+
     private static boolean containsAny(String value, String... phrases) {
         for (String phrase : phrases) {
             if (value.contains(phrase)) return true;
