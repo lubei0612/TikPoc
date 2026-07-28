@@ -25,6 +25,7 @@ public final class TouchCommandDispatcher {
         default boolean openCommentVideo(String videoId, String videoUrl) throws Exception {
             return false;
         }
+        default boolean openCommentThreadReadOnly() throws Exception { return false; }
         default boolean submitFirstLevelComment(String text) throws Exception { return false; }
     }
 
@@ -242,9 +243,20 @@ public final class TouchCommandDispatcher {
             Protocol.Request request, long startedAt) throws Exception {
         String publishText = requiredArgument(request, "publish_text");
         SemanticSnapshot snapshot = snapshots.current();
+        boolean visible = TikTokInterruptionSemantics.containsExactVisibleText(
+                snapshot, publishText);
+        if (!visible && actuator.openCommentThreadReadOnly()) {
+            for (int attempt = 0; attempt < 5; attempt++) {
+                snapshot = snapshots.awaitAfter(snapshot.eventSequence, 400L);
+                if (TikTokInterruptionSemantics.containsExactVisibleText(
+                        snapshot, publishText)) {
+                    visible = true;
+                    break;
+                }
+            }
+        }
         return submittedCommentEvidence(
-                request, startedAt, snapshot, publishText,
-                TikTokInterruptionSemantics.containsExactVisibleText(snapshot, publishText));
+                request, startedAt, snapshot, publishText, visible);
     }
 
     private Protocol.Response submittedCommentEvidence(

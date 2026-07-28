@@ -39,7 +39,8 @@ public final class CommentTaskExecutorTest {
         CommentTaskExecutor.Result result = executor.execute(task("comment_reconciling"));
 
         check(result.state.equals("uncertain"), "missing visible evidence stays uncertain");
-        check(ui.videoOpens == 0 && ui.submits == 0, "reconciliation is read only");
+        check(ui.videoOpens == 1 && ui.submits == 0,
+                "reconciliation reopens the exact video without submitting");
         check(ui.observations == 1, "one reconciliation observation");
     }
 

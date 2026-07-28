@@ -321,6 +321,21 @@ public final class TikPocAccessibilityService extends AccessibilityService
         }
     }
 
+    @Override
+    public boolean openCommentThreadReadOnly() {
+        AccessibilityNodeInfo root = waitForRoot(2_000L);
+        if (root == null) return false;
+        AccessibilityNodeInfo comments = null;
+        try {
+            comments = firstClickableByLabel(root, "comments", "评论");
+            return comments != null
+                    && comments.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+        } finally {
+            recycle(comments);
+            root.recycle();
+        }
+    }
+
     private AccessibilityNodeInfo firstEditable(long timeoutMs) {
         long deadline = SystemClock.elapsedRealtime() + timeoutMs;
         while (SystemClock.elapsedRealtime() < deadline) {

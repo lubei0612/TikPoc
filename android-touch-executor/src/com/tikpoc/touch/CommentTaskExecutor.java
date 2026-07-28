@@ -94,6 +94,8 @@ public final class CommentTaskExecutor {
     }
 
     private Result reconcile(Task task) throws Exception {
+        ui.openAndVerifyVideo(task.videoId, task.videoUrl,
+                task.creatorUsername, task.captionAnchor);
         if (!ui.observeSubmitted(task.publishText)) {
             return new Result("uncertain", "comment_reconciling", "visible_text_missing");
         }

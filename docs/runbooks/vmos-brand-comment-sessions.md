@@ -112,8 +112,11 @@ daily quota until reconciliation.
   active ADB forward.
 - One approved real-video canary reached exactly one submitted attempt and then
   `uncertain`; exact visible-comment evidence was not obtained. It remains
-  quota-counted and is not resubmitted. This is evidence for the uncertainty
-  path, not completion of the single-device promotion gate.
+  quota-counted and is not resubmitted. A continuation now reopens the exact
+  video, opens the comment thread read-only, records one reconciliation, and is
+  then removed from the claim queue even when evidence stays `uncertain`. This
+  is evidence for the uncertainty path, not completion of the single-device
+  promotion gate.
 
 Before promotion, run a fresh plan and require `visible_confirmed`, then complete
 the five-comment session and full 20-comment-day gates with zero duplicate

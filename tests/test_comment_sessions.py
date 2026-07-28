@@ -209,6 +209,13 @@ def test_uncertain_plan_is_returned_only_for_read_only_reconciliation(
     assert continuation.plan_id == plan.plan_id
     assert continuation.state == "uncertain"
 
+    sessions.record_reconciliation(plan.plan_id, "submit-1", visible=False)
+
+    assert (
+        sessions.claim_for_account("account-1", "worker", include_reconciliation=True)
+        is None
+    )
+
 
 def test_verification_recovery_requires_ack_and_stable_home_per_device(
     tmp_path: Path,

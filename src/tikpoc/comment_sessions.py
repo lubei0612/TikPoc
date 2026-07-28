@@ -303,7 +303,18 @@ class CommentSessionService:
                     "submitted",
                     "uncertain",
                 }:
-                    return self._plan(busy)
+                    unresolved = connection.execute(
+                        """
+                        SELECT 1 FROM comment_attempts
+                        WHERE plan_id = ?
+                          AND state IN ('submitted','uncertain')
+                          AND reconciled_at_ms IS NULL
+                        LIMIT 1
+                        """,
+                        (int(busy["plan_id"]),),
+                    ).fetchone()
+                    if unresolved is not None:
+                        return self._plan(busy)
                 return None
             used = connection.execute(
                 """

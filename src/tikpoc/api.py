@@ -659,9 +659,14 @@ def create_app(
                     )
                 visible = bool(body.evidence.get("visible_confirmed"))
                 state = "visible_confirmed" if visible else "uncertain"
-                comment_sessions.record_submission(
-                    plan_id, body.idempotency_key, state=state
-                )
+                if plan.state in {"submitted", "uncertain"}:
+                    comment_sessions.record_reconciliation(
+                        plan_id, body.idempotency_key, visible=visible
+                    )
+                else:
+                    comment_sessions.record_submission(
+                        plan_id, body.idempotency_key, state=state
+                    )
             except (TypeError, ValueError) as error:
                 return _json({"error": str(error)}, 409)
             return _json(

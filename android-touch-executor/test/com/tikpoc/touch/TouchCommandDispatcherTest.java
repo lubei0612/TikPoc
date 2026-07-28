@@ -182,12 +182,17 @@ public final class TouchCommandDispatcherTest {
 
     private static void submittedCommentObservationIsReadOnly() throws Exception {
         Fixture fixture = new Fixture();
-        fixture.source.snapshots = Collections.singletonList(submittedCommentSnapshot(1));
+        fixture.source.snapshots = Arrays.asList(
+                commentVideoSnapshot(1), submittedCommentSnapshot(2));
 
         Protocol.Response response = fixture.dispatcher.dispatch(
                 request("observe_submitted_comment", map("publish_text", "Original comment")));
 
         check(response.values.get("status").equals("ok"), "submitted text observed");
+        @SuppressWarnings("unchecked") Map<String, Object> evidence =
+                (Map<String, Object>) response.values.get("evidence");
+        check(evidence.get("visible_confirmed").equals(true),
+                "read-only observation opens the comment thread before checking text");
         check(fixture.actuator.commentSubmits == 0, "observation does not resubmit");
     }
 
@@ -498,6 +503,7 @@ public final class TouchCommandDispatcherTest {
         int homeRecoveries;
         int verificationBacks;
         int commentVideoOpens;
+        int commentThreadOpens;
         int commentSubmits;
         RuntimeException failure;
         String searchResult = "timeout";
@@ -545,6 +551,12 @@ public final class TouchCommandDispatcherTest {
         @Override
         public boolean openCommentVideo(String videoId, String videoUrl) {
             commentVideoOpens++;
+            return true;
+        }
+
+        @Override
+        public boolean openCommentThreadReadOnly() {
+            commentThreadOpens++;
             return true;
         }
 
