@@ -199,3 +199,13 @@ def test_vmos_client_toggles_online_adb_with_bounded_instance_list() -> None:
     assert client.set_online_adb("ACP250625501MXP", enabled=True) == "42"
     assert requests[0].path == "/vcpcloud/api/padApi/openOnlineAdb"
     assert requests[0].body == ('{"padCodes":["ACP250625501MXP"],"openStatus":1}')
+
+
+def test_vmos_client_accepts_synchronous_online_adb_success() -> None:
+    client = VmosCloudClient(
+        VmosCredentials("ACCESS", "SECRET"),
+        transport=lambda _request: json.dumps({"code": 200, "data": []}),
+        clock=lambda: 1784919000,
+    )
+
+    assert client.set_online_adb("ACP250625501MXP", enabled=True) is None
