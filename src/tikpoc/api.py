@@ -502,6 +502,10 @@ def create_app(
             return _json({"error": "invalid_mobile_token"}, 401)
         if session.session_epoch != body.session_epoch:
             return _json({"error": "stale_session"}, 409)
+        if body.phase == "stable_home" and not comment_sessions.complete_stable_home(
+            body.device_id, session.account_id
+        ):
+            return _json({"error": "recovery_not_acknowledged"}, 409)
         accepted = acquisition.record_mobile_heartbeat(
             body.device_id,
             body.session_epoch,
@@ -529,6 +533,8 @@ def create_app(
         if session.session_epoch != body.session_epoch:
             return _json({"error": "stale_session"}, 409)
         if body.task_kind == "brand_comment":
+            if comment_sessions.device_block(body.device_id) is not None:
+                return _json({"tasks": []})
             plan = comment_sessions.claim_for_account(
                 session.account_id,
                 f"mobile:{body.device_id}:{body.session_epoch}",
@@ -624,7 +630,20 @@ def create_app(
                 ):
                     return _json({"error": "comment_lease_mismatch"}, 409)
                 if body.evidence.get("error_code") == "verification_required":
-                    return _json({"accepted": True, "state": "verification_required"})
+                    comment_sessions.record_verification_required(
+                        body.device_id,
+                        session.account_id,
+                        plan_id,
+                        phase=body.phase,
+                        event_key=body.idempotency_key,
+                    )
+                    return _json(
+                        {
+                            "accepted": True,
+                            "state": "accepted",
+                            "comment_state": "verification_required",
+                        }
+                    )
                 visible = bool(body.evidence.get("visible_confirmed"))
                 state = "visible_confirmed" if visible else "uncertain"
                 comment_sessions.record_submission(
@@ -651,6 +670,37 @@ def create_app(
         if state == "stale_session":
             return _json({"error": state}, 409)
         return _json({"accepted": state == "accepted", "state": state})
+
+    @app.post("/api/comment-recovery/{device_id}/acknowledge")
+    async def comment_recovery_acknowledge(
+        device_id: str, request: Request
+    ) -> JSONResponse:
+        try:
+            payload = await _json_object(request)
+            command_id = str(payload.get("command_id", "")).strip()
+            if not command_id:
+                raise ValueError("command_id is required")
+            return _json(
+                comment_sessions.acknowledge_recovery(device_id, command_id=command_id)
+            )
+        except (TypeError, ValueError) as error:
+            return _json({"error": str(error)}, 409)
+
+    @app.get("/api/comment-metrics")
+    def comment_metrics(
+        account_id: str = Query(min_length=1, max_length=200),
+    ) -> JSONResponse:
+        metrics = comment_sessions.metrics(account_id)
+        funnel = database.lead_funnel_snapshot(account_ids=(account_id,))
+        metrics.update(
+            {
+                "profile_visits": 0,
+                "follows": int(funnel.get("followers", 0)),
+                "inbound_messages": int(funnel.get("engaged", 0)),
+                "qualified_leads": int(funnel.get("qualified", 0)),
+            }
+        )
+        return _json(metrics)
 
     @app.post("/api/browser-events")
     async def browser_event(request: Request) -> JSONResponse:

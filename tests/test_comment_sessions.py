@@ -194,3 +194,58 @@ def test_uncertain_plan_is_returned_only_for_read_only_reconciliation(
     assert continuation is not None
     assert continuation.plan_id == plan.plan_id
     assert continuation.state == "uncertain"
+
+
+def test_verification_recovery_requires_ack_and_stable_home_per_device(
+    tmp_path: Path,
+) -> None:
+    sessions = service(tmp_path)
+    sessions.record_verification_required(
+        "device-1", "account-1", 42, phase="comment_submitting"
+    )
+
+    assert sessions.complete_stable_home("device-1", "account-1") is False
+    acknowledged = sessions.acknowledge_recovery("device-1", command_id="recover-1")
+    replay = sessions.acknowledge_recovery("device-1", command_id="recover-1")
+
+    assert acknowledged == replay
+    assert sessions.device_block("device-1")["state"] == "recovery_requested"
+    assert sessions.device_block("device-2") is None
+    assert sessions.complete_stable_home("device-1", "account-1") is True
+    assert sessions.device_block("device-1") is None
+
+
+def test_metrics_retain_unresolved_quota_and_verification_counts(
+    tmp_path: Path,
+) -> None:
+    sessions = service(tmp_path)
+    sessions.save_persona("zoey", "account-1", "IKUN BAGS | ZOEY")
+    video = sessions.add_video("7523456789012345678")
+    draft = sessions.save_candidate(video.video_id, candidate())
+    plan = sessions.approve_plan("account-1", video.video_id, draft.candidate_id)
+    sessions.claim_for_account("account-1", "worker")
+    sessions.record_submission(plan.plan_id, "submit-1", state="uncertain")
+    sessions.record_observation(plan.plan_id, likes=3, replies=1)
+    sessions.record_verification_required(
+        "device-1",
+        "account-1",
+        plan.plan_id,
+        phase="comment_reconciling",
+        event_key="verify-1",
+    )
+    sessions.record_verification_required(
+        "device-1",
+        "account-1",
+        plan.plan_id,
+        phase="comment_reconciling",
+        event_key="verify-1",
+    )
+
+    metrics = sessions.metrics("account-1")
+
+    assert metrics["planned"] == 1
+    assert metrics["submitted"] == 1
+    assert metrics["uncertain"] == 1
+    assert metrics["verification_required"] == 1
+    assert metrics["observed_likes"] == 3
+    assert metrics["observed_replies"] == 1

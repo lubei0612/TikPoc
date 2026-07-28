@@ -174,6 +174,14 @@ def _parser() -> argparse.ArgumentParser:
     comment_plan_status = commands.add_parser("comment-plan-status")
     comment_plan_status.add_argument("--db", type=Path, required=True)
     comment_plan_status.add_argument("--json", action="store_true", dest="json_output")
+    comment_recovery = commands.add_parser("comment-recovery-ack")
+    comment_recovery.add_argument("--db", type=Path, required=True)
+    comment_recovery.add_argument("--device-id", required=True)
+    comment_recovery.add_argument("--command-id", required=True)
+    comment_metrics = commands.add_parser("comment-metrics")
+    comment_metrics.add_argument("--db", type=Path, required=True)
+    comment_metrics.add_argument("--account-id", required=True)
+    comment_metrics.add_argument("--json", action="store_true", dest="json_output")
     for command_name in ("serve", "dashboard"):
         serve = commands.add_parser(command_name)
         serve.add_argument("--db", type=Path, required=True)
@@ -274,6 +282,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "account_id": plan.account_id,
                     "state": plan.state,
                 }
+            elif args.command == "comment-recovery-ack":
+                payload = service.acknowledge_recovery(
+                    args.device_id, command_id=args.command_id
+                )
+            elif args.command == "comment-metrics":
+                payload = service.metrics(args.account_id)
             else:
                 payload = service.list_plans()
         except (KeyError, OSError, ValueError) as error:

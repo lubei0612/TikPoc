@@ -22,6 +22,16 @@ public final class AutonomousTaskRunner {
         void afterTarget(long completedTargets) throws Exception;
     }
 
+    public static final class VerificationRequired extends Exception {
+        public final DeviceTaskStore.Result result;
+
+        public VerificationRequired(DeviceTaskStore.Result result) {
+            super("verification_required");
+            if (result == null) throw new IllegalArgumentException("result required");
+            this.result = result;
+        }
+    }
+
     public enum State { HEALTHY, DEGRADED, PAUSED }
 
     private final Client client;
@@ -92,6 +102,16 @@ public final class AutonomousTaskRunner {
                     ? ACTIVE_DELAY_MS : IDLE_DELAY_MS;
             consecutiveFailures = 0;
             state = State.HEALTHY;
+        } catch (VerificationRequired error) {
+            store.enqueueResult(error.result);
+            try {
+                flushResults();
+            } catch (Exception uploadDeferred) {
+                // The durable outbox retains the receipt for the next service start.
+            }
+            recommendedDelayMs = IDLE_DELAY_MS;
+            state = State.PAUSED;
+            return state;
         } catch (AccessibilityUiAdapter.UiException error) {
             if ("verification_required".equals(error.code)) {
                 recommendedDelayMs = IDLE_DELAY_MS;

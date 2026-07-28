@@ -396,6 +396,190 @@ class CommentSessionService:
                 (plan_id, max(0, likes), max(0, replies), self.clock_ms()),
             )
 
+    def record_verification_required(
+        self,
+        device_id: str,
+        account_id: str,
+        plan_id: int,
+        *,
+        phase: str,
+        event_key: str | None = None,
+    ) -> None:
+        now_ms = self.clock_ms()
+        values = (str(device_id).strip(), str(account_id).strip(), int(plan_id), phase)
+        if not all((values[0], values[1], values[3])) or values[2] <= 0:
+            raise ValueError("invalid_verification_event")
+        with self.repository._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                INSERT INTO comment_device_blocks(
+                    device_id, account_id, plan_id, phase, state,
+                    blocked_at_ms, acknowledged_at_ms
+                ) VALUES (?, ?, ?, ?, 'verification_required', ?, NULL)
+                ON CONFLICT(device_id) DO UPDATE SET
+                    account_id = excluded.account_id,
+                    plan_id = excluded.plan_id,
+                    phase = excluded.phase,
+                    state = 'verification_required',
+                    command_id = NULL,
+                    blocked_at_ms = excluded.blocked_at_ms,
+                    acknowledged_at_ms = NULL
+                """,
+                (*values, now_ms),
+            )
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO comment_recovery_events(
+                    device_id, account_id, plan_id, phase, event_type,
+                    command_id, occurred_at_ms
+                ) VALUES (?, ?, ?, ?, 'verification_required', ?, ?)
+                """,
+                (*values, event_key, now_ms),
+            )
+
+    def acknowledge_recovery(
+        self, device_id: str, *, command_id: str
+    ) -> dict[str, object]:
+        device_id = str(device_id).strip()
+        command_id = str(command_id).strip()
+        if not device_id or not command_id:
+            raise ValueError("recovery identifiers are required")
+        with self.repository._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            replay = connection.execute(
+                """
+                SELECT * FROM comment_recovery_events
+                WHERE command_id = ? AND event_type = 'recovery_acknowledged'
+                """,
+                (command_id,),
+            ).fetchone()
+            if replay is not None:
+                return _recovery_payload(replay, "recovery_requested")
+            block = connection.execute(
+                "SELECT * FROM comment_device_blocks WHERE device_id = ?",
+                (device_id,),
+            ).fetchone()
+            if block is None:
+                raise ValueError("verification_block_not_found")
+            now_ms = self.clock_ms()
+            connection.execute(
+                """
+                UPDATE comment_device_blocks
+                SET state = 'recovery_requested', command_id = ?, acknowledged_at_ms = ?
+                WHERE device_id = ?
+                """,
+                (command_id, now_ms, device_id),
+            )
+            connection.execute(
+                """
+                INSERT INTO comment_recovery_events(
+                    device_id, account_id, plan_id, phase, event_type,
+                    command_id, occurred_at_ms
+                ) VALUES (?, ?, ?, ?, 'recovery_acknowledged', ?, ?)
+                """,
+                (
+                    device_id,
+                    str(block["account_id"]),
+                    int(block["plan_id"]),
+                    str(block["phase"]),
+                    command_id,
+                    now_ms,
+                ),
+            )
+            event = connection.execute(
+                "SELECT * FROM comment_recovery_events WHERE command_id = ?",
+                (command_id,),
+            ).fetchone()
+        return _recovery_payload(event, "recovery_requested")
+
+    def complete_stable_home(self, device_id: str, account_id: str) -> bool:
+        with self.repository._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            block = connection.execute(
+                """
+                SELECT * FROM comment_device_blocks
+                WHERE device_id = ? AND account_id = ?
+                  AND state = 'recovery_requested'
+                """,
+                (device_id, account_id),
+            ).fetchone()
+            if block is None:
+                return self.device_block(device_id) is None
+            now_ms = self.clock_ms()
+            connection.execute(
+                """
+                INSERT INTO comment_recovery_events(
+                    device_id, account_id, plan_id, phase, event_type, occurred_at_ms
+                ) VALUES (?, ?, ?, ?, 'stable_home', ?)
+                """,
+                (
+                    device_id,
+                    account_id,
+                    int(block["plan_id"]),
+                    str(block["phase"]),
+                    now_ms,
+                ),
+            )
+            connection.execute(
+                "DELETE FROM comment_device_blocks WHERE device_id = ?", (device_id,)
+            )
+        return True
+
+    def device_block(self, device_id: str) -> dict[str, object] | None:
+        with self.repository._connect_read_only() as connection:
+            row = connection.execute(
+                "SELECT * FROM comment_device_blocks WHERE device_id = ?", (device_id,)
+            ).fetchone()
+        return None if row is None else dict(row)
+
+    def metrics(self, account_id: str) -> dict[str, int]:
+        with self.repository._connect_read_only() as connection:
+            plan = connection.execute(
+                """
+                SELECT COUNT(*) AS planned,
+                       SUM(CASE WHEN state = 'visible_confirmed' THEN 1 ELSE 0 END)
+                         AS visible_confirmed,
+                       SUM(CASE WHEN state = 'uncertain' THEN 1 ELSE 0 END) AS uncertain
+                FROM comment_plans WHERE account_id = ?
+                """,
+                (account_id,),
+            ).fetchone()
+            submitted = connection.execute(
+                """
+                SELECT COUNT(*) AS count FROM comment_attempts AS attempt
+                JOIN comment_plans AS plan ON plan.plan_id = attempt.plan_id
+                WHERE plan.account_id = ?
+                """,
+                (account_id,),
+            ).fetchone()
+            observations = connection.execute(
+                """
+                SELECT COALESCE(SUM(observation.likes), 0) AS likes,
+                       COALESCE(SUM(observation.replies), 0) AS replies
+                FROM comment_observations AS observation
+                JOIN comment_plans AS plan ON plan.plan_id = observation.plan_id
+                WHERE plan.account_id = ?
+                """,
+                (account_id,),
+            ).fetchone()
+            verification = connection.execute(
+                """
+                SELECT COUNT(*) AS count FROM comment_recovery_events
+                WHERE account_id = ? AND event_type = 'verification_required'
+                """,
+                (account_id,),
+            ).fetchone()
+        return {
+            "planned": int(plan["planned"] or 0),
+            "submitted": int(submitted["count"] or 0),
+            "visible_confirmed": int(plan["visible_confirmed"] or 0),
+            "uncertain": int(plan["uncertain"] or 0),
+            "verification_required": int(verification["count"] or 0),
+            "observed_likes": int(observations["likes"] or 0),
+            "observed_replies": int(observations["replies"] or 0),
+        }
+
     def attempt_count(self, plan_id: int) -> int:
         return self._count("comment_attempts", plan_id)
 
@@ -428,3 +612,13 @@ def _local_day_bounds(now_ms: int) -> tuple[int, int]:
     start = current.replace(hour=0, minute=0, second=0, microsecond=0)
     end = start + timedelta(days=1)
     return int(start.timestamp() * 1000), int(end.timestamp() * 1000)
+
+
+def _recovery_payload(row: sqlite3.Row, state: str) -> dict[str, object]:
+    return {
+        "device_id": str(row["device_id"]),
+        "account_id": str(row["account_id"]),
+        "plan_id": int(row["plan_id"]),
+        "state": state,
+        "command_id": str(row["command_id"]),
+    }

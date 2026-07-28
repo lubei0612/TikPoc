@@ -97,7 +97,11 @@ def test_mobile_claims_immutable_brand_comment_and_verification_preserves_it(
         },
         headers=headers,
     )
-    assert blocked.json() == {"accepted": True, "state": "verification_required"}
+    assert blocked.json() == {
+        "accepted": True,
+        "state": "accepted",
+        "comment_state": "verification_required",
+    }
     replay_pull = api.post(
         "/api/mobile/pull",
         json={
@@ -109,6 +113,26 @@ def test_mobile_claims_immutable_brand_comment_and_verification_preserves_it(
         headers=headers,
     )
     assert replay_pull.json()["tasks"] == []
+    stable_home = {
+        "device_id": "device-1",
+        "session_epoch": 1,
+        "app_version": "1.0.0",
+        "phase": "stable_home",
+        "queue_depth": 1,
+        "client_timestamp_ms": 12_000,
+    }
+    assert (
+        api.post("/api/mobile/heartbeat", json=stable_home, headers=headers).status_code
+        == 409
+    )
+    api.post(
+        "/api/comment-recovery/device-1/acknowledge",
+        json={"command_id": "recover-1"},
+    )
+    assert (
+        api.post("/api/mobile/heartbeat", json=stable_home, headers=headers).status_code
+        == 200
+    )
     completed = api.post(
         "/api/mobile/results",
         json={

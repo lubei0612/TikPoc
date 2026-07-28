@@ -71,7 +71,13 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
         Map<String, Object> decoded = Protocol.decodeObject(task.payload);
         if ("brand_comment".equals(decoded.get("task_kind"))) {
             if (commentExecutor == null) throw new IllegalStateException("comment executor missing");
-            return executeComment(task, decoded);
+            try {
+                return executeComment(task, decoded);
+            } catch (AccessibilityUiAdapter.UiException error) {
+                if (!"verification_required".equals(error.code)) throw error;
+                throw new AutonomousTaskRunner.VerificationRequired(
+                        verificationResult(task, decoded));
+            }
         }
         String phase = "profile_opening";
         Map<String, Object> target = null;
@@ -147,6 +153,21 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
         } catch (Exception error) {
             return result(task, "deferred", phase, "executor_error");
         }
+    }
+
+    private DeviceTaskStore.Result verificationResult(
+            DeviceTaskStore.Task task, Map<String, Object> payload) throws Exception {
+        Map<String, Object> encoded = new LinkedHashMap<String, Object>();
+        encoded.put("lease_id", task.leaseId);
+        encoded.put("state", "deferred");
+        encoded.put("phase", task.phase);
+        Map<String, Object> evidence = new LinkedHashMap<String, Object>();
+        evidence.put("error_code", "verification_required");
+        evidence.put("plan_id", payload.get("plan_id"));
+        encoded.put("evidence", evidence);
+        return new DeviceTaskStore.Result(
+                task.taskId + ":" + task.leaseId + ":verification_required",
+                task.taskId, Protocol.encodeObject(encoded));
     }
 
     private DeviceTaskStore.Result executeComment(

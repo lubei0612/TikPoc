@@ -148,6 +148,51 @@ def test_comment_cli_intake_approval_and_redacted_json_status(
     assert "english" not in status[0] and "chinese" not in status[0]
 
 
+def test_comment_recovery_cli_acknowledges_and_reports_metrics(
+    tmp_path: Path, capsys
+) -> None:
+    from tikpoc.comment_sessions import CommentSessionService
+
+    database = tmp_path / "comments.db"
+    repository = AcquisitionRepository(database)
+    repository.migrate()
+    sessions = CommentSessionService(repository, clock_ms=lambda: 12_000)
+    sessions.record_verification_required(
+        "device-1", "account-1", 42, phase="comment_submitting"
+    )
+
+    assert (
+        main(
+            [
+                "comment-recovery-ack",
+                "--db",
+                str(database),
+                "--device-id",
+                "device-1",
+                "--command-id",
+                "recover-1",
+            ]
+        )
+        == 0
+    )
+    acknowledged = json.loads(capsys.readouterr().out)
+    assert acknowledged["state"] == "recovery_requested"
+    assert (
+        main(
+            [
+                "comment-metrics",
+                "--db",
+                str(database),
+                "--account-id",
+                "account-1",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["verification_required"] == 1
+
+
 def test_cli_helper_health_prints_only_redacted_status(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:

@@ -127,6 +127,7 @@ class MobileHeartbeatRequest(ApiRequest):
         "comment_submitting",
         "comment_reconciling",
         "verification_required",
+        "stable_home",
         "completed",
         "deferred",
         "skipped",

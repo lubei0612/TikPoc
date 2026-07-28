@@ -712,7 +712,9 @@ class AcquisitionRepository:
                 for row in connection.execute("PRAGMA table_info(comment_plans)")
             }
             if "command_id" not in comment_plan_columns:
-                connection.execute("ALTER TABLE comment_plans ADD COLUMN command_id TEXT")
+                connection.execute(
+                    "ALTER TABLE comment_plans ADD COLUMN command_id TEXT"
+                )
             connection.execute(
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_comment_plan_command
@@ -750,6 +752,38 @@ class AcquisitionRepository:
                     replies INTEGER NOT NULL CHECK(replies >= 0),
                     observed_at_ms INTEGER NOT NULL,
                     FOREIGN KEY(plan_id) REFERENCES comment_plans(plan_id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS comment_device_blocks (
+                    device_id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL,
+                    plan_id INTEGER NOT NULL,
+                    phase TEXT NOT NULL,
+                    state TEXT NOT NULL CHECK(
+                        state IN ('verification_required','recovery_requested')
+                    ),
+                    command_id TEXT UNIQUE,
+                    blocked_at_ms INTEGER NOT NULL,
+                    acknowledged_at_ms INTEGER
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS comment_recovery_events (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    device_id TEXT NOT NULL,
+                    account_id TEXT NOT NULL,
+                    plan_id INTEGER NOT NULL,
+                    phase TEXT NOT NULL,
+                    event_type TEXT NOT NULL CHECK(event_type IN (
+                        'verification_required','recovery_acknowledged','stable_home'
+                    )),
+                    command_id TEXT UNIQUE,
+                    occurred_at_ms INTEGER NOT NULL
                 )
                 """
             )

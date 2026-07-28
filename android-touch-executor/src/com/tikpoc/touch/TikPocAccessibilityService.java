@@ -104,6 +104,18 @@ public final class TikPocAccessibilityService extends AccessibilityService
             AutonomousTaskRunner runner = new AutonomousTaskRunner(
                     client, store, settings.roundId, settings.sessionEpoch, executor);
             autonomousThread = new Thread(() -> {
+                if ("brand_comment".equals(settings.roundId)) {
+                    try {
+                        ui.recoverHome();
+                        client.heartbeat(
+                                "1.0.0", "stable_home",
+                                store.queueDepth(
+                                        settings.sessionEpoch, System.currentTimeMillis()),
+                                System.currentTimeMillis());
+                    } catch (Exception recoveryBlocked) {
+                        return;
+                    }
+                }
                 while (!Thread.currentThread().isInterrupted()) {
                     AutonomousTaskRunner.State state = runner.runOnce(System.currentTimeMillis());
                     if (state == AutonomousTaskRunner.State.PAUSED) return;

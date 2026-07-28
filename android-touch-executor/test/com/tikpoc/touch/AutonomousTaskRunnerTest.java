@@ -12,7 +12,29 @@ public final class AutonomousTaskRunnerTest {
         heartbeatDoesNotConsumeControlPlanePerTarget();
         transientFailuresRemainDegradedAndRecover();
         verificationPausesClaimsAndPreservesCurrentTask();
+        verificationReceiptUploadsWithoutRemovingTask();
         System.out.println("AutonomousTaskRunnerTest PASS");
+    }
+
+    private static void verificationReceiptUploadsWithoutRemovingTask() throws Exception {
+        DeviceTaskStore store = new DeviceTaskStore(new DeviceTaskStore.MemoryBackend());
+        DeviceTaskStore.Task task = new DeviceTaskStore.Task(
+                "comment:42", "comment:42:7", 7L, 9_000L, "comment_submitting", "{}");
+        store.enqueue(task);
+        FakeClient client = new FakeClient();
+        DeviceTaskStore.Result receipt = new DeviceTaskStore.Result(
+                "verify-1", task.taskId,
+                "{\"lease_id\":\"comment:42:7\",\"state\":\"deferred\","
+                + "\"phase\":\"comment_submitting\","
+                + "\"evidence\":{\"error_code\":\"verification_required\"}}");
+        AutonomousTaskRunner runner = new AutonomousTaskRunner(
+                client, store, "brand_comment", 7L,
+                ignored -> { throw new AutonomousTaskRunner.VerificationRequired(receipt); });
+
+        check(runner.runOnce(1_000L) == AutonomousTaskRunner.State.PAUSED,
+                "verification receipt pauses worker");
+        check(client.uploads == 1, "verification receipt uploaded once");
+        check(store.next(7L, 1_000L) != null, "verification task remains queued");
     }
 
     private static void verificationPausesClaimsAndPreservesCurrentTask() throws Exception {

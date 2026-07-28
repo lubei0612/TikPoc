@@ -69,6 +69,34 @@ def test_comment_operator_intake_review_and_redacted_status(tmp_path: Path) -> N
     assert "english" not in status[0] and "chinese" not in status[0]
 
 
+def test_comment_recovery_ack_is_replay_safe_and_metrics_are_account_scoped(
+    tmp_path: Path,
+) -> None:
+    api = TestClient(create_app(tmp_path / "comments.db", clock=lambda: 12.0))
+    sessions = api.app.state.comment_sessions
+    sessions.record_verification_required(
+        "device-1", "account-1", 42, phase="comment_submitting"
+    )
+
+    first = api.post(
+        "/api/comment-recovery/device-1/acknowledge",
+        json={"command_id": "recover-1"},
+    )
+    replay = api.post(
+        "/api/comment-recovery/device-1/acknowledge",
+        json={"command_id": "recover-1"},
+    )
+
+    assert first.status_code == 200
+    assert replay.json() == first.json()
+    metrics = api.get("/api/comment-metrics", params={"account_id": "account-1"})
+    assert metrics.json()["verification_required"] == 1
+    assert metrics.json()["profile_visits"] == 0
+    assert metrics.json()["follows"] == 0
+    assert metrics.json()["inbound_messages"] == 0
+    assert metrics.json()["qualified_leads"] == 0
+
+
 def _target(index: int) -> Target:
     return Target(
         target_id=f"user-{index}",
