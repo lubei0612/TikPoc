@@ -8,9 +8,31 @@ public final class DeviceApiClientTest {
         requiresHttpsBaseUrl();
         pullsTypedTasksWithBearerAuthentication();
         preservesSearchNavigationModeInDurablePayload();
+        pullsBrandCommentTasksWithoutRoundBinding();
         postsHeartbeatAndIdempotentResult();
         redactsTokenFromTransportErrors();
         System.out.println("DeviceApiClientTest PASS");
+    }
+
+    private static void pullsBrandCommentTasksWithoutRoundBinding() throws Exception {
+        RecordingExchange exchange = new RecordingExchange();
+        exchange.response = new DeviceApiClient.HttpResponse(200,
+                "{\"tasks\":[{\"task_kind\":\"brand_comment\","
+                + "\"task_id\":\"comment:42\",\"lease_id\":\"comment:42:7\","
+                + "\"session_epoch\":7,\"lease_expires_at_ms\":9000,"
+                + "\"phase\":\"video_opening\",\"plan_id\":42,"
+                + "\"video_id\":\"7523456789012345678\","
+                + "\"video_url\":\"https://www.tiktok.com/@bag/video/7523456789012345678\","
+                + "\"publish_text\":\"Original comment\"}]}" );
+        DeviceApiClient client = new DeviceApiClient(
+                "https://api.example.test", "device-1", "secret", 7L, exchange);
+
+        DeviceTaskStore.Task task = client.pull("brand_comment", 1).get(0);
+
+        check(task.taskId.equals("comment:42"), "comment task decoded");
+        check(exchange.body.contains("\"task_kind\":\"brand_comment\""),
+                "comment task kind requested");
+        check(!exchange.body.contains("round_id"), "comment pull is not round bound");
     }
 
     private static void preservesSearchNavigationModeInDurablePayload() throws Exception {

@@ -82,6 +82,7 @@ def test_mobile_claims_immutable_brand_comment_and_verification_preserves_it(
     assert task["video_id"] == video.video_id
     assert task["video_url"].startswith("https://www.tiktok.com/")
     assert task["publish_text"].startswith("That structured")
+    assert task["lease_expires_at_ms"] == 132_000
     blocked = api.post(
         "/api/mobile/results",
         json={
@@ -108,6 +109,25 @@ def test_mobile_claims_immutable_brand_comment_and_verification_preserves_it(
         headers=headers,
     )
     assert replay_pull.json()["tasks"] == []
+    completed = api.post(
+        "/api/mobile/results",
+        json={
+            "device_id": "device-1",
+            "session_epoch": 1,
+            "task_id": task["task_id"],
+            "lease_id": task["lease_id"],
+            "idempotency_key": "comment-result-1",
+            "state": "completed",
+            "phase": "comment_reconciling",
+            "evidence": {"visible_confirmed": True},
+        },
+        headers=headers,
+    )
+    assert completed.json() == {
+        "accepted": True,
+        "state": "accepted",
+        "comment_state": "visible_confirmed",
+    }
 
 
 def test_mobile_heartbeat_authenticates_device_and_epoch(tmp_path: Path) -> None:

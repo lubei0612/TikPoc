@@ -16,12 +16,14 @@ public final class Protocol {
     private static final List<String> COMMANDS = Collections.unmodifiableList(Arrays.asList(
             "health", "open_profile", "open_profile_search", "observe_profile", "open_video",
             "observe_action", "apply_action", "browse_home", "observe_interruption",
-            "recover_home", "diagnostics"));
+            "recover_home", "open_comment_video", "observe_comment_video",
+            "submit_first_level_comment", "observe_submitted_comment", "diagnostics"));
     private static final List<String> PHASES = Collections.unmodifiableList(Arrays.asList(
             "pending", "profile_opening", "identity_confirmed", "waiting_snapshot",
             "video_opening", "video_confirmed", "quota_reserved", "action_executing",
             "action_reconciling", "session_pacing", "session_recovery", "completed",
-            "deferred", "skipped"));
+            "video_verified", "comment_submitting", "comment_reconciling", "deferred",
+            "skipped"));
 
     private Protocol() {}
 

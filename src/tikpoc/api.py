@@ -530,7 +530,9 @@ def create_app(
             return _json({"error": "stale_session"}, 409)
         if body.task_kind == "brand_comment":
             plan = comment_sessions.claim_for_account(
-                session.account_id, f"mobile:{body.device_id}:{body.session_epoch}"
+                session.account_id,
+                f"mobile:{body.device_id}:{body.session_epoch}",
+                include_reconciliation=True,
             )
             if plan is None:
                 return _json({"tasks": []})
@@ -547,7 +549,12 @@ def create_app(
                             "account_id": session.account_id,
                             "session_epoch": body.session_epoch,
                             "lease_id": f"comment:{plan.plan_id}:{body.session_epoch}",
-                            "phase": "video_opening",
+                            "lease_expires_at_ms": int(clock() * 1_000) + 120_000,
+                            "phase": (
+                                "comment_reconciling"
+                                if plan.state in {"submitted", "uncertain"}
+                                else "video_opening"
+                            ),
                             "video_id": plan.video_id,
                             "video_url": video.source_url,
                             "publish_text": plan.english,
@@ -625,7 +632,9 @@ def create_app(
                 )
             except (TypeError, ValueError) as error:
                 return _json({"error": str(error)}, 409)
-            return _json({"accepted": True, "state": state})
+            return _json(
+                {"accepted": True, "state": "accepted", "comment_state": state}
+            )
         state = acquisition.record_mobile_result(
             MobileTaskResult(
                 device_id=body.device_id,

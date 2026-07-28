@@ -14,6 +14,9 @@ public final class TouchCommandDispatcherTest {
         verificationBlocksHomeRecovery();
         ordinaryDialogRecoversOnceToHome();
         failedHomeRecoveryIsBounded();
+        opensCanonicalCommentVideoAndVerifiesIdentity();
+        submitsFirstLevelCommentOnceAndVerifiesVisibleText();
+        submittedCommentObservationIsReadOnly();
         opensOnePostAndVerifiesVideoControls();
         waitsForVideoEventBeforeVerifyingControls();
         returnsBoundedErrorWhenVideoHandleIsMissing();
@@ -114,6 +117,42 @@ public final class TouchCommandDispatcherTest {
         check(fixture.actuator.dismissals == 0, "no ordinary interruption dismissal");
         check(fixture.actuator.homeRecoveries == 1, "home activated only once");
         check(fixture.source.index == 6, "home verification capped at five checks");
+    }
+
+    private static void opensCanonicalCommentVideoAndVerifiesIdentity() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.source.snapshots = Arrays.asList(
+                actionSnapshot(false, 1), commentVideoSnapshot(2));
+
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("open_comment_video", map("video_id", "7523456789012345678")));
+
+        check(response.values.get("status").equals("ok"), "comment video verified");
+        check(fixture.actuator.commentVideoOpens == 1, "comment video opened once");
+    }
+
+    private static void submitsFirstLevelCommentOnceAndVerifiesVisibleText()
+            throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.source.snapshots = Arrays.asList(
+                commentVideoSnapshot(1), submittedCommentSnapshot(2));
+
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("submit_first_level_comment", map("publish_text", "Original comment")));
+
+        check(response.values.get("status").equals("ok"), "comment visibly confirmed");
+        check(fixture.actuator.commentSubmits == 1, "comment submitted exactly once");
+    }
+
+    private static void submittedCommentObservationIsReadOnly() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.source.snapshots = Collections.singletonList(submittedCommentSnapshot(1));
+
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("observe_submitted_comment", map("publish_text", "Original comment")));
+
+        check(response.values.get("status").equals("ok"), "submitted text observed");
+        check(fixture.actuator.commentSubmits == 0, "observation does not resubmit");
     }
 
     private static void searchRequiresExactProfileEvidence() throws Exception {
@@ -421,6 +460,8 @@ public final class TouchCommandDispatcherTest {
         int homeBrowses;
         int dismissals;
         int homeRecoveries;
+        int commentVideoOpens;
+        int commentSubmits;
         RuntimeException failure;
         String searchResult = "timeout";
 
@@ -455,6 +496,18 @@ public final class TouchCommandDispatcherTest {
         @Override
         public boolean returnToHome() {
             homeRecoveries++;
+            return true;
+        }
+
+        @Override
+        public boolean openCommentVideo(String videoId, String videoUrl) {
+            commentVideoOpens++;
+            return true;
+        }
+
+        @Override
+        public boolean submitFirstLevelComment(String text) {
+            commentSubmits++;
             return true;
         }
     }
@@ -527,6 +580,17 @@ public final class TouchCommandDispatcherTest {
         return controlsSnapshot(sequence, label("home", "首页"), label("feed", "推荐"));
     }
 
+    private static SemanticSnapshot commentVideoSnapshot(long sequence) {
+        return controlsSnapshot(
+                sequence,
+                label("video_id", "7523456789012345678"),
+                control("like_button", "Like"));
+    }
+
+    private static SemanticSnapshot submittedCommentSnapshot(long sequence) {
+        return controlsSnapshot(sequence, label("comment_text", "Original comment"));
+    }
+
     private static SemanticSnapshot profileSnapshot() {
         return profileSnapshot(2L);
     }
@@ -573,6 +637,14 @@ public final class TouchCommandDispatcherTest {
         if (arguments.containsKey("expected_username")
                 && !arguments.containsKey("route")) {
             argumentsJson = "{\"expected_username\":\"target_user\"}";
+        }
+        if (arguments.containsKey("video_id")) {
+            argumentsJson = "{\"video_id\":\"7523456789012345678\","
+                    + "\"video_url\":\"https://www.tiktok.com/@bag/video/"
+                    + "7523456789012345678\"}";
+        }
+        if (arguments.containsKey("publish_text")) {
+            argumentsJson = "{\"publish_text\":\"Original comment\"}";
         }
         return Protocol.parseRequest(
                 "{\"version\":1,\"command_id\":\"cmd-" + command + "\","

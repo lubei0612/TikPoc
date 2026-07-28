@@ -174,3 +174,23 @@ def test_submission_idempotency_key_cannot_move_to_another_plan(tmp_path: Path) 
         sessions.record_submission(plans[1].plan_id, "submit-1", state="uncertain")
 
     assert sessions.plan(plans[1].plan_id).state == "approved"
+
+
+def test_uncertain_plan_is_returned_only_for_read_only_reconciliation(
+    tmp_path: Path,
+) -> None:
+    sessions = service(tmp_path)
+    sessions.save_persona("zoey", "account-1", "IKUN BAGS | ZOEY")
+    video = sessions.add_video("7523456789012345678")
+    draft = sessions.save_candidate(video.video_id, candidate())
+    plan = sessions.approve_plan("account-1", video.video_id, draft.candidate_id)
+    sessions.claim_for_account("account-1", "worker")
+    sessions.record_submission(plan.plan_id, "submit-1", state="uncertain")
+
+    continuation = sessions.claim_for_account(
+        "account-1", "worker", include_reconciliation=True
+    )
+
+    assert continuation is not None
+    assert continuation.plan_id == plan.plan_id
+    assert continuation.state == "uncertain"

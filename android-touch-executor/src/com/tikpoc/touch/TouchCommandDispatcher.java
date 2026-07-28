@@ -21,6 +21,10 @@ public final class TouchCommandDispatcher {
             return false;
         }
         default boolean returnToHome() throws Exception { return false; }
+        default boolean openCommentVideo(String videoId, String videoUrl) throws Exception {
+            return false;
+        }
+        default boolean submitFirstLevelComment(String text) throws Exception { return false; }
     }
 
     public interface Clock {
@@ -67,6 +71,18 @@ public final class TouchCommandDispatcher {
             return observeInterruption(request, startedAt);
         }
         if (request.command.equals("recover_home")) return recoverHome(request, startedAt);
+        if (request.command.equals("open_comment_video")) {
+            return openCommentVideo(request, startedAt);
+        }
+        if (request.command.equals("observe_comment_video")) {
+            return observeCommentVideo(request, startedAt);
+        }
+        if (request.command.equals("submit_first_level_comment")) {
+            return submitFirstLevelComment(request, startedAt);
+        }
+        if (request.command.equals("observe_submitted_comment")) {
+            return observeSubmittedComment(request, startedAt);
+        }
         if (request.command.equals("apply_action")) return applyAction(request, startedAt);
         if (request.command.equals("observe_action")) return observeAction(request, startedAt);
         if (request.command.equals("observe_profile")) return observeProfile(request, startedAt);
@@ -116,6 +132,97 @@ public final class TouchCommandDispatcher {
         }
         return Protocol.Response.error(
                 request, "home_recovery_failed", "home surface not verified");
+    }
+
+    private Protocol.Response openCommentVideo(Protocol.Request request, long startedAt)
+            throws Exception {
+        String videoId = requiredArgument(request, "video_id");
+        String videoUrl = requiredArgument(request, "video_url");
+        SemanticSnapshot before = snapshots.current();
+        if (!actuator.openCommentVideo(videoId, videoUrl)) {
+            return Protocol.Response.error(request, "video_open_rejected", "route rejected");
+        }
+        SemanticSnapshot observed = before;
+        for (int attempt = 0; attempt < 10; attempt++) {
+            observed = snapshots.awaitAfter(observed.eventSequence, 400L);
+            if (TikTokSemantics.hasVideoControls(observed)
+                    && TikTokInterruptionSemantics.containsExactVisibleText(
+                            observed, videoId)) {
+                return commentVideoEvidence(request, startedAt, observed, videoId);
+            }
+        }
+        return Protocol.Response.error(
+                request, "comment_video_not_verified", "exact video evidence unavailable");
+    }
+
+    private Protocol.Response observeCommentVideo(Protocol.Request request, long startedAt)
+            throws Exception {
+        String videoId = requiredArgument(request, "video_id");
+        SemanticSnapshot snapshot = snapshots.current();
+        if (!TikTokSemantics.hasVideoControls(snapshot)
+                || !TikTokInterruptionSemantics.containsExactVisibleText(snapshot, videoId)) {
+            return Protocol.Response.error(
+                    request, "comment_video_not_verified", "exact video evidence unavailable");
+        }
+        return commentVideoEvidence(request, startedAt, snapshot, videoId);
+    }
+
+    private Protocol.Response commentVideoEvidence(
+            Protocol.Request request, long startedAt, SemanticSnapshot snapshot,
+            String videoId) {
+        Map<String, Object> evidence = new LinkedHashMap<String, Object>();
+        evidence.put("video_id", videoId);
+        evidence.put("exact_video_visible", true);
+        return success(request, startedAt, snapshot, evidence);
+    }
+
+    private Protocol.Response submitFirstLevelComment(
+            Protocol.Request request, long startedAt) throws Exception {
+        String publishText = requiredArgument(request, "publish_text");
+        SemanticSnapshot before = snapshots.current();
+        if (TikTokInterruptionSemantics.VERIFICATION_REQUIRED.equals(
+                TikTokInterruptionSemantics.classify(before))) {
+            return Protocol.Response.error(
+                    request, "verification_required", "operator verification required");
+        }
+        if (!actuator.submitFirstLevelComment(publishText)) {
+            return Protocol.Response.error(request, "comment_submit_rejected", "submit rejected");
+        }
+        SemanticSnapshot observed = before;
+        for (int attempt = 0; attempt < 5; attempt++) {
+            observed = snapshots.awaitAfter(observed.eventSequence, 400L);
+            if (TikTokInterruptionSemantics.containsExactVisibleText(
+                    observed, publishText)) {
+                return submittedCommentEvidence(
+                        request, startedAt, observed, publishText, true);
+            }
+        }
+        return Protocol.Response.uncertain(
+                request, elapsed(startedAt), surface.packageName(), surface.activityName(),
+                observed.eventSequence, observed.digest,
+                commentEvidence(publishText, false));
+    }
+
+    private Protocol.Response observeSubmittedComment(
+            Protocol.Request request, long startedAt) throws Exception {
+        String publishText = requiredArgument(request, "publish_text");
+        SemanticSnapshot snapshot = snapshots.current();
+        return submittedCommentEvidence(
+                request, startedAt, snapshot, publishText,
+                TikTokInterruptionSemantics.containsExactVisibleText(snapshot, publishText));
+    }
+
+    private Protocol.Response submittedCommentEvidence(
+            Protocol.Request request, long startedAt, SemanticSnapshot snapshot,
+            String publishText, boolean visible) {
+        return success(request, startedAt, snapshot, commentEvidence(publishText, visible));
+    }
+
+    private Map<String, Object> commentEvidence(String publishText, boolean visible) {
+        Map<String, Object> evidence = new LinkedHashMap<String, Object>();
+        evidence.put("visible_confirmed", visible);
+        evidence.put("text_length", publishText.length());
+        return evidence;
     }
 
     private Protocol.Response browseHome(Protocol.Request request, long startedAt)

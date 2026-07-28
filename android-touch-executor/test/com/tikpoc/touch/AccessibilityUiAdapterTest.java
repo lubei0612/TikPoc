@@ -34,7 +34,32 @@ public final class AccessibilityUiAdapterTest {
         check(adapter.last.phase.equals("session_recovery"), "recovery phase preserved");
         uncertainActionReturnsUnverifiedInsteadOfThrowing();
         verificationRequiredIsPropagated();
+        commentCommandsUseTypedPhasesAndVisibleEvidence();
         System.out.println("AccessibilityUiAdapterTest PASS");
+    }
+
+    private static void commentCommandsUseTypedPhasesAndVisibleEvidence() throws Exception {
+        final Protocol.Request[] last = {null};
+        AccessibilityUiAdapter adapter = new AccessibilityUiAdapter(
+                "device-1", "account-1", 7L, () -> 1_000L, request -> {
+                    last[0] = request;
+                    Map<String, Object> evidence = new LinkedHashMap<String, Object>();
+                    evidence.put("interruption", "none");
+                    evidence.put("visible_confirmed", true);
+                    return Protocol.Response.success(request, 1L,
+                            "com.zhiliaoapp.musically", "MainActivity", 2L,
+                            "digest", evidence);
+                });
+
+        adapter.openAndVerifyVideo(
+                "7523456789012345678",
+                "https://www.tiktok.com/@bag/video/7523456789012345678");
+        check(last[0].command.equals("open_comment_video"), "comment video command");
+        adapter.submitFirstLevel("Original comment");
+        check(last[0].command.equals("submit_first_level_comment"), "single submit command");
+        check(adapter.observeSubmitted("Original comment"), "visible comment evidence");
+        check(last[0].command.equals("observe_submitted_comment"), "read-only observe command");
+        check(adapter.observeInterruption().equals("none"), "interruption evidence");
     }
 
     private static void verificationRequiredIsPropagated() throws Exception {

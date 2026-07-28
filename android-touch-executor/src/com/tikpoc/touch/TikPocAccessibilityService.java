@@ -94,10 +94,13 @@ public final class TikPocAccessibilityService extends AccessibilityService
             AccessibilityUiAdapter ui = new AccessibilityUiAdapter(
                     settings.deviceId, settings.accountId, settings.sessionEpoch,
                     this::elapsedRealtimeMs, dispatcher::dispatch);
+            CommentTaskExecutor commentExecutor = new CommentTaskExecutor(
+                    ui, store::checkpoint);
             AutonomousTaskExecutor executor = new AutonomousTaskExecutor(
                     ui, settings.workerMode == DeviceProvisioning.WorkerMode.ACTIVE
                             ? AutonomousTaskExecutor.Mode.ACTIVE
-                            : AutonomousTaskExecutor.Mode.SHADOW);
+                            : AutonomousTaskExecutor.Mode.SHADOW,
+                    commentExecutor);
             AutonomousTaskRunner runner = new AutonomousTaskRunner(
                     client, store, settings.roundId, settings.sessionEpoch, executor);
             autonomousThread = new Thread(() -> {
@@ -240,6 +243,96 @@ public final class TikPocAccessibilityService extends AccessibilityService
             recycle(home);
             root.recycle();
         }
+    }
+
+    @Override
+    public boolean openCommentVideo(String videoId, String videoUrl) {
+        Uri uri = Uri.parse(videoUrl);
+        String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase();
+        if (!"https".equals(uri.getScheme())
+                || !(host.equals("tiktok.com") || host.endsWith(".tiktok.com"))
+                || !uri.getPath().matches(".*/video/" + java.util.regex.Pattern.quote(videoId))) {
+            return false;
+        }
+        Intent intent = new Intent(Intent.ACTION_VIEW, uri)
+                .setPackage(TIKTOK_PACKAGE)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        startActivity(intent);
+        return true;
+    }
+
+    @Override
+    public boolean submitFirstLevelComment(String text) {
+        AccessibilityNodeInfo root = waitForRoot(2_000L);
+        if (root == null) return false;
+        AccessibilityNodeInfo comments = null;
+        try {
+            comments = firstClickableByLabel(root, "comments", "评论");
+            if (comments == null
+                    || !comments.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return false;
+        } finally {
+            recycle(comments);
+            root.recycle();
+        }
+        SystemClock.sleep(300L);
+        AccessibilityNodeInfo composer = firstEditable(2_000L);
+        if (composer == null) return false;
+        try {
+            Bundle input = new Bundle();
+            input.putCharSequence(
+                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text);
+            if (!composer.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, input)) return false;
+        } finally {
+            composer.recycle();
+        }
+        AccessibilityNodeInfo commentRoot = waitForRoot(1_000L);
+        if (commentRoot == null) return false;
+        AccessibilityNodeInfo post = null;
+        try {
+            String[] labels = {"Post", "Send", "发布", "发送"};
+            for (String label : labels) {
+                post = firstClickableByExactText(commentRoot, label);
+                if (post != null) break;
+            }
+            return post != null && post.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+        } finally {
+            recycle(post);
+            commentRoot.recycle();
+        }
+    }
+
+    private AccessibilityNodeInfo firstEditable(long timeoutMs) {
+        long deadline = SystemClock.elapsedRealtime() + timeoutMs;
+        while (SystemClock.elapsedRealtime() < deadline) {
+            AccessibilityNodeInfo root = getRootInActiveWindow();
+            if (root != null) {
+                try {
+                    AccessibilityNodeInfo editable = firstVisibleEditable(root);
+                    if (editable != null) return editable;
+                } finally {
+                    root.recycle();
+                }
+            }
+            SystemClock.sleep(100L);
+        }
+        return null;
+    }
+
+    private static AccessibilityNodeInfo firstVisibleEditable(AccessibilityNodeInfo node) {
+        if (node.isVisibleToUser() && node.isEditable()) {
+            return AccessibilityNodeInfo.obtain(node);
+        }
+        for (int index = 0; index < node.getChildCount(); index++) {
+            AccessibilityNodeInfo child = node.getChild(index);
+            if (child == null) continue;
+            try {
+                AccessibilityNodeInfo match = firstVisibleEditable(child);
+                if (match != null) return match;
+            } finally {
+                child.recycle();
+            }
+        }
+        return null;
     }
 
     @Override

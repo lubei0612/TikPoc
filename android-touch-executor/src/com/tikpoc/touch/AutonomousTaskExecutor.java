@@ -52,15 +52,27 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
 
     private final Ui ui;
     private final Mode mode;
+    private final CommentTaskExecutor commentExecutor;
 
     public AutonomousTaskExecutor(Ui ui, Mode mode) {
+        this(ui, mode, null);
+    }
+
+    public AutonomousTaskExecutor(
+            Ui ui, Mode mode, CommentTaskExecutor commentExecutor) {
         if (ui == null || mode == null) throw new IllegalArgumentException("executor required");
         this.ui = ui;
         this.mode = mode;
+        this.commentExecutor = commentExecutor;
     }
 
     @Override
-    public DeviceTaskStore.Result execute(DeviceTaskStore.Task task) {
+    public DeviceTaskStore.Result execute(DeviceTaskStore.Task task) throws Exception {
+        Map<String, Object> decoded = Protocol.decodeObject(task.payload);
+        if ("brand_comment".equals(decoded.get("task_kind"))) {
+            if (commentExecutor == null) throw new IllegalStateException("comment executor missing");
+            return executeComment(task, decoded);
+        }
         String phase = "profile_opening";
         Map<String, Object> target = null;
         try {
@@ -135,6 +147,35 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
         } catch (Exception error) {
             return result(task, "deferred", phase, "executor_error");
         }
+    }
+
+    private DeviceTaskStore.Result executeComment(
+            DeviceTaskStore.Task task, Map<String, Object> payload) throws Exception {
+        Object rawPlanId = payload.get("plan_id");
+        if (!(rawPlanId instanceof Long) || (Long) rawPlanId <= 0L) {
+            throw new Protocol.ProtocolException("missing_plan_id");
+        }
+        CommentTaskExecutor.Result result = commentExecutor.execute(
+                new CommentTaskExecutor.Task(
+                        task.taskId,
+                        (Long) rawPlanId,
+                        requiredString(payload, "video_id"),
+                        requiredString(payload, "video_url"),
+                        requiredString(payload, "publish_text"),
+                        task.phase));
+        Map<String, Object> encoded = new LinkedHashMap<String, Object>();
+        encoded.put("lease_id", task.leaseId);
+        encoded.put("state", "visible_confirmed".equals(result.state)
+                ? "completed" : "uncertain");
+        encoded.put("phase", result.phase);
+        Map<String, Object> evidence = new LinkedHashMap<String, Object>();
+        evidence.put("plan_id", rawPlanId);
+        evidence.put("code", result.code);
+        evidence.put("visible_confirmed", "visible_confirmed".equals(result.state));
+        encoded.put("evidence", evidence);
+        return new DeviceTaskStore.Result(
+                task.taskId + ":" + task.leaseId + ":" + result.phase,
+                task.taskId, Protocol.encodeObject(encoded));
     }
 
     private static boolean isTerminalSearchResolution(String code) {

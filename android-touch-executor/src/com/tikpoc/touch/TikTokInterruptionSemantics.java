@@ -49,6 +49,18 @@ public final class TikTokInterruptionSemantics {
         return home && feed;
     }
 
+    public static boolean containsExactVisibleText(
+            SemanticSnapshot snapshot, String expected) {
+        String normalized = expected == null
+                ? "" : expected.trim().toLowerCase(Locale.ROOT);
+        if (normalized.isEmpty()) return false;
+        for (SemanticSnapshot.Node node : snapshot.nodes) {
+            if (!node.visible || !node.enabled || !node.bounds.hasArea()) continue;
+            if (node.searchableText().trim().equals(normalized)) return true;
+        }
+        return false;
+    }
+
     private static boolean containsAny(String value, String... phrases) {
         for (String phrase : phrases) {
             if (value.contains(phrase)) return true;

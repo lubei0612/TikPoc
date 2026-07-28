@@ -248,20 +248,31 @@ class CommentSessionService:
             raise ValueError("plan_not_found")
         return self._plan(row)
 
-    def claim_for_account(self, account_id: str, worker_id: str) -> CommentPlan | None:
+    def claim_for_account(
+        self,
+        account_id: str,
+        worker_id: str,
+        *,
+        include_reconciliation: bool = False,
+    ) -> CommentPlan | None:
         now_ms = self.clock_ms()
         start_ms, end_ms = _local_day_bounds(now_ms)
         with self.repository._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             busy = connection.execute(
                 """
-                SELECT 1 FROM comment_plans
+                SELECT * FROM comment_plans
                 WHERE account_id = ? AND state IN ('leased','submitted','uncertain')
                 LIMIT 1
                 """,
                 (account_id,),
             ).fetchone()
             if busy is not None:
+                if include_reconciliation and str(busy["state"]) in {
+                    "submitted",
+                    "uncertain",
+                }:
+                    return self._plan(busy)
                 return None
             used = connection.execute(
                 """

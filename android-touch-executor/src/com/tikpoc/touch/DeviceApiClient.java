@@ -112,7 +112,11 @@ public final class DeviceApiClient implements AutonomousTaskRunner.Client {
         Map<String, Object> request = new LinkedHashMap<String, Object>();
         request.put("device_id", deviceId);
         request.put("session_epoch", sessionEpoch);
-        request.put("round_id", roundId);
+        if ("brand_comment".equals(roundId)) {
+            request.put("task_kind", "brand_comment");
+        } else {
+            request.put("round_id", roundId);
+        }
         request.put("limit", (long) limit);
         Map<String, Object> response = post("/api/mobile/pull", request);
         Object raw = response.get("tasks");

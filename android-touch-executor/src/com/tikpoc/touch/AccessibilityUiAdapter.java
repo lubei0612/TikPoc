@@ -6,7 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
-public class AccessibilityUiAdapter implements AutonomousTaskExecutor.Ui {
+public class AccessibilityUiAdapter implements AutonomousTaskExecutor.Ui, CommentTaskExecutor.Ui {
     public static final class UiException extends RuntimeException {
         public final String code;
 
@@ -127,6 +127,40 @@ public class AccessibilityUiAdapter implements AutonomousTaskExecutor.Ui {
 
     public void recoverHome() throws Exception {
         request("recover_home", "session_recovery", new LinkedHashMap<String, Object>());
+    }
+
+    @Override
+    public String observeInterruption() throws Exception {
+        Protocol.Response response = request(
+                "observe_interruption", "session_recovery",
+                new LinkedHashMap<String, Object>());
+        return string(evidence(response), "interruption");
+    }
+
+    @Override
+    public void openAndVerifyVideo(String videoId, String videoUrl) throws Exception {
+        request("open_comment_video", "video_opening",
+                map("video_id", videoId, "video_url", videoUrl));
+    }
+
+    @Override
+    public void submitFirstLevel(String text) throws Exception {
+        request("submit_first_level_comment", "comment_submitting",
+                map("publish_text", text), true);
+    }
+
+    @Override
+    public boolean observeSubmitted(String text) throws Exception {
+        Protocol.Response response = request(
+                "observe_submitted_comment", "comment_reconciling",
+                map("publish_text", text));
+        return Boolean.TRUE.equals(evidence(response).get("visible_confirmed"));
+    }
+
+    @Override
+    public void recoverAndBrowseHome() throws Exception {
+        recoverHome();
+        browseHomeReadOnly();
     }
 
     protected Protocol.Response invoke(Protocol.Request request) throws Exception {

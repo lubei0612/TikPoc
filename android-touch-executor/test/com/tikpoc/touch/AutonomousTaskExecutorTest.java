@@ -17,7 +17,31 @@ public final class AutonomousTaskExecutorTest {
         actionFailureUsesActionPhaseIdempotencyKey();
         reconciliationFailureRetainsActionPlan();
         verificationRequiredEscapesWithoutTerminalResult();
+        brandCommentTaskUsesCommentStateMachine();
         System.out.println("AutonomousTaskExecutorTest PASS");
+    }
+
+    private static void brandCommentTaskUsesCommentStateMachine() throws Exception {
+        FakeCommentUi commentUi = new FakeCommentUi();
+        CommentTaskExecutor commentExecutor = new CommentTaskExecutor(
+                commentUi, (taskId, phase) -> {});
+        AutonomousTaskExecutor executor = new AutonomousTaskExecutor(
+                new FakeUi("target_user", true), AutonomousTaskExecutor.Mode.ACTIVE,
+                commentExecutor);
+        DeviceTaskStore.Task task = new DeviceTaskStore.Task(
+                "comment:42", "comment:42:7", 7L, 9_000L, "video_opening",
+                "{\"task_kind\":\"brand_comment\",\"plan_id\":42,"
+                + "\"video_id\":\"7523456789012345678\","
+                + "\"video_url\":\"https://www.tiktok.com/@bag/video/7523456789012345678\","
+                + "\"publish_text\":\"Original comment\"}");
+
+        DeviceTaskStore.Result result = executor.execute(task);
+
+        check(result.payload.contains("\"state\":\"completed\""),
+                "visible comment maps to completed transport state");
+        check(result.payload.contains("\"visible_confirmed\":true"),
+                "visible evidence retained");
+        check(commentUi.submits == 1, "comment submitted once");
     }
 
     private static void verificationRequiredEscapesWithoutTerminalResult() throws Exception {
@@ -290,6 +314,25 @@ public final class AutonomousTaskExecutorTest {
             if (reconciliationError != null) throw reconciliationError;
             return true;
         }
+    }
+
+    private static final class FakeCommentUi implements CommentTaskExecutor.Ui {
+        int submits;
+
+        @Override
+        public String observeInterruption() { return "none"; }
+
+        @Override
+        public void openAndVerifyVideo(String videoId, String videoUrl) {}
+
+        @Override
+        public void submitFirstLevel(String text) { submits++; }
+
+        @Override
+        public boolean observeSubmitted(String text) { return true; }
+
+        @Override
+        public void recoverAndBrowseHome() {}
     }
 
     private static void check(boolean condition, String label) {
