@@ -77,6 +77,19 @@ def test_plan_persona_must_belong_to_approving_account(tmp_path: Path) -> None:
         sessions.approve_plan("account-2", video.video_id, draft.candidate_id)
 
 
+def test_candidate_command_id_replays_without_creating_a_second_draft(
+    tmp_path: Path,
+) -> None:
+    sessions = service(tmp_path)
+    sessions.save_persona("zoey", "account-1", "IKUN BAGS | ZOEY")
+    video = sessions.add_video("7523456789012345678")
+
+    first = sessions.save_candidate(video.video_id, candidate(), command_id="draft-1")
+    replay = sessions.save_candidate(video.video_id, candidate(), command_id="draft-1")
+
+    assert replay == first
+
+
 def test_claim_is_account_scoped_and_unique(tmp_path: Path) -> None:
     sessions = service(tmp_path)
     sessions.save_persona("zoey", "account-1", "IKUN BAGS | ZOEY")
@@ -156,9 +169,8 @@ def test_submission_idempotency_key_cannot_move_to_another_plan(tmp_path: Path) 
         )
     sessions.claim_for_account("account-1", "worker")
     sessions.record_submission(plans[0].plan_id, "submit-1", state="uncertain")
-    sessions.claim_for_account("account-1", "worker")
 
     with pytest.raises(ValueError, match="idempotency_key_conflict"):
         sessions.record_submission(plans[1].plan_id, "submit-1", state="uncertain")
 
-    assert sessions.plan(plans[1].plan_id).state == "leased"
+    assert sessions.plan(plans[1].plan_id).state == "approved"

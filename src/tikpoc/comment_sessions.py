@@ -79,6 +79,16 @@ class CommentSessionService:
             ).fetchone()
         return CommentVideo(video_id, str(row["source_url"]))
 
+    def video(self, video_id: str) -> CommentVideo:
+        canonical = canonical_video_id(video_id)
+        with self.repository._connect_read_only() as connection:
+            row = connection.execute(
+                "SELECT * FROM comment_videos WHERE video_id = ?", (canonical,)
+            ).fetchone()
+        if row is None:
+            raise ValueError("video_not_found")
+        return CommentVideo(canonical, str(row["source_url"]))
+
     def import_evidence(
         self, video_id: str, evidence: Iterable[CommentEvidence]
     ) -> int:
@@ -127,10 +137,26 @@ class CommentSessionService:
             )
 
     def save_candidate(
-        self, video_id: str, candidate: CommentCandidate
+        self,
+        video_id: str,
+        candidate: CommentCandidate,
+        *,
+        command_id: str | None = None,
     ) -> SavedCandidate:
         canonical = canonical_video_id(video_id)
         with self.repository._connect() as connection:
+            normalized_command = (
+                str(command_id).strip() if command_id is not None else None
+            )
+            if normalized_command:
+                existing = connection.execute(
+                    "SELECT plan_id, video_id FROM comment_plans WHERE command_id = ?",
+                    (normalized_command,),
+                ).fetchone()
+                if existing is not None:
+                    if str(existing["video_id"]) != canonical:
+                        raise ValueError("command_id_conflict")
+                    return SavedCandidate(int(existing["plan_id"]), canonical)
             evidence = [
                 CommentEvidence(
                     str(row["cid"]),
@@ -149,11 +175,12 @@ class CommentSessionService:
             cursor = connection.execute(
                 """
                 INSERT INTO comment_plans(
-                    video_id, persona_id, account_id, english, chinese,
+                    command_id, video_id, persona_id, account_id, english, chinese,
                     emoji_count, state, created_at_ms, updated_at_ms
-                ) VALUES (?, ?, NULL, ?, ?, ?, 'draft', ?, ?)
+                ) VALUES (?, ?, ?, NULL, ?, ?, ?, 'draft', ?, ?)
                 """,
                 (
+                    normalized_command,
                     canonical,
                     candidate.persona_id,
                     candidate.english.strip(),
@@ -187,6 +214,16 @@ class CommentSessionService:
                     raise ValueError("candidate_not_approvable")
                 if str(owner["account_id"]) != str(account_id).strip():
                     raise ValueError("persona_account_mismatch")
+                existing = connection.execute(
+                    "SELECT * FROM comment_plans WHERE plan_id = ?",
+                    (candidate_id,),
+                ).fetchone()
+                if (
+                    existing is not None
+                    and str(existing["state"]) != "draft"
+                    and str(existing["account_id"]) == str(account_id).strip()
+                ):
+                    return self._plan(existing)
                 cursor = connection.execute(
                     """
                     UPDATE comment_plans
@@ -216,6 +253,16 @@ class CommentSessionService:
         start_ms, end_ms = _local_day_bounds(now_ms)
         with self.repository._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            busy = connection.execute(
+                """
+                SELECT 1 FROM comment_plans
+                WHERE account_id = ? AND state IN ('leased','submitted','uncertain')
+                LIMIT 1
+                """,
+                (account_id,),
+            ).fetchone()
+            if busy is not None:
+                return None
             used = connection.execute(
                 """
                 SELECT COUNT(*) AS count
@@ -252,6 +299,18 @@ class CommentSessionService:
             updated["state"] = "leased"
             updated["lease_owner"] = worker_id
         return self._plan(updated)
+
+    def list_plans(self) -> list[dict[str, object]]:
+        with self.repository._connect_read_only() as connection:
+            rows = connection.execute(
+                """
+                SELECT plan_id, video_id, persona_id, account_id, state,
+                       created_at_ms, approved_at_ms, updated_at_ms
+                FROM comment_plans WHERE state <> 'draft' OR account_id IS NOT NULL
+                ORDER BY plan_id
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def record_submission(
         self, plan_id: int, idempotency_key: str, *, state: str

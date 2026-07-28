@@ -79,6 +79,75 @@ devices:
     )
 
 
+def test_comment_cli_intake_approval_and_redacted_json_status(
+    tmp_path: Path, capsys
+) -> None:
+    database = tmp_path / "comments.db"
+    assert (
+        main(
+            [
+                "comment-video-add",
+                "--db",
+                str(database),
+                "--url",
+                "https://www.tiktok.com/@bag/video/7523456789012345678",
+                "--command-id",
+                "video-1",
+            ]
+        )
+        == 0
+    )
+    video_id = json.loads(capsys.readouterr().out)["video_id"]
+    assert (
+        main(
+            [
+                "comment-plan-create",
+                "--db",
+                str(database),
+                "--video-id",
+                video_id,
+                "--persona-id",
+                "zoey",
+                "--account-id",
+                "account-1",
+                "--display-name",
+                "IKUN BAGS | ZOEY",
+                "--english",
+                "That structured shape changes the whole outfit ✨",
+                "--chinese",
+                "这个有型的包型改变了整套穿搭 ✨",
+                "--emoji-count",
+                "1",
+                "--command-id",
+                "draft-1",
+            ]
+        )
+        == 0
+    )
+    plan_id = str(json.loads(capsys.readouterr().out)["plan_id"])
+    assert (
+        main(
+            [
+                "comment-plan-approve",
+                "--db",
+                str(database),
+                "--plan-id",
+                plan_id,
+                "--account-id",
+                "account-1",
+                "--command-id",
+                "approve-1",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert main(["comment-plan-status", "--db", str(database), "--json"]) == 0
+    status = json.loads(capsys.readouterr().out)
+    assert status[0]["plan_id"] == int(plan_id)
+    assert "english" not in status[0] and "chinese" not in status[0]
+
+
 def test_cli_helper_health_prints_only_redacted_status(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:

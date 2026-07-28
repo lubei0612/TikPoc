@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from tikpoc.acquisition_db import AcquisitionRepository
 from tikpoc.acquisition_models import ActionPlanState, AssignmentPhase, OutcomeKind
 from tikpoc.api import create_app
+from tikpoc.hot_comment_planner import CommentCandidate
 from tikpoc.importer import Target
 from tikpoc.rounds import create_exposure_round
 
@@ -40,6 +41,73 @@ def test_mobile_registration_requires_bootstrap_bearer(tmp_path: Path) -> None:
         "access_token": registered.json()["access_token"],
     }
     assert registered.json()["access_token"]
+
+
+def test_mobile_claims_immutable_brand_comment_and_verification_preserves_it(
+    tmp_path: Path,
+) -> None:
+    api = client(tmp_path)
+    sessions = api.app.state.comment_sessions
+    sessions.save_persona("zoey", "account-1", "IKUN BAGS | ZOEY")
+    video = sessions.add_video("https://www.tiktok.com/@bag/video/7523456789012345678")
+    draft = sessions.save_candidate(
+        video.video_id,
+        CommentCandidate(
+            "That structured shape changes the whole outfit ✨",
+            "这个有型的包型改变了整套穿搭 ✨",
+            1,
+            "zoey",
+        ),
+    )
+    sessions.approve_plan("account-1", video.video_id, draft.candidate_id)
+    registered = api.post(
+        "/api/mobile/register",
+        json={"device_id": "device-1", "account_id": "account-1"},
+        headers={"Authorization": "Bearer bootstrap-secret"},
+    ).json()
+    headers = {"Authorization": f"Bearer {registered['access_token']}"}
+
+    pulled = api.post(
+        "/api/mobile/pull",
+        json={
+            "device_id": "device-1",
+            "session_epoch": 1,
+            "task_kind": "brand_comment",
+            "limit": 1,
+        },
+        headers=headers,
+    )
+    task = pulled.json()["tasks"][0]
+    assert task["task_kind"] == "brand_comment"
+    assert task["video_id"] == video.video_id
+    assert task["video_url"].startswith("https://www.tiktok.com/")
+    assert task["publish_text"].startswith("That structured")
+    blocked = api.post(
+        "/api/mobile/results",
+        json={
+            "device_id": "device-1",
+            "session_epoch": 1,
+            "task_id": task["task_id"],
+            "lease_id": task["lease_id"],
+            "idempotency_key": "verify-1",
+            "state": "deferred",
+            "phase": "comment_submitting",
+            "evidence": {"error_code": "verification_required"},
+        },
+        headers=headers,
+    )
+    assert blocked.json() == {"accepted": True, "state": "verification_required"}
+    replay_pull = api.post(
+        "/api/mobile/pull",
+        json={
+            "device_id": "device-1",
+            "session_epoch": 1,
+            "task_kind": "brand_comment",
+            "limit": 1,
+        },
+        headers=headers,
+    )
+    assert replay_pull.json()["tasks"] == []
 
 
 def test_mobile_heartbeat_authenticates_device_and_epoch(tmp_path: Path) -> None:

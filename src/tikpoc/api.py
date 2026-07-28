@@ -31,6 +31,10 @@ from .api_models import (
     BrowserReplyPlanRequest,
     BrowserReplyResultRequest,
     BrowserWelcomeResultRequest,
+    CommentEvidenceRequest,
+    CommentPlanApprovalRequest,
+    CommentPlanRequest,
+    CommentVideoRequest,
     DeviceEventRequest,
     FollowbackCooldownCommand,
     LeadCommand,
@@ -47,12 +51,14 @@ from .api_models import (
     RetryCommand,
     RoundCreateRequest,
 )
-from .runtime_metadata import runtime_metadata
 from .browser_dm import BrowserConversationBusy, BrowserDmService, BrowserInbound
 from .browser_welcome import BrowserWelcomeService
+from .comment_sessions import CommentSessionService
 from .db import Database, OperatorCommandConflict
 from .device_api import MobileTaskResult
+from .hot_comment_planner import CommentCandidate, CommentEvidence
 from .messaging import RuntimeAiReplyClient, probe_openai_provider
+from .runtime_metadata import runtime_metadata
 from .runtime_settings import (
     AccountRuntimeSettings,
     ProviderCredentials,
@@ -193,6 +199,9 @@ def create_app(
         browser_accounts=() if registry is None else registry.accounts,
     )
     acquisition_service.migrate()
+    comment_sessions = CommentSessionService(
+        acquisition, clock_ms=lambda: int(clock() * 1000)
+    )
     runtime_settings = runtime_settings or RuntimeSettingsStore(
         database_path.parent / "config" / "secrets" / "operator-settings.json"
     )
@@ -241,6 +250,7 @@ def create_app(
     app.state.database = database
     app.state.acquisition = acquisition
     app.state.acquisition_service = acquisition_service
+    app.state.comment_sessions = comment_sessions
     app.state.registry = registry
     app.state.browser_dm_service = browser_dm_service
     app.state.browser_welcome_service = browser_welcome_service
@@ -384,6 +394,99 @@ def create_app(
             }
         )
 
+    @app.post("/api/comment-videos")
+    async def comment_video_add(request: Request) -> JSONResponse:
+        try:
+            body = CommentVideoRequest.model_validate(await _json_object(request))
+            video = comment_sessions.add_video(body.source_url)
+        except (TypeError, ValueError, ValidationError) as error:
+            return _json({"error": str(error)}, 400)
+        return _json({"video_id": video.video_id, "source_url": video.source_url})
+
+    @app.post("/api/comment-videos/{video_id}/evidence")
+    async def comment_evidence_import(video_id: str, request: Request) -> JSONResponse:
+        try:
+            body = CommentEvidenceRequest.model_validate(await _json_object(request))
+            imported = comment_sessions.import_evidence(
+                video_id,
+                [
+                    CommentEvidence(
+                        item.cid,
+                        item.text,
+                        item.digg_count,
+                        item.reply_comment_total,
+                        item.create_time,
+                        item.language,
+                    )
+                    for item in body.comments
+                ],
+            )
+        except (TypeError, ValueError, ValidationError) as error:
+            return _json({"error": str(error)}, 400)
+        return _json({"imported": imported, "video_id": video_id})
+
+    @app.post("/api/comment-plans")
+    async def comment_plan_create(request: Request) -> JSONResponse:
+        try:
+            body = CommentPlanRequest.model_validate(await _json_object(request))
+            comment_sessions.save_persona(
+                body.persona_id, body.account_id, body.display_name
+            )
+            candidate = comment_sessions.save_candidate(
+                body.video_id,
+                CommentCandidate(
+                    body.english,
+                    body.chinese,
+                    body.emoji_count,
+                    body.persona_id,
+                ),
+                command_id=body.command_id,
+            )
+        except (TypeError, ValueError, ValidationError) as error:
+            return _json({"error": str(error)}, 400)
+        return _json({"plan_id": candidate.candidate_id, "state": "draft"})
+
+    @app.post("/api/comment-plans/{plan_id}/approve")
+    async def comment_plan_approve(plan_id: int, request: Request) -> JSONResponse:
+        try:
+            body = CommentPlanApprovalRequest.model_validate(
+                await _json_object(request)
+            )
+        except (TypeError, ValueError, ValidationError) as error:
+            return _json({"error": str(error)}, 400)
+        try:
+            plan = comment_sessions.plan(plan_id)
+        except ValueError:
+            plan = None
+        try:
+            if plan is None:
+                with acquisition._connect_read_only() as connection:
+                    row = connection.execute(
+                        "SELECT video_id FROM comment_plans WHERE plan_id = ?",
+                        (plan_id,),
+                    ).fetchone()
+                if row is None:
+                    return _json({"error": "plan_not_found"}, 404)
+                plan = comment_sessions.approve_plan(
+                    body.account_id, str(row["video_id"]), plan_id
+                )
+            elif plan.account_id != body.account_id:
+                return _json({"error": "persona_account_mismatch"}, 409)
+        except ValueError as error:
+            return _json({"error": str(error)}, 409)
+        return _json(
+            {
+                "plan_id": plan.plan_id,
+                "video_id": plan.video_id,
+                "account_id": plan.account_id,
+                "state": plan.state,
+            }
+        )
+
+    @app.get("/api/comment-plans")
+    def comment_plan_status() -> JSONResponse:
+        return _json(comment_sessions.list_plans())
+
     @app.post("/api/mobile/heartbeat")
     async def mobile_heartbeat(request: Request) -> JSONResponse:
         try:
@@ -425,6 +528,35 @@ def create_app(
             return _json({"error": "invalid_mobile_token"}, 401)
         if session.session_epoch != body.session_epoch:
             return _json({"error": "stale_session"}, 409)
+        if body.task_kind == "brand_comment":
+            plan = comment_sessions.claim_for_account(
+                session.account_id, f"mobile:{body.device_id}:{body.session_epoch}"
+            )
+            if plan is None:
+                return _json({"tasks": []})
+            video = comment_sessions.video(plan.video_id)
+            return _json(
+                {
+                    "tasks": [
+                        {
+                            "task_kind": "brand_comment",
+                            "task_id": f"comment:{plan.plan_id}",
+                            "plan_id": plan.plan_id,
+                            "attempt_id": f"comment:{plan.plan_id}",
+                            "device_id": body.device_id,
+                            "account_id": session.account_id,
+                            "session_epoch": body.session_epoch,
+                            "lease_id": f"comment:{plan.plan_id}:{body.session_epoch}",
+                            "phase": "video_opening",
+                            "video_id": plan.video_id,
+                            "video_url": video.source_url,
+                            "publish_text": plan.english,
+                        }
+                    ]
+                }
+            )
+        if not body.round_id:
+            return _json({"error": "round_id is required"}, 400)
         try:
             tasks = acquisition.claim_mobile_tasks(
                 body.round_id,
@@ -474,6 +606,26 @@ def create_app(
             return _json({"error": "invalid_mobile_token"}, 401)
         if session.session_epoch != body.session_epoch:
             return _json({"error": "stale_session"}, 409)
+        if body.task_id.startswith("comment:"):
+            try:
+                plan_id = int(body.task_id.split(":", 1)[1])
+                plan = comment_sessions.plan(plan_id)
+                expected_lease = f"comment:{plan_id}:{body.session_epoch}"
+                if (
+                    plan.account_id != session.account_id
+                    or body.lease_id != expected_lease
+                ):
+                    return _json({"error": "comment_lease_mismatch"}, 409)
+                if body.evidence.get("error_code") == "verification_required":
+                    return _json({"accepted": True, "state": "verification_required"})
+                visible = bool(body.evidence.get("visible_confirmed"))
+                state = "visible_confirmed" if visible else "uncertain"
+                comment_sessions.record_submission(
+                    plan_id, body.idempotency_key, state=state
+                )
+            except (TypeError, ValueError) as error:
+                return _json({"error": str(error)}, 409)
+            return _json({"accepted": True, "state": state})
         state = acquisition.record_mobile_result(
             MobileTaskResult(
                 device_id=body.device_id,

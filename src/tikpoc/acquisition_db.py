@@ -687,6 +687,7 @@ class AcquisitionRepository:
                 """
                 CREATE TABLE IF NOT EXISTS comment_plans (
                     plan_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    command_id TEXT,
                     video_id TEXT NOT NULL,
                     persona_id TEXT NOT NULL,
                     account_id TEXT,
@@ -704,6 +705,18 @@ class AcquisitionRepository:
                     FOREIGN KEY(video_id) REFERENCES comment_videos(video_id),
                     FOREIGN KEY(persona_id) REFERENCES comment_personas(persona_id)
                 )
+                """
+            )
+            comment_plan_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(comment_plans)")
+            }
+            if "command_id" not in comment_plan_columns:
+                connection.execute("ALTER TABLE comment_plans ADD COLUMN command_id TEXT")
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_comment_plan_command
+                ON comment_plans(command_id) WHERE command_id IS NOT NULL
                 """
             )
             connection.execute(

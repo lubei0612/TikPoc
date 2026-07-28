@@ -15,6 +15,60 @@ from tikpoc.rounds import create_exposure_round
 from tikpoc.web_accounts import WebAccount, WebAccountRegistry
 
 
+def test_comment_operator_intake_review_and_redacted_status(tmp_path: Path) -> None:
+    api = TestClient(create_app(tmp_path / "comments.db", clock=lambda: 12.0))
+    video = api.post(
+        "/api/comment-videos",
+        json={"source_url": "https://www.tiktok.com/@bag/video/7523456789012345678"},
+    )
+    assert video.status_code == 200
+    video_id = video.json()["video_id"]
+    evidence = api.post(
+        f"/api/comment-videos/{video_id}/evidence",
+        json={
+            "comments": [
+                {
+                    "cid": "cid-1",
+                    "text": "The shape is perfect",
+                    "digg_count": 30,
+                    "reply_comment_total": 4,
+                    "create_time": 100,
+                    "language": "en",
+                }
+            ]
+        },
+    )
+    assert evidence.json() == {"imported": 1, "video_id": video_id}
+    draft = api.post(
+        "/api/comment-plans",
+        json={
+            "video_id": video_id,
+            "persona_id": "zoey",
+            "account_id": "account-1",
+            "display_name": "IKUN BAGS | ZOEY",
+            "english": "That structured shape changes the whole outfit ✨",
+            "chinese": "这个有型的包型改变了整套穿搭 ✨",
+            "emoji_count": 1,
+            "command_id": "draft-1",
+        },
+    )
+    assert draft.status_code == 200
+    plan_id = draft.json()["plan_id"]
+    approved = api.post(
+        f"/api/comment-plans/{plan_id}/approve",
+        json={"account_id": "account-1", "command_id": "approve-1"},
+    )
+    replay = api.post(
+        f"/api/comment-plans/{plan_id}/approve",
+        json={"account_id": "account-1", "command_id": "approve-1"},
+    )
+    assert approved.json()["state"] == "approved"
+    assert replay.json() == approved.json()
+    status = api.get("/api/comment-plans").json()
+    assert status[0]["plan_id"] == plan_id
+    assert "english" not in status[0] and "chinese" not in status[0]
+
+
 def _target(index: int) -> Target:
     return Target(
         target_id=f"user-{index}",

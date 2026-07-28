@@ -147,6 +147,33 @@ def _parser() -> argparse.ArgumentParser:
     helper_bootstrap.add_argument("--fleet", type=Path, required=True)
     helper_bootstrap.add_argument("--device-id", required=True)
     helper_bootstrap.add_argument("--apk", type=Path, required=True)
+    comment_video_add = commands.add_parser("comment-video-add")
+    comment_video_add.add_argument("--db", type=Path, required=True)
+    comment_video_add.add_argument("--url", required=True)
+    comment_video_add.add_argument("--command-id", required=True)
+    comment_evidence_import = commands.add_parser("comment-evidence-import")
+    comment_evidence_import.add_argument("--db", type=Path, required=True)
+    comment_evidence_import.add_argument("--video-id", required=True)
+    comment_evidence_import.add_argument("--file", type=Path, required=True)
+    comment_evidence_import.add_argument("--command-id", required=True)
+    comment_plan_create = commands.add_parser("comment-plan-create")
+    comment_plan_create.add_argument("--db", type=Path, required=True)
+    comment_plan_create.add_argument("--video-id", required=True)
+    comment_plan_create.add_argument("--persona-id", required=True)
+    comment_plan_create.add_argument("--account-id", required=True)
+    comment_plan_create.add_argument("--display-name", required=True)
+    comment_plan_create.add_argument("--english", required=True)
+    comment_plan_create.add_argument("--chinese", required=True)
+    comment_plan_create.add_argument("--emoji-count", type=int, required=True)
+    comment_plan_create.add_argument("--command-id", required=True)
+    comment_plan_approve = commands.add_parser("comment-plan-approve")
+    comment_plan_approve.add_argument("--db", type=Path, required=True)
+    comment_plan_approve.add_argument("--plan-id", type=int, required=True)
+    comment_plan_approve.add_argument("--account-id", required=True)
+    comment_plan_approve.add_argument("--command-id", required=True)
+    comment_plan_status = commands.add_parser("comment-plan-status")
+    comment_plan_status.add_argument("--db", type=Path, required=True)
+    comment_plan_status.add_argument("--json", action="store_true", dest="json_output")
     for command_name in ("serve", "dashboard"):
         serve = commands.add_parser(command_name)
         serve.add_argument("--db", type=Path, required=True)
@@ -181,6 +208,78 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command.startswith("comment-"):
+        from .comment_sessions import CommentSessionService
+        from .hot_comment_planner import CommentCandidate, CommentEvidence
+
+        repository = AcquisitionRepository(args.db)
+        repository.migrate()
+        service = CommentSessionService(
+            repository, clock_ms=lambda: int(time.time() * 1_000)
+        )
+        try:
+            if args.command == "comment-video-add":
+                video = service.add_video(args.url)
+                payload = {"video_id": video.video_id, "source_url": video.source_url}
+            elif args.command == "comment-evidence-import":
+                rows = [
+                    json.loads(line)
+                    for line in args.file.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                ]
+                evidence = [
+                    CommentEvidence(
+                        str(row["cid"]),
+                        str(row["text"]),
+                        int(row.get("digg_count", 0)),
+                        int(row.get("reply_comment_total", 0)),
+                        int(row["create_time"]),
+                        str(row.get("language", "und")),
+                    )
+                    for row in rows
+                ]
+                payload = {
+                    "video_id": args.video_id,
+                    "imported": service.import_evidence(args.video_id, evidence),
+                }
+            elif args.command == "comment-plan-create":
+                service.save_persona(
+                    args.persona_id, args.account_id, args.display_name
+                )
+                draft = service.save_candidate(
+                    args.video_id,
+                    CommentCandidate(
+                        args.english,
+                        args.chinese,
+                        args.emoji_count,
+                        args.persona_id,
+                    ),
+                    command_id=args.command_id,
+                )
+                payload = {"plan_id": draft.candidate_id, "state": "draft"}
+            elif args.command == "comment-plan-approve":
+                with repository._connect_read_only() as connection:
+                    row = connection.execute(
+                        "SELECT video_id FROM comment_plans WHERE plan_id = ?",
+                        (args.plan_id,),
+                    ).fetchone()
+                if row is None:
+                    raise ValueError("plan_not_found")
+                plan = service.approve_plan(
+                    args.account_id, str(row["video_id"]), args.plan_id
+                )
+                payload = {
+                    "plan_id": plan.plan_id,
+                    "video_id": plan.video_id,
+                    "account_id": plan.account_id,
+                    "state": plan.state,
+                }
+            else:
+                payload = service.list_plans()
+        except (KeyError, OSError, ValueError) as error:
+            raise SystemExit(str(error)) from None
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
     if args.command in {"helper-health", "helper-bootstrap"}:
         result = (
             _run_helper_health(fleet_path=args.fleet, device_id=args.device_id)
@@ -350,8 +449,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (OSError, RuntimeError, ValueError) as error:
             raise SystemExit(str(error)) from None
     if args.command == "proxy-guard":
-        import time
-
         _require_file(args.devices, "device configuration")
         if args.interval < 5:
             raise SystemExit("interval must be at least 5 seconds")

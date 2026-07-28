@@ -123,6 +123,10 @@ class MobileHeartbeatRequest(ApiRequest):
         "quota_reserved",
         "action_executing",
         "action_reconciling",
+        "video_verified",
+        "comment_submitting",
+        "comment_reconciling",
+        "verification_required",
         "completed",
         "deferred",
         "skipped",
@@ -134,7 +138,8 @@ class MobileHeartbeatRequest(ApiRequest):
 class MobilePullRequest(ApiRequest):
     device_id: Identifier
     session_epoch: int = Field(gt=0)
-    round_id: Identifier
+    round_id: VisibleUsername = ""
+    task_kind: Literal["touch", "brand_comment"] = "touch"
     limit: int = Field(default=20, ge=1, le=50)
 
 
@@ -147,6 +152,41 @@ class MobileResultRequest(ApiRequest):
     state: Literal["completed", "deferred", "uncertain", "skipped"]
     phase: Identifier
     evidence: dict[str, object] = Field(default_factory=dict)
+
+
+class CommentVideoRequest(ApiRequest):
+    source_url: BoundedText
+    command_id: Identifier = "video-add"
+
+
+class CommentEvidenceItem(ApiRequest):
+    cid: Identifier
+    text: BoundedText
+    digg_count: int = Field(ge=0)
+    reply_comment_total: int = Field(ge=0)
+    create_time: int = Field(ge=0)
+    language: Identifier
+
+
+class CommentEvidenceRequest(ApiRequest):
+    comments: list[CommentEvidenceItem] = Field(min_length=1, max_length=10_000)
+    command_id: Identifier = "evidence-import"
+
+
+class CommentPlanRequest(ApiRequest):
+    video_id: Identifier
+    persona_id: Identifier
+    account_id: Identifier
+    display_name: BoundedText
+    english: BoundedText
+    chinese: BoundedText
+    emoji_count: int = Field(ge=0, le=2)
+    command_id: Identifier
+
+
+class CommentPlanApprovalRequest(ApiRequest):
+    account_id: Identifier
+    command_id: Identifier
 
 
 CommandId = Annotated[
