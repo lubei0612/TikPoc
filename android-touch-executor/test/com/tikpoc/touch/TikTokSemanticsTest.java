@@ -21,6 +21,7 @@ public final class TikTokSemanticsTest {
         recognizesLocalizedSelectedLikeState();
         recognizesSelectedFavoriteFromItsIconChild();
         recognizesLocalizedRepostConfirmation();
+        selectsUniqueCommentPostControlBesideComposer();
         System.out.println("TikTokSemanticsTest PASS");
     }
 
@@ -191,6 +192,19 @@ public final class TikTokSemanticsTest {
         check(!TikTokSemantics.hasRepostConfirmation(
                 snapshot(node("jmc", "", "转发", true))),
                 "repost control is not confirmation");
+    }
+
+    private static void selectsUniqueCommentPostControlBesideComposer() throws Exception {
+        SemanticSnapshot snapshot = snapshot(
+                nodeAt("dbq", "Draft comment", "", true,
+                        144, 1170, 578, 1238, "EditText"),
+                nodeAt("de5", "", "@2131889388", true,
+                        586, 1192, 678, 1248, "Button"),
+                nodeAt("close", "", "Close", true,
+                        656, 438, 696, 478, "ImageView"));
+
+        check(TikTokSemantics.commentPostControl(snapshot).resourceId.equals("de5"),
+                "post control selected beside composer");
     }
 
     private static SemanticSnapshot snapshot(SemanticSnapshot.Node... nodes) throws Exception {

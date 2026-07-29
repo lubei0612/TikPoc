@@ -27,6 +27,7 @@ public final class TouchCommandDispatcher {
         }
         default boolean openCommentThreadReadOnly() throws Exception { return false; }
         default boolean submitFirstLevelComment(String text) throws Exception { return false; }
+        default String commentSubmitErrorCode() { return "comment_submit_rejected"; }
     }
 
     public interface Clock {
@@ -194,7 +195,7 @@ public final class TouchCommandDispatcher {
     private boolean commentVideoVisible(SemanticSnapshot snapshot, String videoId,
             String creatorUsername, String captionAnchor) {
         if (!TikTokSemantics.hasVideoControls(snapshot)) return false;
-        if (!creatorUsername.isEmpty() && !captionAnchor.isEmpty()) {
+        if (!creatorUsername.isEmpty() || !captionAnchor.isEmpty()) {
             return TikTokInterruptionSemantics.hasVisibleVideoIdentity(
                     snapshot, creatorUsername, captionAnchor);
         }
@@ -222,7 +223,9 @@ public final class TouchCommandDispatcher {
                     request, "verification_required", "operator verification required");
         }
         if (!actuator.submitFirstLevelComment(publishText)) {
-            return Protocol.Response.error(request, "comment_submit_rejected", "submit rejected");
+            String code = actuator.commentSubmitErrorCode();
+            if (code == null || code.trim().isEmpty()) code = "comment_submit_rejected";
+            return Protocol.Response.error(request, code, "submit rejected");
         }
         SemanticSnapshot observed = before;
         for (int attempt = 0; attempt < 5; attempt++) {

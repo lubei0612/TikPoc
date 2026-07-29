@@ -16,8 +16,10 @@ public final class TouchCommandDispatcherTest {
         ordinaryDialogRecoversOnceToHome();
         failedHomeRecoveryIsBounded();
         opensCanonicalCommentVideoAndVerifiesIdentity();
+        opensCommentVideoWithCaptionOnlyIdentity();
         rejectsCommentVideoWithoutVisibleCreatorAndCaption();
         submitsFirstLevelCommentOnceAndVerifiesVisibleText();
+        reportsSpecificCommentSubmitStage();
         submittedCommentObservationIsReadOnly();
         opensOnePostAndVerifiesVideoControls();
         waitsForVideoEventBeforeVerifyingControls();
@@ -167,6 +169,18 @@ public final class TouchCommandDispatcherTest {
                 "wrong visible video identity rejected");
     }
 
+    private static void opensCommentVideoWithCaptionOnlyIdentity() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.source.snapshots = Arrays.asList(
+                actionSnapshot(false, 1), commentVideoSnapshot(2));
+
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                captionOnlyCommentRequest());
+
+        check(response.values.get("status").equals("ok"),
+                "caption-only comment video verified");
+    }
+
     private static void submitsFirstLevelCommentOnceAndVerifiesVisibleText()
             throws Exception {
         Fixture fixture = new Fixture();
@@ -194,6 +208,20 @@ public final class TouchCommandDispatcherTest {
         check(evidence.get("visible_confirmed").equals(true),
                 "read-only observation opens the comment thread before checking text");
         check(fixture.actuator.commentSubmits == 0, "observation does not resubmit");
+    }
+
+    private static void reportsSpecificCommentSubmitStage() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.actuator.commentSubmitResult = false;
+        fixture.actuator.commentSubmitError = "comment_composer_missing";
+
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("submit_first_level_comment", map("publish_text", "Original comment")));
+
+        @SuppressWarnings("unchecked") Map<String, Object> error =
+                (Map<String, Object>) response.values.get("error");
+        check(error.get("code").equals("comment_composer_missing"),
+                "specific comment submit stage preserved");
     }
 
     private static void searchRequiresExactProfileEvidence() throws Exception {
@@ -505,6 +533,8 @@ public final class TouchCommandDispatcherTest {
         int commentVideoOpens;
         int commentThreadOpens;
         int commentSubmits;
+        boolean commentSubmitResult = true;
+        String commentSubmitError = "comment_submit_rejected";
         RuntimeException failure;
         String searchResult = "timeout";
 
@@ -563,7 +593,12 @@ public final class TouchCommandDispatcherTest {
         @Override
         public boolean submitFirstLevelComment(String text) {
             commentSubmits++;
-            return true;
+            return commentSubmitResult;
+        }
+
+        @Override
+        public String commentSubmitErrorCode() {
+            return commentSubmitError;
         }
     }
 
@@ -709,6 +744,19 @@ public final class TouchCommandDispatcherTest {
                 + "\"account_id\":\"account-1\",\"fence_token\":7,"
                 + "\"assignment_id\":19,\"phase\":\"profile_opening\","
                 + "\"deadline_elapsed_ms\":9000,\"arguments\":" + argumentsJson + "}", 0L);
+    }
+
+    private static Protocol.Request captionOnlyCommentRequest() throws Exception {
+        return Protocol.parseRequest(
+                "{\"version\":1,\"command_id\":\"cmd-caption-only\","
+                + "\"command\":\"open_comment_video\",\"device_id\":\"device-1\","
+                + "\"account_id\":\"account-1\",\"fence_token\":7,"
+                + "\"assignment_id\":19,\"phase\":\"video_opening\","
+                + "\"deadline_elapsed_ms\":9000,\"arguments\":{"
+                + "\"video_id\":\"7523456789012345678\","
+                + "\"video_url\":\"https://www.tiktok.com/@bag/video/"
+                + "7523456789012345678\",\"creator_username\":\"\","
+                + "\"caption_anchor\":\"rare archive piece\"}}", 0L);
     }
 
     private static Map<String, Object> empty() {

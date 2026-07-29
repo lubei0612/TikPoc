@@ -89,7 +89,7 @@ public final class CommentTaskExecutor {
             checkpoints.save(task.taskId, "comment_reconciling");
             return new Result("uncertain", "comment_reconciling", "visible_text_missing");
         }
-        ui.recoverAndBrowseHome();
+        recoverAfterConfirmation();
         return new Result("visible_confirmed", "comment_reconciling", "visible_confirmed");
     }
 
@@ -99,8 +99,16 @@ public final class CommentTaskExecutor {
         if (!ui.observeSubmitted(task.publishText)) {
             return new Result("uncertain", "comment_reconciling", "visible_text_missing");
         }
-        ui.recoverAndBrowseHome();
+        recoverAfterConfirmation();
         return new Result("visible_confirmed", "comment_reconciling", "visible_confirmed");
+    }
+
+    private void recoverAfterConfirmation() {
+        try {
+            ui.recoverAndBrowseHome();
+        } catch (Exception ignored) {
+            // The durable visible-post evidence outranks best-effort navigation cleanup.
+        }
     }
 
     private void requireNoVerification() throws Exception {

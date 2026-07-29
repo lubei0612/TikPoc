@@ -8,6 +8,7 @@ public final class CommentTaskExecutorTest {
         checkpointsBeforeSingleSubmitAndConfirmsVisibleText();
         uncertainContinuationOnlyObserves();
         transportLossAfterSubmitBecomesReadOnlyReconciliation();
+        confirmedCommentSurvivesHomeRecoveryFailure();
         verificationResetsBeforeMutationWhenHomeIsVerified();
         verificationPausesWhenResetDoesNotClearChallenge();
         System.out.println("CommentTaskExecutorTest PASS");
@@ -72,6 +73,19 @@ public final class CommentTaskExecutorTest {
                 "mutation resumes only after reset");
     }
 
+    private static void confirmedCommentSurvivesHomeRecoveryFailure() throws Exception {
+        FakeUi ui = new FakeUi();
+        ui.recoveryFailure = new AccessibilityUiAdapter.UiException("home_recovery_failed");
+        CommentTaskExecutor executor = new CommentTaskExecutor(ui, new FakeCheckpoints());
+
+        CommentTaskExecutor.Result result = executor.execute(task("video_opening"));
+
+        check(result.state.equals("visible_confirmed"),
+                "visible comment remains confirmed after cleanup failure");
+        check(ui.submits == 1 && ui.observations == 1,
+                "cleanup failure does not repeat the mutation");
+    }
+
     private static void verificationPausesWhenResetDoesNotClearChallenge() throws Exception {
         FakeUi ui = new FakeUi();
         ui.interruption = "verification_required";
@@ -113,6 +127,7 @@ public final class CommentTaskExecutorTest {
         String interruption = "none";
         boolean resetLeavesVerification;
         Exception submitFailure;
+        Exception recoveryFailure;
 
         @Override
         public String observeInterruption() { return interruption; }
@@ -138,8 +153,9 @@ public final class CommentTaskExecutorTest {
         }
 
         @Override
-        public void recoverAndBrowseHome() {
+        public void recoverAndBrowseHome() throws Exception {
             recoveries++;
+            if (recoveryFailure != null) throw recoveryFailure;
             if ("verification_required".equals(interruption)) verificationResets++;
             browses++;
             if (!resetLeavesVerification) interruption = "none";

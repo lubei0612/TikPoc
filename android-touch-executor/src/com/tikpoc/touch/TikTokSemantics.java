@@ -167,6 +167,32 @@ public final class TikTokSemantics {
         throw new SemanticException("missing_post_handle");
     }
 
+    public static SemanticSnapshot.Node commentPostControl(
+            SemanticSnapshot snapshot) throws SemanticException {
+        SemanticSnapshot.Node composer = null;
+        for (SemanticSnapshot.Node node : snapshot.nodes) {
+            if (!node.visible || !node.enabled || !node.bounds.hasArea()
+                    || !node.className.endsWith("EditText")) continue;
+            if (composer != null) throw new SemanticException("ambiguous_comment_composer");
+            composer = node;
+        }
+        if (composer == null) throw new SemanticException("missing_comment_composer");
+        List<SemanticSnapshot.Node> candidates = new ArrayList<SemanticSnapshot.Node>();
+        for (SemanticSnapshot.Node node : snapshot.nodes) {
+            if (!node.visible || !node.enabled || !node.clickable || !node.bounds.hasArea()
+                    || !node.className.endsWith("Button")) continue;
+            boolean toRight = node.bounds.left >= composer.bounds.right;
+            boolean overlapsVertically = node.bounds.top < composer.bounds.bottom + 16
+                    && node.bounds.bottom > composer.bounds.top - 16;
+            if (toRight && overlapsVertically) candidates.add(node);
+        }
+        if (candidates.isEmpty()) throw new SemanticException("missing_comment_post_control");
+        if (candidates.size() != 1) {
+            throw new SemanticException("ambiguous_comment_post_control");
+        }
+        return candidates.get(0);
+    }
+
     private static SemanticSnapshot.Node uniqueExactUsername(
             SemanticSnapshot snapshot, String expectedUsername) throws SemanticException {
         String expected = normalizedUsername(expectedUsername).toLowerCase(Locale.ROOT);

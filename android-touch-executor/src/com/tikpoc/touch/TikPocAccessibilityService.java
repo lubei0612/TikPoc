@@ -24,6 +24,7 @@ public final class TikPocAccessibilityService extends AccessibilityService
     private volatile SemanticSnapshot snapshot;
     private volatile String activityName = "";
     private volatile String packageName = "";
+    private volatile String commentSubmitErrorCode = "comment_submit_rejected";
     private LoopbackCommandServer server;
     private Thread autonomousThread;
 
@@ -279,7 +280,8 @@ public final class TikPocAccessibilityService extends AccessibilityService
                 || !uri.getPath().matches(".*/video/" + java.util.regex.Pattern.quote(videoId))) {
             return false;
         }
-        Intent intent = new Intent(Intent.ACTION_VIEW, uri)
+        Uri exactVideo = Uri.parse("snssdk1233://aweme/detail/" + videoId);
+        Intent intent = new Intent(Intent.ACTION_VIEW, exactVideo)
                 .setPackage(TIKTOK_PACKAGE)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         startActivity(intent);
@@ -288,30 +290,35 @@ public final class TikPocAccessibilityService extends AccessibilityService
 
     @Override
     public boolean submitFirstLevelComment(String text) {
+        commentSubmitErrorCode = "comment_submit_rejected";
         AccessibilityNodeInfo root = waitForRoot(2_000L);
-        if (root == null) return false;
+        if (root == null) return commentSubmitFailed("comment_video_root_missing");
         AccessibilityNodeInfo comments = null;
         try {
             comments = firstClickableByLabel(root, "comments", "评论");
-            if (comments == null
-                    || !comments.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return false;
+            if (comments == null) return commentSubmitFailed("comment_control_missing");
+            if (!comments.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                return commentSubmitFailed("comment_control_click_failed");
+            }
         } finally {
             recycle(comments);
             root.recycle();
         }
         SystemClock.sleep(300L);
         AccessibilityNodeInfo composer = firstEditable(2_000L);
-        if (composer == null) return false;
+        if (composer == null) return commentSubmitFailed("comment_composer_missing");
         try {
             Bundle input = new Bundle();
             input.putCharSequence(
                     AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text);
-            if (!composer.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, input)) return false;
+            if (!composer.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, input)) {
+                return commentSubmitFailed("comment_text_input_failed");
+            }
         } finally {
             composer.recycle();
         }
         AccessibilityNodeInfo commentRoot = waitForRoot(1_000L);
-        if (commentRoot == null) return false;
+        if (commentRoot == null) return commentSubmitFailed("comment_thread_root_missing");
         AccessibilityNodeInfo post = null;
         try {
             String[] labels = {"Post", "Send", "发布", "发送"};
@@ -319,10 +326,46 @@ public final class TikPocAccessibilityService extends AccessibilityService
                 post = firstClickableByExactText(commentRoot, label);
                 if (post != null) break;
             }
-            return post != null && post.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+            if (post == null) post = geometricCommentPost(commentRoot);
+            if (post == null) return commentSubmitFailed("comment_post_control_missing");
+            if (!post.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                return commentSubmitFailed("comment_post_click_failed");
+            }
+            commentSubmitErrorCode = "";
+            return true;
         } finally {
             recycle(post);
             commentRoot.recycle();
+        }
+    }
+
+    @Override
+    public String commentSubmitErrorCode() {
+        return commentSubmitErrorCode;
+    }
+
+    private boolean commentSubmitFailed(String code) {
+        commentSubmitErrorCode = code;
+        return false;
+    }
+
+    private static AccessibilityNodeInfo geometricCommentPost(
+            AccessibilityNodeInfo root) {
+        try {
+            SemanticSnapshot observed = SemanticSnapshot.fromRoot(copyNode(root), 0L, 0L);
+            SemanticSnapshot.Node expected = TikTokSemantics.commentPostControl(observed);
+            List<AccessibilityNodeInfo> matches = new ArrayList<AccessibilityNodeInfo>();
+            collectMatches(root, expected, matches);
+            if (matches.size() != 1) {
+                recycleAll(matches);
+                return null;
+            }
+            AccessibilityNodeInfo result = AccessibilityNodeInfo.obtain(matches.get(0));
+            recycleAll(matches);
+            return result;
+        } catch (SemanticSnapshot.SnapshotException
+                | TikTokSemantics.SemanticException error) {
+            return null;
         }
     }
 
