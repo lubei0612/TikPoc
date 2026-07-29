@@ -249,6 +249,70 @@ def test_mobile_runs_one_read_only_reconciliation_after_uncertain_submit(
     assert sessions.attempt_count(1) == 1
 
 
+def test_mobile_persists_brand_comment_failure_code_for_diagnostics(
+    tmp_path: Path,
+) -> None:
+    api = client(tmp_path)
+    sessions = api.app.state.comment_sessions
+    sessions.save_persona("zoey", "account-1", "IKUN BAGS | ZOEY")
+    video = sessions.add_video(
+        "https://www.tiktok.com/@bag/video/7523456789012345678",
+        caption_anchor="rare archive piece",
+    )
+    draft = sessions.save_candidate(
+        video.video_id,
+        candidate=CommentCandidate(
+            "That structured shape changes the whole outfit ✨",
+            "这个有型的包型改变了整套穿搭 ✨",
+            1,
+            "zoey",
+        ),
+    )
+    plan = sessions.approve_plan("account-1", video.video_id, draft.candidate_id)
+    registered = api.post(
+        "/api/mobile/register",
+        json={"device_id": "device-1", "account_id": "account-1"},
+        headers={"Authorization": "Bearer bootstrap-secret"},
+    ).json()
+    headers = {"Authorization": f"Bearer {registered['access_token']}"}
+    task = api.post(
+        "/api/mobile/pull",
+        json={
+            "device_id": "device-1",
+            "session_epoch": 1,
+            "task_kind": "brand_comment",
+            "limit": 1,
+        },
+        headers=headers,
+    ).json()["tasks"][0]
+
+    response = api.post(
+        "/api/mobile/results",
+        json={
+            "device_id": "device-1",
+            "session_epoch": 1,
+            "task_id": task["task_id"],
+            "lease_id": task["lease_id"],
+            "idempotency_key": "comment-result-1",
+            "state": "uncertain",
+            "phase": "comment_reconciling",
+            "evidence": {
+                "visible_confirmed": False,
+                "error_code": "video_identity_mismatch",
+            },
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    with sessions.repository._connect_read_only() as connection:
+        attempt = connection.execute(
+            "SELECT error_code FROM comment_attempts WHERE plan_id = ?",
+            (plan.plan_id,),
+        ).fetchone()
+    assert attempt["error_code"] == "video_identity_mismatch"
+
+
 def test_mobile_heartbeat_rejects_wrong_device_token(tmp_path: Path) -> None:
     api = client(tmp_path)
     registered = api.post(

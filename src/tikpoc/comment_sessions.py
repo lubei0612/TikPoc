@@ -409,7 +409,12 @@ class CommentSessionService:
         return [dict(row) for row in rows]
 
     def record_submission(
-        self, plan_id: int, idempotency_key: str, *, state: str
+        self,
+        plan_id: int,
+        idempotency_key: str,
+        *,
+        state: str,
+        error_code: str = "",
     ) -> None:
         if state not in {"submitted", "uncertain", "visible_confirmed"}:
             raise ValueError("invalid_submission_state")
@@ -419,11 +424,15 @@ class CommentSessionService:
             connection.execute(
                 """
                 INSERT INTO comment_attempts(
-                    plan_id, idempotency_key, state, submitted_at_ms
-                ) VALUES (?, ?, ?, ?)
-                ON CONFLICT(idempotency_key) DO NOTHING
+                    plan_id, idempotency_key, state, submitted_at_ms, error_code
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(idempotency_key) DO UPDATE SET
+                    error_code = CASE
+                        WHEN excluded.error_code <> '' THEN excluded.error_code
+                        ELSE comment_attempts.error_code
+                    END
                 """,
-                (plan_id, idempotency_key, state, now_ms),
+                (plan_id, idempotency_key, state, now_ms, error_code),
             )
             attempt = connection.execute(
                 "SELECT plan_id FROM comment_attempts WHERE idempotency_key = ?",

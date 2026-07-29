@@ -751,10 +751,20 @@ class AcquisitionRepository:
                     )),
                     submitted_at_ms INTEGER NOT NULL,
                     reconciled_at_ms INTEGER,
+                    error_code TEXT NOT NULL DEFAULT '',
                     FOREIGN KEY(plan_id) REFERENCES comment_plans(plan_id)
                 )
                 """
             )
+            comment_attempt_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(comment_attempts)")
+            }
+            if "error_code" not in comment_attempt_columns:
+                connection.execute(
+                    "ALTER TABLE comment_attempts "
+                    "ADD COLUMN error_code TEXT NOT NULL DEFAULT ''"
+                )
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS comment_observations (
