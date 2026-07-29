@@ -8,6 +8,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
+from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.common.by import By
 
 from .device import TIKTOK_PACKAGE
@@ -62,6 +63,7 @@ THUMBNAIL_CHECK_XPATH = (
     " | //android.widget.GridView[1]/android.widget.FrameLayout/"
     "android.widget.FrameLayout/android.widget.Button"
 )
+THUMBNAIL_TILE_XPATH = "//android.widget.GridView[1]/android.widget.FrameLayout"
 NEXT_XPATH = (
     f'//*[@resource-id="{TIKTOK_PACKAGE}:id/wpz" or @text="Next" '
     'or @content-desc="Next" or @text="下一步" '
@@ -109,12 +111,14 @@ class AppiumTikTokPhotoUi:
         *,
         timeout: float = 10,
         poll_interval: float = 0.25,
+        post_submit_grace: float = 10.0,
         sleeper: Callable[[float], None] = time.sleep,
         activity_opener: Callable[[], None] | None = None,
     ) -> None:
         self.driver = driver
         self.timeout = max(0.0, timeout)
         self.poll_interval = max(0.0, poll_interval)
+        self.post_submit_grace = max(0.0, post_submit_grace)
         self.sleeper = sleeper
         self.activity_opener = activity_opener
         self.expected_username = ""
@@ -220,13 +224,19 @@ class AppiumTikTokPhotoUi:
                 if multi is not None:
                     multi.click()
                     self.sleeper(0.5)
+        gallery_tiles = self.driver.find_elements(By.XPATH, THUMBNAIL_TILE_XPATH)
         thumbnails = self._wait_elements(THUMBNAIL_CHECK_XPATH)
-        if len(thumbnails) < len(remote_paths):
+        if max(len(gallery_tiles), len(thumbnails)) < len(remote_paths):
             raise RuntimeError(
-                f"isolated album has {len(thumbnails)} selectable images; "
+                f"isolated album has {max(len(gallery_tiles), len(thumbnails))} "
+                "selectable images; "
                 f"expected {len(remote_paths)}"
             )
         for index in range(len(remote_paths)):
+            if len(gallery_tiles) >= len(remote_paths):
+                self._select_gallery_tile(index)
+                self.sleeper(0.3)
+                continue
             refreshed = self._wait_elements(THUMBNAIL_CHECK_XPATH)
             if len(refreshed) <= index:
                 raise RuntimeError(
@@ -278,6 +288,7 @@ class AppiumTikTokPhotoUi:
         confirmation = self._first_now(PUBLISH_CONFIRM_XPATH)
         if confirmation is not None:
             confirmation.click()
+        self.sleeper(self.post_submit_grace)
 
     def reconcile(self, before: frozenset[str]) -> str | None:
         if not self._submitted:
@@ -371,6 +382,32 @@ class AppiumTikTokPhotoUi:
             raise RuntimeError(f"{label} is not visible")
         element.click()
 
+    def _select_gallery_tile(self, index: int) -> None:
+        xpath = f"({THUMBNAIL_TILE_XPATH})[{index + 1}]"
+        for _ in range(10):
+            elements = self.driver.find_elements(By.XPATH, xpath)
+            if elements:
+                try:
+                    if elements[0].is_displayed():
+                        elements[0].click()
+                        return
+                except WebDriverException:
+                    pass
+            size = self.driver.get_window_size()
+            self.driver.execute_script(
+                "mobile: swipeGesture",
+                {
+                    "left": 0,
+                    "top": round(int(size["height"]) * 0.2),
+                    "width": int(size["width"]),
+                    "height": round(int(size["height"]) * 0.65),
+                    "direction": "up",
+                    "percent": 0.35,
+                },
+            )
+            self.sleeper(0.25)
+        raise RuntimeError(f"gallery image {index + 1} is not visible")
+
     def _verification_visible(self) -> bool:
         source = str(self.driver.page_source).lower()
         return any(marker in source for marker in VERIFICATION_MARKERS)
@@ -391,6 +428,12 @@ class AppiumTikTokPhotoUi:
             close.click()
 
     def _dismiss_profile_modal(self) -> None:
+        contact_deny = self._first_now(
+            '//*[@text="Don\'t allow" or @content-desc="Don\'t allow" '
+            'or @text="不允许" or @content-desc="不允许"]'
+        )
+        if contact_deny is not None:
+            contact_deny.click()
         close = self._first_now(
             f'//*[@resource-id="{TIKTOK_PACKAGE}:id/e2c" or @content-desc="Close"]'
         )

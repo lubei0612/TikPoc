@@ -567,6 +567,92 @@ def test_appium_photo_ui_reloads_thumbnail_elements_after_each_selection() -> No
     assert driver.clicked_thumbnail_indexes == [0, 1]
 
 
+def test_appium_photo_ui_holds_route_after_submission_for_upload_grace() -> None:
+    sleeps: list[float] = []
+    driver = AppiumPublishingDriver()
+    ui = AppiumTikTokPhotoUi(driver, timeout=0, sleeper=sleeps.append)
+    ui.verify_identity("expected")
+    ui.prepare(("/sdcard/Pictures/TikPoc/job-1/001.jpg",), "Caption")
+
+    ui.submit_once()
+
+    assert sleeps[-1] == 10.0
+
+
+def test_appium_photo_ui_dismisses_contact_sync_before_profile_reconciliation() -> None:
+    class ContactPromptDriver(AppiumPublishingDriver):
+        def __init__(self) -> None:
+            super().__init__()
+            self.contact_deny = AppiumElement()
+
+        def find_elements(self, by, xpath):
+            if "Don't allow" in xpath or "不允许" in xpath:
+                return [self.contact_deny]
+            return super().find_elements(by, xpath)
+
+    driver = ContactPromptDriver()
+    ui = AppiumTikTokPhotoUi(driver, timeout=0, sleeper=lambda _: None)
+    ui.verify_identity("expected")
+    before = ui.snapshot_posts()
+    ui.prepare(("/sdcard/Pictures/TikPoc/job-1/001.jpg",), "Caption")
+    ui.submit_once()
+
+    ui.reconcile(before)
+
+    assert driver.contact_deny.clicks == 1
+
+
+def test_appium_photo_ui_scrolls_to_select_tenth_gallery_tile() -> None:
+    class VisibilityElement(AppiumElement):
+        def __init__(self, driver, index: int) -> None:
+            super().__init__()
+            self.driver = driver
+            self.index = index
+
+        def is_displayed(self) -> bool:
+            return self.index < 9 or self.driver.gallery_scrolled
+
+    class TenPhotoDriver(AppiumPublishingDriver):
+        def __init__(self) -> None:
+            super().__init__()
+            self.gallery_scrolled = False
+            self.gallery_tiles = [VisibilityElement(self, index) for index in range(10)]
+
+        def execute_script(self, name, args) -> None:
+            super().execute_script(name, args)
+            if name == "mobile: swipeGesture":
+                self.gallery_scrolled = True
+
+        def get_window_size(self):
+            return {"width": 720, "height": 1280}
+
+        def find_elements(self, by, xpath):
+            if xpath == "//android.widget.GridView[1]/android.widget.FrameLayout":
+                return self.gallery_tiles
+            if xpath.startswith(
+                "(//android.widget.GridView[1]/android.widget.FrameLayout)["
+            ):
+                index = int(xpath.rsplit("[", 1)[1].rstrip("]")) - 1
+                return [self.gallery_tiles[index]]
+            if "icon_check" in xpath:
+                return [AppiumElement() for _ in range(10)]
+            return super().find_elements(by, xpath)
+
+    driver = TenPhotoDriver()
+    ui = AppiumTikTokPhotoUi(driver, timeout=0, sleeper=lambda _: None)
+    ui.verify_identity("expected")
+
+    ui.prepare(
+        tuple(
+            f"/sdcard/Pictures/TikPoc/job-1/{index:03d}.jpg" for index in range(1, 11)
+        ),
+        "Ten product views.",
+    )
+
+    assert driver.gallery_scrolled is True
+    assert [tile.clicks for tile in driver.gallery_tiles] == [1] * 10
+
+
 def test_appium_photo_ui_scrolls_to_offscreen_job_album() -> None:
     class OffscreenAlbumDriver(AppiumPublishingDriver):
         def __init__(self) -> None:
