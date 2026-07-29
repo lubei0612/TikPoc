@@ -4,6 +4,7 @@ import hashlib
 from pathlib import Path
 
 import pytest
+from selenium.common.exceptions import StaleElementReferenceException
 
 from tikpoc.catalog import CatalogProduct
 from tikpoc.mobile_catalog_publisher import (
@@ -520,6 +521,50 @@ def test_appium_photo_ui_selects_exact_job_album_images_and_reconciles() -> None
     assert driver.caption.value == "One product, two views."
     assert driver.post.clicks == 1
     assert ui.reconcile(before).startswith("tiktok-visible://@expected/")
+
+
+def test_appium_photo_ui_reloads_thumbnail_elements_after_each_selection() -> None:
+    class RefreshingThumbnail(AppiumElement):
+        def __init__(self, driver, index: int, generation: int) -> None:
+            super().__init__()
+            self.driver = driver
+            self.index = index
+            self.generation = generation
+
+        def click(self) -> None:
+            if self.generation != self.driver.thumbnail_generation:
+                raise StaleElementReferenceException("gallery DOM refreshed")
+            super().click()
+            self.driver.clicked_thumbnail_indexes.append(self.index)
+            self.driver.thumbnail_generation += 1
+
+    class RefreshingGalleryDriver(AppiumPublishingDriver):
+        def __init__(self) -> None:
+            super().__init__()
+            self.thumbnail_generation = 0
+            self.clicked_thumbnail_indexes: list[int] = []
+
+        def find_elements(self, by, xpath):
+            if "icon_check" in xpath:
+                return [
+                    RefreshingThumbnail(self, index, self.thumbnail_generation)
+                    for index in range(3)
+                ]
+            return super().find_elements(by, xpath)
+
+    driver = RefreshingGalleryDriver()
+    ui = AppiumTikTokPhotoUi(driver, timeout=0, sleeper=lambda _: None)
+
+    ui.verify_identity("expected")
+    ui.prepare(
+        (
+            "/sdcard/Pictures/TikPoc/job-1/001.jpg",
+            "/sdcard/Pictures/TikPoc/job-1/002.jpg",
+        ),
+        "One product, two views.",
+    )
+
+    assert driver.clicked_thumbnail_indexes == [0, 1]
 
 
 def test_appium_photo_ui_scrolls_to_offscreen_job_album() -> None:

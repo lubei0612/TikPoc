@@ -226,8 +226,13 @@ class AppiumTikTokPhotoUi:
                 f"isolated album has {len(thumbnails)} selectable images; "
                 f"expected {len(remote_paths)}"
             )
-        for thumbnail in thumbnails[: len(remote_paths)]:
-            thumbnail.click()
+        for index in range(len(remote_paths)):
+            refreshed = self._wait_elements(THUMBNAIL_CHECK_XPATH)
+            if len(refreshed) <= index:
+                raise RuntimeError(
+                    "isolated album changed while selecting publishing images"
+                )
+            refreshed[index].click()
             self.sleeper(0.3)
         self.sleeper(1.0)
         gallery_next = self._first(GALLERY_NEXT_XPATH)
