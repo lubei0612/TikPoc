@@ -50,16 +50,20 @@ class CommentSessionService:
         daily_limit: int = 20,
         submission_interval_ms: int = 40 * 60 * 1_000,
         submission_jitter_ms: int = 25 * 60 * 1_000,
+        lease_timeout_ms: int = 120_000,
     ) -> None:
         if daily_limit <= 0:
             raise ValueError("daily_limit must be positive")
         if submission_interval_ms < 0 or submission_jitter_ms < 0:
             raise ValueError("submission intervals must not be negative")
+        if lease_timeout_ms <= 0:
+            raise ValueError("lease_timeout_ms must be positive")
         self.repository = repository
         self.clock_ms = clock_ms
         self.daily_limit = daily_limit
         self.submission_interval_ms = submission_interval_ms
         self.submission_jitter_ms = submission_jitter_ms
+        self.lease_timeout_ms = lease_timeout_ms
 
     def table_names(self) -> tuple[str, ...]:
         with self.repository._connect_read_only() as connection:
@@ -297,6 +301,14 @@ class CommentSessionService:
         start_ms, end_ms = _local_day_bounds(now_ms)
         with self.repository._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                UPDATE comment_plans
+                SET state = 'approved', lease_owner = NULL, updated_at_ms = ?
+                WHERE account_id = ? AND state = 'leased' AND updated_at_ms <= ?
+                """,
+                (now_ms, account_id, now_ms - self.lease_timeout_ms),
+            )
             busy = connection.execute(
                 """
                 SELECT * FROM comment_plans

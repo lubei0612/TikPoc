@@ -71,7 +71,10 @@ public final class DeviceTaskStore {
 
     public synchronized void enqueue(Task task) {
         for (Task existing : backend.loadTasks()) {
-            if (existing.taskId.equals(task.taskId)) return;
+            if (existing.taskId.equals(task.taskId)) {
+                backend.saveTask(task);
+                return;
+            }
         }
         backend.saveTask(task);
     }

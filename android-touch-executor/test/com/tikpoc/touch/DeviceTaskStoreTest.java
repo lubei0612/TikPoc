@@ -5,6 +5,7 @@ import java.util.List;
 public final class DeviceTaskStoreTest {
     public static void main(String[] args) throws Exception {
         skipsExpiredAndStaleTasks();
+        refreshesRepeatedLeaseForExpiredTask();
         checkpointsSurviveStoreRecreation();
         collapsesDuplicateOutboxResults();
         explicitReprovisioningClearsQueueAndOutbox();
@@ -32,6 +33,19 @@ public final class DeviceTaskStoreTest {
         DeviceTaskStore.Task next = store.next(7L, 101L);
 
         check(next != null && next.taskId.equals("ready"), "only valid task selected");
+    }
+
+
+    private static void refreshesRepeatedLeaseForExpiredTask() {
+        DeviceTaskStore store = new DeviceTaskStore(new DeviceTaskStore.MemoryBackend());
+        store.enqueue(task("task-1", 7L, 100L));
+        check(store.next(7L, 101L) == null, "first lease expired");
+
+        store.enqueue(task("task-1", 7L, 1_000L));
+
+        DeviceTaskStore.Task refreshed = store.next(7L, 101L);
+        check(refreshed != null && refreshed.leaseExpiresAtMs == 1_000L,
+                "repeated pull refreshes the durable lease");
     }
 
     private static void checkpointsSurviveStoreRecreation() throws Exception {

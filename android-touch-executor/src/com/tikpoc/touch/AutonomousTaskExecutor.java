@@ -74,9 +74,11 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
             try {
                 return executeComment(task, decoded);
             } catch (AccessibilityUiAdapter.UiException error) {
-                if (!"verification_required".equals(error.code)) throw error;
-                throw new AutonomousTaskRunner.VerificationRequired(
-                        verificationResult(task, decoded));
+                if ("verification_required".equals(error.code)) {
+                    throw new AutonomousTaskRunner.VerificationRequired(
+                            verificationResult(task, decoded));
+                }
+                return commentFailureResult(task, decoded, error.code);
             }
         }
         String phase = "profile_opening";
@@ -153,6 +155,23 @@ public final class AutonomousTaskExecutor implements AutonomousTaskRunner.Execut
         } catch (Exception error) {
             return result(task, "deferred", phase, "executor_error");
         }
+    }
+
+    private DeviceTaskStore.Result commentFailureResult(
+            DeviceTaskStore.Task task, Map<String, Object> payload, String code)
+            throws Exception {
+        Map<String, Object> encoded = new LinkedHashMap<String, Object>();
+        encoded.put("lease_id", task.leaseId);
+        encoded.put("state", "uncertain");
+        encoded.put("phase", "comment_reconciling");
+        Map<String, Object> evidence = new LinkedHashMap<String, Object>();
+        evidence.put("plan_id", payload.get("plan_id"));
+        evidence.put("code", code);
+        evidence.put("visible_confirmed", false);
+        encoded.put("evidence", evidence);
+        return new DeviceTaskStore.Result(
+                task.taskId + ":" + task.leaseId + ":comment_reconciling",
+                task.taskId, Protocol.encodeObject(encoded));
     }
 
     private DeviceTaskStore.Result verificationResult(

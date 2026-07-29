@@ -144,6 +144,40 @@ def test_local_day_quota_counts_confirmed_and_unresolved_submissions(
     assert sessions.claim_for_account("account-1", "worker") is None
 
 
+def test_expired_comment_lease_is_reclaimed_for_same_account(tmp_path: Path) -> None:
+    now_ms = [NOW_MS]
+    repository = AcquisitionRepository(
+        tmp_path / "acquisition.db", clock_ms=lambda: now_ms[0]
+    )
+    repository.migrate()
+    sessions = CommentSessionService(
+        repository,
+        clock_ms=lambda: now_ms[0],
+        lease_timeout_ms=120_000,
+        submission_interval_ms=0,
+        submission_jitter_ms=0,
+    )
+    sessions.save_persona("zoey", "account-1", "IKUN BAGS | ZOEY")
+    video = sessions.add_video("7523456789012345678")
+    draft = sessions.save_candidate(video.video_id, candidate())
+    plan = sessions.approve_plan("account-1", video.video_id, draft.candidate_id)
+    first = sessions.claim_for_account("account-1", "worker-1")
+    assert first is not None
+
+    now_ms[0] += 120_001
+    reclaimed = sessions.claim_for_account("account-1", "worker-2")
+
+    assert reclaimed is not None
+    assert reclaimed.plan_id == plan.plan_id
+    assert reclaimed.state == "leased"
+    with repository._connect_read_only() as connection:
+        row = connection.execute(
+            "SELECT lease_owner FROM comment_plans WHERE plan_id = ?",
+            (plan.plan_id,),
+        ).fetchone()
+    assert row["lease_owner"] == "worker-2"
+
+
 def test_comment_claims_are_spread_between_home_browsing_periods(
     tmp_path: Path,
 ) -> None:

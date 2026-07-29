@@ -18,6 +18,7 @@ public final class AutonomousTaskExecutorTest {
         reconciliationFailureRetainsActionPlan();
         verificationRequiredEscapesWithoutTerminalResult();
         brandCommentTaskUsesCommentStateMachine();
+        brandCommentNavigationFailureProducesTerminalReceipt();
         System.out.println("AutonomousTaskExecutorTest PASS");
     }
 
@@ -44,6 +45,36 @@ public final class AutonomousTaskExecutorTest {
         check(result.payload.contains("\"visible_confirmed\":true"),
                 "visible evidence retained");
         check(commentUi.submits == 1, "comment submitted once");
+    }
+
+
+    private static void brandCommentNavigationFailureProducesTerminalReceipt()
+            throws Exception {
+        FakeCommentUi commentUi = new FakeCommentUi();
+        commentUi.openError = new AccessibilityUiAdapter.UiException(
+                "comment_video_not_verified");
+        CommentTaskExecutor commentExecutor = new CommentTaskExecutor(
+                commentUi, (taskId, phase) -> {});
+        AutonomousTaskExecutor executor = new AutonomousTaskExecutor(
+                new FakeUi("target_user", true), AutonomousTaskExecutor.Mode.ACTIVE,
+                commentExecutor);
+        DeviceTaskStore.Task task = new DeviceTaskStore.Task(
+                "comment:43", "comment:43:7", 7L, 9_000L, "video_opening",
+                "{\"task_kind\":\"brand_comment\",\"plan_id\":43,"
+                + "\"video_id\":\"7523456789012345678\","
+                + "\"video_url\":\"https://www.tiktok.com/@bag/video/7523456789012345678\","
+                + "\"creator_username\":\"bag\","
+                + "\"caption_anchor\":\"rare archive piece\","
+                + "\"publish_text\":\"Original comment\"}");
+
+        DeviceTaskStore.Result result = executor.execute(task);
+
+        check(result.payload.contains("\"state\":\"uncertain\""),
+                "navigation failure produces a durable terminal receipt");
+        check(result.payload.contains("comment_video_not_verified"),
+                "comment navigation error is preserved");
+        check(result.payload.contains("\"visible_confirmed\":false"),
+                "failed navigation never claims a visible comment");
     }
 
     private static void verificationRequiredEscapesWithoutTerminalResult() throws Exception {
@@ -320,13 +351,16 @@ public final class AutonomousTaskExecutorTest {
 
     private static final class FakeCommentUi implements CommentTaskExecutor.Ui {
         int submits;
+        RuntimeException openError;
 
         @Override
         public String observeInterruption() { return "none"; }
 
         @Override
         public void openAndVerifyVideo(String videoId, String videoUrl,
-                String creatorUsername, String captionAnchor) {}
+                String creatorUsername, String captionAnchor) {
+            if (openError != null) throw openError;
+        }
 
         @Override
         public void submitFirstLevel(String text) { submits++; }
