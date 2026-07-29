@@ -28,11 +28,11 @@ them here.
   explicitly authorizes a historical rollback test. Existing MYT documents and
   measurements remain historical evidence only; they are not current runtime
   instructions.
-- The current catalog-publishing request targets six VMOS TikTok accounts with
-  15 distinct posts per account. Each VMOS account must pass visible username,
-  network, ADB/Appium, and one-post canary verification before its remaining 14
-  approved jobs are released. Keep account queues isolated and stop the
-  affected account on `uncertain` without automatically resubmitting.
+- The catalog-publishing matrix is historical. The current six-account runtime
+  is the reviewed brand-comment workflow: 20 distinct first-level comment plans
+  per account per Asia/Shanghai day, paced over the day with read-only Home-feed
+  browsing between due comments. Keep account queues isolated and never
+  resubmit an unresolved or visibility-ambiguous comment.
 - The user resumed the project goal on 2026-07-17 and requested continuous
   execution after the revised design and plan are accepted.
 - The user accepted the written design and authorized continuous execution on
@@ -51,10 +51,11 @@ them here.
 - Treat TikPoc as an owned production product, not as a sequence of isolated
   prompts. Proactively inspect runtime evidence, choose the next highest-value
   task, implement it, verify it, commit it, deploy it, and measure the result.
-- The primary delivery objective is a stable measured capacity of more than
-  `10,000` confirmed targets per enabled mobile account in 24 hours while
-  preserving the business rules in this file. With seven enabled accounts this
-  means more than `70,000` confirmed device-profile visits per day.
+- The active delivery objective is a stable measured day of at most `20`
+  visibly confirmed, reviewed first-level comments per enabled VMOS account,
+  with relevant read-only browsing between due comments. The historical
+  `10,000`-profile-visit capacity target remains paused until a newer user
+  instruction resumes that workflow.
 - Do not wait for the user to select ordinary engineering steps. Continue from
   the latest durable checkpoint, keep a concise task queue, and stop for user
   input only when credentials, account login, paid infrastructure, or a visible

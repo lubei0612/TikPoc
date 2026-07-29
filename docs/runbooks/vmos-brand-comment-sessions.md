@@ -99,25 +99,37 @@ install the previous signed APK, re-enable Accessibility visibly, and resume onl
 after a stable-Home heartbeat. An unresolved submission continues to consume the
 daily quota until reconciliation.
 
-## Latest Canary Checkpoint (2026-07-29)
+## Current Six-Account Checkpoint (2026-07-30)
 
-- The live TikTok Home label was exposed on a non-clickable text child beneath
-  one clickable tab parent. Home recovery now resolves the unique nearest
-  clickable ancestor and verifies Home/Recommended after activation.
-- APK startup tolerates at most three ordinary transient Home-tree failures.
-  Any `verification_*` result stops after the first bounded verification reset,
-  so startup cannot create a repeated two-Back loop.
-- After an APK reinstall and Accessibility restart, the canary returned an
-  `idle` HTTPS heartbeat and continued authenticated task polling without an
-  active ADB forward.
-- One approved real-video canary reached exactly one submitted attempt and then
-  `uncertain`; exact visible-comment evidence was not obtained. It remains
-  quota-counted and is not resubmitted. A continuation now reopens the exact
-  video, opens the comment thread read-only, records one reconciliation, and is
-  then removed from the claim queue even when evidence stays `uncertain`. This
-  is evidence for the uncertainty path, not completion of the single-device
-  promotion gate.
+- The desktop intake contains 21 relevant videos, 356 imported high-engagement
+  comment evidence rows, and 120 distinct English/Chinese plans allocated as
+  exactly 20 active plans per account. Candidate text learns topic and structure
+  from evidence without copying it verbatim or adding a direct sales/contact
+  instruction.
+- All six VMOS account/device pairs run the signed TikPoc APK in active
+  `brand_comment` mode. Each reported an authenticated `idle` heartbeat with
+  app version `1.0.0` after the latest reinstall and Accessibility restart.
+- The production schedule is one comment every 40 minutes plus deterministic
+  account-scoped jitter of up to 25 minutes, with a hard local-day limit of 20.
+  Empty periods perform a bounded read-only Home-feed browse every 30 seconds.
+- The idle browse gesture is derived from the current Android viewport rather
+  than fixed 1080p coordinates. A live 720×1280 VMOS command returned verified
+  Home evidence and a completed browse gesture in 1.444 seconds.
+- A stale VMOS/TikTok route state on one device caused repeated exact-video
+  failures. The affected device was paused, its non-submitting failures were
+  reset, the instance was restarted through the documented VMOS restart API,
+  and the same exact-video route then verified. Its next server-owned plan
+  reached `visible_confirmed` in the live APK flow.
+- The server now applies a five-minute account backoff after a reconciled failed
+  attempt. Failed attempts do not consume the daily quota, while unresolved and
+  confirmed submissions still do. This prevents a transient route failure from
+  consuming the remaining plan queue.
+- The current durable launch evidence is seven visible confirmations across all
+  six accounts, zero unresolved attempts, and one retained failed observation
+  whose submit visibility was ambiguous. That plan stays terminal to prevent a
+  duplicate comment; the other non-submitting route failures were safely reset.
 
-Before promotion, run a fresh plan and require `visible_confirmed`, then complete
-the five-comment session and full 20-comment-day gates with zero duplicate
-attempts.
+Keep the six workers running on the unchanged build and record the measured
+2-hour and full local-day totals. The current checkpoint proves live routing,
+submission, visible confirmation, fleet independence, recovery, and idle browse;
+it does not yet represent a completed 20-comment day for every account.
