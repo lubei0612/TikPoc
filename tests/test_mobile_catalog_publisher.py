@@ -567,6 +567,96 @@ def test_appium_photo_ui_reloads_thumbnail_elements_after_each_selection() -> No
     assert driver.clicked_thumbnail_indexes == [0, 1]
 
 
+def test_appium_photo_ui_discards_unpublished_photo_prompt_before_new_job() -> None:
+    class UnpublishedPhotoPromptDriver(AppiumPublishingDriver):
+        def __init__(self) -> None:
+            super().__init__()
+            self.prompt_visible = False
+            self.prompt_discarded = False
+            self.created = AppiumElement(on_click=self._open_create)
+            self.discard = AppiumElement(on_click=self._discard_prompt)
+
+        @property
+        def page_source(self) -> str:
+            prompt = (
+                '<node text="继续编辑尚未发布的照片?" />' if self.prompt_visible else ""
+            )
+            return super().page_source.replace("</hierarchy>", f"{prompt}</hierarchy>")
+
+        def find_elements(self, by, xpath):
+            if ("Cancel" in xpath or "取消" in xpath) and self.prompt_visible:
+                return [self.discard]
+            if ("Upload" in xpath or "上传" in xpath) and not self.prompt_discarded:
+                return []
+            return super().find_elements(by, xpath)
+
+        def _open_create(self) -> None:
+            if self.created.clicks == 1:
+                self.prompt_visible = True
+
+        def _discard_prompt(self) -> None:
+            self.prompt_visible = False
+            self.prompt_discarded = True
+
+    driver = UnpublishedPhotoPromptDriver()
+    ui = AppiumTikTokPhotoUi(driver, timeout=0, sleeper=lambda _: None)
+    ui.verify_identity("expected")
+
+    ui.prepare(("/sdcard/Pictures/TikPoc/job-1/001.jpg",), "Fresh job")
+
+    assert driver.discard.clicks == 1
+    assert driver.created.clicks == 2
+    assert driver.caption.value == "Fresh job"
+
+
+def test_appium_photo_ui_waits_for_delayed_unpublished_photo_prompt() -> None:
+    class DelayedPromptDriver(AppiumPublishingDriver):
+        def __init__(self) -> None:
+            super().__init__()
+            self.create_started = False
+            self.prompt_reads = 0
+            self.prompt_visible = False
+            self.prompt_discarded = False
+            self.created = AppiumElement(on_click=self._open_create)
+            self.discard = AppiumElement(on_click=self._discard_prompt)
+
+        @property
+        def page_source(self) -> str:
+            if self.create_started and not self.prompt_discarded:
+                self.prompt_reads += 1
+                self.prompt_visible = self.prompt_reads >= 2
+            prompt = (
+                '<node text="继续编辑尚未发布的照片?" />' if self.prompt_visible else ""
+            )
+            return super().page_source.replace("</hierarchy>", f"{prompt}</hierarchy>")
+
+        def find_elements(self, by, xpath):
+            if ("Cancel" in xpath or "取消" in xpath) and self.prompt_visible:
+                return [self.discard]
+            if ("Upload" in xpath or "上传" in xpath) and not self.prompt_discarded:
+                return []
+            return super().find_elements(by, xpath)
+
+        def _open_create(self) -> None:
+            if self.created.clicks == 1:
+                self.create_started = True
+
+        def _discard_prompt(self) -> None:
+            self.prompt_visible = False
+            self.prompt_discarded = True
+
+    driver = DelayedPromptDriver()
+    ui = AppiumTikTokPhotoUi(
+        driver, timeout=1, poll_interval=0.1, sleeper=lambda _: None
+    )
+    ui.verify_identity("expected")
+
+    ui.prepare(("/sdcard/Pictures/TikPoc/job-1/001.jpg",), "Fresh job")
+
+    assert driver.discard.clicks == 1
+    assert driver.created.clicks == 2
+
+
 def test_appium_photo_ui_holds_route_after_submission_for_upload_grace() -> None:
     sleeps: list[float] = []
     driver = AppiumPublishingDriver()

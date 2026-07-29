@@ -75,7 +75,7 @@ Select the staged avatar, verify its preview, disable `发布此照片到限时�
 
 Save one screenshot per device showing the new avatar, nickname, and original username in Edit Profile. Record each result in `profile-results.json`.
 
-### Task 3: Curate And Stage Fifteen Products
+### Task 3: Curate And Stage Ninety Distinct Products
 
 **Files:**
 - Create: `build/ikunbags-six-account/products.json`
@@ -91,7 +91,7 @@ https://gxhy1688.com/Shopindex?marketCode=gz&uid=0cc703016c964d21b1aed580e59b224
 
 Expected: public shop data or an explicit authentication/CAPTCHA blocker.
 
-- [ ] **Step 2: Select fifteen distinct products**
+- [ ] **Step 2: Select ninety distinct products**
 
 Require clear media, usable factual descriptions, broad category coverage, and no unverified third-party trademark authorization. Store source URL, title, bag type, color/material facts actually shown, and media URLs.
 
@@ -101,7 +101,9 @@ Each product directory must contain at least one readable image or video. Reject
 
 - [ ] **Step 4: Write the product manifest**
 
-`products.json` must contain exactly fifteen unique product IDs and their staged media paths.
+The allocation must contain exactly ninety unique product IDs, split into six
+disjoint fifteen-product account sets, and retain every selected product's
+complete ordered image set.
 
 ### Task 4: Generate Six Accurate Caption Sets
 
@@ -110,11 +112,14 @@ Each product directory must contain at least one readable image or video. Reject
 
 - [ ] **Step 1: Generate ninety captions**
 
-Create one caption per account/persona for every product. Each caption must use only facts in `products.json`, contain a distinct hook, and avoid unsupported price, stock, delivery, authenticity, discount, or guarantee claims.
+Create one caption for every product/account assignment. Each caption must use
+only that product's facts, contain a useful hook, and avoid unsupported price,
+stock, delivery, authenticity, discount, or guarantee claims.
 
 - [ ] **Step 2: Validate caption coverage**
 
-Confirm `15 products × 6 accounts = 90` non-empty captions, with no exact duplicate captions for the same product.
+Confirm `15 distinct products × 6 accounts = 90` non-empty captions and ninety
+unique product IDs across the matrix.
 
 ### Task 5: Publish And Verify Ninety Posts
 
@@ -128,7 +133,10 @@ Capture the visible post count/grid before publishing. Do not publish if the vis
 
 - [ ] **Step 2: Publish one product at a time per account**
 
-Use visible TikTok UI to select staged media, enter the assigned caption, and publish. Do not enable a story, paid disclosure, location, Shop attachment, or other optional setting unless already required by a verified listing.
+Use visible TikTok UI to select all ordered images belonging to exactly one
+staged product, enter the assigned caption, and publish. Do not combine images
+from different products. Do not enable a story, paid disclosure, location, Shop
+attachment, or other optional setting unless already required by a verified listing.
 
 - [ ] **Step 3: Verify each post before advancing**
 

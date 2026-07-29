@@ -84,6 +84,10 @@ PUBLISH_CONFIRM_XPATH = (
     '//*[@text="Publish now" or @content-desc="Publish now" '
     'or @text="立即发布" or @content-desc="立即发布"]'
 )
+UNPUBLISHED_PHOTO_CANCEL_XPATH = (
+    '//*[@text="Cancel" or @content-desc="Cancel" '
+    'or @text="取消" or @content-desc="取消"]'
+)
 PROFILE_TILE_XPATH = f'//*[@resource-id="{TIKTOK_PACKAGE}:id/dp6"]'
 VERIFICATION_MARKERS = (
     "verify to continue",
@@ -156,9 +160,14 @@ class AppiumTikTokPhotoUi:
         album_name = Path(next(iter(parents))).name
         if not album_name.startswith("job-"):
             raise ValueError("publishing album must be job-scoped")
+        self._discard_unpublished_photo_prompt(wait_seconds=0)
         create = self._first_now(CREATE_XPATH)
         if create is not None:
             create.click()
+            if self._discard_unpublished_photo_prompt(
+                wait_seconds=min(1.5, self.timeout)
+            ):
+                self._click_required(CREATE_XPATH, "Create control")
         else:
             if self.activity_opener is not None:
                 self.activity_opener()
@@ -381,6 +390,20 @@ class AppiumTikTokPhotoUi:
         if element is None:
             raise RuntimeError(f"{label} is not visible")
         element.click()
+
+    def _discard_unpublished_photo_prompt(self, *, wait_seconds: float) -> bool:
+        deadline = time.monotonic() + max(0.0, wait_seconds)
+        while True:
+            source = str(self.driver.page_source).lower()
+            if "unpublished photos" in source or "尚未发布的照片" in source:
+                self._click_required(
+                    UNPUBLISHED_PHOTO_CANCEL_XPATH,
+                    "unpublished photo discard control",
+                )
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            self.sleeper(self.poll_interval)
 
     def _select_gallery_tile(self, index: int) -> None:
         xpath = f"({THUMBNAIL_TILE_XPATH})[{index + 1}]"

@@ -3,8 +3,8 @@
 ## Goal
 
 Prepare six newly logged-in TikTok accounts as one IKUN Bags brand matrix and
-publish fifteen product posts per account from one curated set of fifteen
-globally appealing bag products sourced from the user-provided GXHY shop.
+publish fifteen product posts per account from ninety distinct globally
+appealing bag products sourced from the user-provided GXHY shop.
 
 ## Account Matrix
 
@@ -21,7 +21,8 @@ globally appealing bag products sourced from the user-provided GXHY shop.
 
 ## Product Selection
 
-- Curate one shared set of fifteen products from the supplied shop.
+- Curate ninety distinct products from the supplied shop and assign a disjoint
+  set of fifteen products to each account.
 - Prefer broad international bag archetypes: everyday crossbody, structured
   shoulder bag, tote, compact evening bag, hobo, bucket, travel, and work bags.
 - Require usable media, a clear bag view, and enough product information to
@@ -34,10 +35,11 @@ globally appealing bag products sourced from the user-provided GXHY shop.
 
 ## Publishing
 
-- Each account publishes the same fifteen selected products, for ninety total
-  posts.
-- Produce six caption variants per product, one per persona. Variants differ in
-  hook and use case while preserving the same factual product details.
+- Each account publishes its own fifteen-product set, for ninety distinct posts
+  across the matrix.
+- One post represents exactly one supplier product and contains that product's
+  complete ordered image set; images from different products never share a post.
+- Produce one English caption per selected product and account assignment.
 - Captions stay concise, avoid unsupported prices, delivery promises,
   authenticity claims, discounts, inventory claims, and engagement bait.
 - Do not attach TikTok Shop products unless an authorized listing is visibly
@@ -53,7 +55,8 @@ globally appealing bag products sourced from the user-provided GXHY shop.
    active.
 2. Capture each visible username and map it to exactly one device.
 3. Apply nickname and avatar with visible post-save verification.
-4. Download and stage the fifteen approved product media sets.
+4. Download and stage the ninety approved product media sets in six disjoint
+   account allocations.
 5. Publish fifteen posts sequentially per account, allowing device-level
    concurrency only after identity and route checks pass.
 6. Record a per-device result table with nickname, username, avatar status, and
@@ -64,6 +67,7 @@ globally appealing bag products sourced from the user-provided GXHY shop.
 - Six device/account identities are recorded without collisions.
 - Every available account has the shared avatar and assigned public nickname,
   except a documented TikTok cooldown.
-- Each successful account shows fifteen newly published posts in visible UI.
+- Each successful account shows its assigned fifteen newly published posts in
+  visible UI, and the six account allocations have no repeated product ID.
 - No story is posted, no username/bio/link/privacy setting changes, no duplicate
   retry follows an uncertain result, and all blockers are reported honestly.
