@@ -51,10 +51,15 @@ class CommentSessionService:
         submission_interval_ms: int = 40 * 60 * 1_000,
         submission_jitter_ms: int = 25 * 60 * 1_000,
         lease_timeout_ms: int = 120_000,
+        failure_backoff_ms: int = 5 * 60 * 1_000,
     ) -> None:
         if daily_limit <= 0:
             raise ValueError("daily_limit must be positive")
-        if submission_interval_ms < 0 or submission_jitter_ms < 0:
+        if (
+            submission_interval_ms < 0
+            or submission_jitter_ms < 0
+            or failure_backoff_ms < 0
+        ):
             raise ValueError("submission intervals must not be negative")
         if lease_timeout_ms <= 0:
             raise ValueError("lease_timeout_ms must be positive")
@@ -64,6 +69,7 @@ class CommentSessionService:
         self.submission_interval_ms = submission_interval_ms
         self.submission_jitter_ms = submission_jitter_ms
         self.lease_timeout_ms = lease_timeout_ms
+        self.failure_backoff_ms = failure_backoff_ms
 
     def table_names(self) -> tuple[str, ...]:
         with self.repository._connect_read_only() as connection:
@@ -348,6 +354,24 @@ class CommentSessionService:
             ).fetchone()
             if int(used["count"]) >= self.daily_limit:
                 return None
+            if self.failure_backoff_ms:
+                latest_failure = connection.execute(
+                    """
+                    SELECT MAX(COALESCE(
+                        attempt.reconciled_at_ms, attempt.submitted_at_ms
+                    )) AS failed_at_ms
+                    FROM comment_attempts AS attempt
+                    JOIN comment_plans AS plan ON plan.plan_id = attempt.plan_id
+                    WHERE plan.account_id = ? AND attempt.state = 'failed'
+                    """,
+                    (account_id,),
+                ).fetchone()
+                failed_at_ms = latest_failure["failed_at_ms"]
+                if (
+                    failed_at_ms is not None
+                    and now_ms < int(failed_at_ms) + self.failure_backoff_ms
+                ):
+                    return None
             last_submission = connection.execute(
                 """
                 SELECT MAX(attempt.submitted_at_ms) AS submitted_at_ms
