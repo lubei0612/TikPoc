@@ -663,12 +663,24 @@ def create_app(
                 error_code = str(
                     body.evidence.get("error_code") or body.evidence.get("code") or ""
                 ).strip()[:100]
-                state = "visible_confirmed" if visible else "uncertain"
-                if plan.state in {"submitted", "uncertain"}:
+                pre_submit_route_failure = error_code in {
+                    "comment_video_not_verified",
+                    "video_open_rejected",
+                }
+                if not visible and pre_submit_route_failure and plan.state == "leased":
+                    comment_sessions.record_pre_submit_skip(
+                        plan_id,
+                        body.idempotency_key,
+                        error_code=error_code,
+                    )
+                    state = "skipped"
+                elif plan.state in {"submitted", "uncertain"}:
                     comment_sessions.record_reconciliation(
                         plan_id, body.idempotency_key, visible=visible
                     )
+                    state = "visible_confirmed" if visible else "uncertain"
                 else:
+                    state = "visible_confirmed" if visible else "uncertain"
                     comment_sessions.record_submission(
                         plan_id,
                         body.idempotency_key,

@@ -362,7 +362,8 @@ class CommentSessionService:
                     )) AS failed_at_ms
                     FROM comment_attempts AS attempt
                     JOIN comment_plans AS plan ON plan.plan_id = attempt.plan_id
-                    WHERE plan.account_id = ? AND attempt.state = 'failed'
+                    WHERE plan.account_id = ? AND plan.state = 'failed'
+                      AND attempt.state = 'failed'
                     """,
                     (account_id,),
                 ).fetchone()
@@ -474,6 +475,48 @@ class CommentSessionService:
                 """,
                 (state, now_ms, plan_id),
             )
+
+    def record_pre_submit_skip(
+        self,
+        plan_id: int,
+        idempotency_key: str,
+        *,
+        error_code: str,
+    ) -> None:
+        normalized_key = str(idempotency_key).strip()
+        normalized_error = str(error_code).strip()
+        if not normalized_key or not normalized_error:
+            raise ValueError("pre-submit skip diagnostics are required")
+        now_ms = self.clock_ms()
+        with self.repository._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                INSERT INTO comment_attempts(
+                    plan_id, idempotency_key, state, submitted_at_ms,
+                    reconciled_at_ms, error_code
+                ) VALUES (?, ?, 'failed', ?, ?, ?)
+                ON CONFLICT(idempotency_key) DO UPDATE SET
+                    error_code = excluded.error_code
+                """,
+                (plan_id, normalized_key, now_ms, now_ms, normalized_error),
+            )
+            attempt = connection.execute(
+                "SELECT plan_id FROM comment_attempts WHERE idempotency_key = ?",
+                (normalized_key,),
+            ).fetchone()
+            if attempt is None or int(attempt["plan_id"]) != plan_id:
+                raise ValueError("idempotency_key_conflict")
+            cursor = connection.execute(
+                """
+                UPDATE comment_plans
+                SET state = 'skipped', lease_owner = NULL, updated_at_ms = ?
+                WHERE plan_id = ? AND state IN ('approved','leased','skipped')
+                """,
+                (now_ms, plan_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("plan_not_pre_submit_skippable")
 
     def record_reconciliation(
         self, plan_id: int, idempotency_key: str, *, visible: bool

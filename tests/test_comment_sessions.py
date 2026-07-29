@@ -240,6 +240,49 @@ def test_failed_comment_attempt_temporarily_backs_off_new_plans(
     assert sessions.claim_for_account("account-1", "worker") is not None
 
 
+def test_pre_submit_skip_records_diagnostics_without_backing_off(
+    tmp_path: Path,
+) -> None:
+    repository = AcquisitionRepository(
+        tmp_path / "acquisition.db", clock_ms=lambda: NOW_MS
+    )
+    repository.migrate()
+    sessions = CommentSessionService(
+        repository,
+        clock_ms=lambda: NOW_MS,
+        submission_interval_ms=0,
+        submission_jitter_ms=0,
+        failure_backoff_ms=60_000,
+    )
+    sessions.save_persona("zoey", "account-1", "IKUN BAGS | ZOEY")
+    for offset in range(2):
+        video = sessions.add_video(str(7523456789012345678 + offset))
+        draft = sessions.save_candidate(video.video_id, candidate(suffix=str(offset)))
+        sessions.approve_plan("account-1", video.video_id, draft.candidate_id)
+
+    first = sessions.claim_for_account("account-1", "worker")
+    assert first is not None
+    sessions.record_pre_submit_skip(
+        first.plan_id,
+        "route-failed-1",
+        error_code="comment_video_not_verified",
+    )
+
+    assert sessions.plan(first.plan_id).state == "skipped"
+    assert sessions.claim_for_account("account-1", "worker") is not None
+    with repository._connect_read_only() as connection:
+        attempt = connection.execute(
+            "SELECT state, error_code, reconciled_at_ms "
+            "FROM comment_attempts WHERE plan_id = ?",
+            (first.plan_id,),
+        ).fetchone()
+    assert dict(attempt) == {
+        "state": "failed",
+        "error_code": "comment_video_not_verified",
+        "reconciled_at_ms": NOW_MS,
+    }
+
+
 def test_reconciliation_and_observation_are_idempotently_recorded(
     tmp_path: Path,
 ) -> None:

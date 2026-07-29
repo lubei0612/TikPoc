@@ -356,6 +356,62 @@ def test_mobile_persists_brand_comment_failure_code_for_diagnostics(
     assert attempt["error_code"] == "video_identity_mismatch"
 
 
+def test_mobile_skips_pre_submit_route_failure_and_claims_next_plan(
+    tmp_path: Path,
+) -> None:
+    api = client(tmp_path)
+    sessions = api.app.state.comment_sessions
+    sessions.save_persona("zoey", "account-1", "IKUN BAGS | ZOEY")
+    for offset in range(2):
+        video = sessions.add_video(
+            str(7523456789012345678 + offset),
+            caption_anchor=f"archive piece {offset}",
+        )
+        draft = sessions.save_candidate(
+            video.video_id,
+            candidate=CommentCandidate(
+                f"That structured shape changes the whole outfit {offset}",
+                f"这个有型的包型改变了整套穿搭 {offset}",
+                0,
+                "zoey",
+            ),
+        )
+        sessions.approve_plan("account-1", video.video_id, draft.candidate_id)
+    registered = api.post(
+        "/api/mobile/register",
+        json={"device_id": "device-1", "account_id": "account-1"},
+        headers={"Authorization": "Bearer bootstrap-secret"},
+    ).json()
+    headers = {"Authorization": f"Bearer {registered['access_token']}"}
+    pull = {
+        "device_id": "device-1",
+        "session_epoch": 1,
+        "task_kind": "brand_comment",
+        "limit": 1,
+    }
+    first = api.post("/api/mobile/pull", json=pull, headers=headers).json()["tasks"][0]
+
+    result = api.post(
+        "/api/mobile/results",
+        json={
+            "device_id": "device-1",
+            "session_epoch": 1,
+            "task_id": first["task_id"],
+            "lease_id": first["lease_id"],
+            "idempotency_key": "route-failed-1",
+            "state": "deferred",
+            "phase": "video_opening",
+            "evidence": {"error_code": "comment_video_not_verified"},
+        },
+        headers=headers,
+    )
+    second = api.post("/api/mobile/pull", json=pull, headers=headers).json()["tasks"][0]
+
+    assert result.json()["comment_state"] == "skipped"
+    assert sessions.plan(first["plan_id"]).state == "skipped"
+    assert second["plan_id"] != first["plan_id"]
+
+
 def test_mobile_heartbeat_rejects_wrong_device_token(tmp_path: Path) -> None:
     api = client(tmp_path)
     registered = api.post(
