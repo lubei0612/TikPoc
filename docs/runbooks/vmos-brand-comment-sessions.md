@@ -99,11 +99,12 @@ install the previous signed APK, re-enable Accessibility visibly, and resume onl
 after a stable-Home heartbeat. An unresolved submission continues to consume the
 daily quota until reconciliation.
 
-## Current Six-Account Checkpoint (2026-07-30)
+## Current Six-Account Checkpoint (2026-07-30 04:50 CST)
 
-- The desktop intake contains 21 relevant videos, 356 imported high-engagement
-  comment evidence rows, and 120 distinct English/Chinese plans allocated as
-  exactly 20 active plans per account. Candidate text learns topic and structure
+- The production database contains 29 relevant videos, 435 imported comment
+  evidence rows, and 174 distinct English/Chinese plans. Each account has at
+  least 20 currently executable-or-confirmed plans plus bounded reserves for
+  account-specific video availability. Candidate text learns topic and structure
   from evidence without copying it verbatim or adding a direct sales/contact
   instruction.
 - All six VMOS account/device pairs run the signed TikPoc APK in active
@@ -120,14 +121,18 @@ daily quota until reconciliation.
   reset, the instance was restarted through the documented VMOS restart API,
   and the same exact-video route then verified. Its next server-owned plan
   reached `visible_confirmed` in the live APK flow.
-- The server now applies a five-minute account backoff after a reconciled failed
-  attempt. Failed attempts do not consume the daily quota, while unresolved and
-  confirmed submissions still do. This prevents a transient route failure from
-  consuming the remaining plan queue.
-- The current durable launch evidence is seven visible confirmations across all
-  six accounts, zero unresolved attempts, and one retained failed observation
-  whose submit visibility was ambiguous. That plan stays terminal to prevent a
-  duplicate comment; the other non-submitting route failures were safely reset.
+- The global pause control now suppresses brand-comment claims as well as the
+  legacy mobile queue. Devices remain authenticated and keep heartbeating while
+  paused, so resume does not require re-registration.
+- A route failure that occurs before the comment composer is opened is now
+  recorded as a diagnostic `skipped` plan instead of becoming an unresolved
+  submission. The account then observes a five-minute backoff before trying the
+  next immutable plan. Skips do not consume the 20-comment daily quota and no
+  rapid failure cascade can consume the reserve queue.
+- The current durable launch evidence is 12 visible confirmations across all
+  six accounts, zero unresolved attempts, 21 explicit route skips, and one
+  retained failed observation whose submit visibility was ambiguous. That plan
+  stays terminal to prevent a duplicate comment.
 
 Keep the six workers running on the unchanged build and record the measured
 2-hour and full local-day totals. The current checkpoint proves live routing,
