@@ -433,7 +433,8 @@ class CommentSessionService:
     def record_reconciliation(
         self, plan_id: int, idempotency_key: str, *, visible: bool
     ) -> None:
-        state = "visible_confirmed" if visible else "uncertain"
+        attempt_state = "visible_confirmed" if visible else "failed"
+        plan_state = "visible_confirmed" if visible else "failed"
         now_ms = self.clock_ms()
         with self.repository._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -445,7 +446,7 @@ class CommentSessionService:
                     reconciled_at_ms = ?
                 WHERE plan_id = ? AND idempotency_key = ?
                 """,
-                (state, now_ms, plan_id, idempotency_key),
+                (attempt_state, now_ms, plan_id, idempotency_key),
             )
             connection.execute(
                 """
@@ -455,7 +456,7 @@ class CommentSessionService:
                     updated_at_ms = ?
                 WHERE plan_id = ? AND state IN ('submitted','uncertain','visible_confirmed')
                 """,
-                (state, now_ms, plan_id),
+                (plan_state, now_ms, plan_id),
             )
 
     def record_observation(self, plan_id: int, *, likes: int, replies: int) -> None:

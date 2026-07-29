@@ -246,6 +246,7 @@ def test_uncertain_plan_is_returned_only_for_read_only_reconciliation(
 
     sessions.record_reconciliation(plan.plan_id, "submit-1", visible=False)
 
+    assert sessions.plan(plan.plan_id).state == "failed"
     assert (
         sessions.claim_for_account("account-1", "worker", include_reconciliation=True)
         is None
