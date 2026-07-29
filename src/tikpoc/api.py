@@ -658,7 +658,9 @@ def create_app(
                         }
                     )
                 visible = bool(body.evidence.get("visible_confirmed"))
-                error_code = str(body.evidence.get("error_code") or "").strip()[:100]
+                error_code = str(
+                    body.evidence.get("error_code") or body.evidence.get("code") or ""
+                ).strip()[:100]
                 state = "visible_confirmed" if visible else "uncertain"
                 if plan.state in {"submitted", "uncertain"}:
                     comment_sessions.record_reconciliation(

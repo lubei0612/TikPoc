@@ -298,7 +298,7 @@ def test_mobile_persists_brand_comment_failure_code_for_diagnostics(
             "phase": "comment_reconciling",
             "evidence": {
                 "visible_confirmed": False,
-                "error_code": "video_identity_mismatch",
+                "code": "video_identity_mismatch",
             },
         },
         headers=headers,
