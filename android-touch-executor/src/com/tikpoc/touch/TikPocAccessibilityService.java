@@ -203,17 +203,25 @@ public final class TikPocAccessibilityService extends AccessibilityService
     public boolean browseHomeReadOnly() {
         AccessibilityNodeInfo root = waitForRoot(2_000L);
         if (root == null) return false;
+        Rect viewport = new Rect();
         try {
+            root.getBoundsInScreen(viewport);
             if (!clickUniqueExactControl(root, "首页", "Home")) {
                 return false;
             }
         } finally {
             root.recycle();
         }
+        if (viewport.width() <= 0 || viewport.height() <= 0) {
+            android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
+            viewport.set(0, 0, metrics.widthPixels, metrics.heightPixels);
+        }
+        BrowseGestureGeometry.Swipe swipe = BrowseGestureGeometry.forViewport(
+                viewport.left, viewport.top, viewport.right, viewport.bottom);
         SystemClock.sleep(400L);
         Path path = new Path();
-        path.moveTo(540F, 1_350F);
-        path.lineTo(540F, 750F);
+        path.moveTo(swipe.startX, swipe.startY);
+        path.lineTo(swipe.endX, swipe.endY);
         GestureDescription gesture = new GestureDescription.Builder()
                 .addStroke(new GestureDescription.StrokeDescription(path, 0L, 350L))
                 .build();

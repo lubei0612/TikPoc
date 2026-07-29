@@ -35,6 +35,7 @@ mkdir -p "$OUT/classes" "$OUT/test-classes" "$OUT/dex" "$OUT/compiled-res"
   "$ROOT/src/com/tikpoc/touch/SessionPacingPlanner.java" \
   "$ROOT/src/com/tikpoc/touch/AutonomousTaskRunner.java" \
   "$ROOT/src/com/tikpoc/touch/AutonomousTaskExecutor.java" \
+  "$ROOT/src/com/tikpoc/touch/BrowseGestureGeometry.java" \
   "$ROOT/src/com/tikpoc/touch/AccessibilityUiAdapter.java" \
   "$ROOT/src/com/tikpoc/touch/CommentTaskExecutor.java" \
   "$ROOT/src/com/tikpoc/touch/AutonomousStartupRecovery.java" \
@@ -58,6 +59,7 @@ mkdir -p "$OUT/classes" "$OUT/test-classes" "$OUT/dex" "$OUT/compiled-res"
   "$ROOT/test/com/tikpoc/touch/SessionPacingPlannerTest.java" \
   "$ROOT/test/com/tikpoc/touch/AutonomousTaskRunnerTest.java" \
   "$ROOT/test/com/tikpoc/touch/AutonomousTaskExecutorTest.java" \
+  "$ROOT/test/com/tikpoc/touch/BrowseGestureGeometryTest.java" \
   "$ROOT/test/com/tikpoc/touch/AccessibilityUiAdapterTest.java" \
   "$ROOT/test/com/tikpoc/touch/CommentTaskExecutorTest.java" \
   "$ROOT/test/com/tikpoc/touch/AutonomousStartupRecoveryTest.java"
@@ -90,6 +92,8 @@ mkdir -p "$OUT/classes" "$OUT/test-classes" "$OUT/dex" "$OUT/compiled-res"
   com.tikpoc.touch.AutonomousTaskRunnerTest
 "$JDK/bin/java" -cp "$PLATFORM:$OUT/classes:$OUT/test-classes" \
   com.tikpoc.touch.AutonomousTaskExecutorTest
+"$JDK/bin/java" -cp "$PLATFORM:$OUT/classes:$OUT/test-classes" \
+  com.tikpoc.touch.BrowseGestureGeometryTest
 "$JDK/bin/java" -cp "$PLATFORM:$OUT/classes:$OUT/test-classes" \
   com.tikpoc.touch.AccessibilityUiAdapterTest
 "$JDK/bin/java" -cp "$PLATFORM:$OUT/classes:$OUT/test-classes" \
