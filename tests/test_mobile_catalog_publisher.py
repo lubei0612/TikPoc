@@ -657,6 +657,69 @@ def test_appium_photo_ui_waits_for_delayed_unpublished_photo_prompt() -> None:
     assert driver.created.clicks == 2
 
 
+def test_appium_photo_ui_waits_for_slow_unpublished_photo_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = {"seconds": 0.0}
+    monkeypatch.setattr(
+        "tikpoc.mobile_catalog_publisher.time.monotonic",
+        lambda: clock["seconds"],
+    )
+
+    class SlowPromptDriver(AppiumPublishingDriver):
+        def __init__(self) -> None:
+            super().__init__()
+            self.create_started = False
+            self.prompt_discarded = False
+            self.created = AppiumElement(on_click=self._open_create)
+            self.discard = AppiumElement(on_click=self._discard_prompt)
+
+        @property
+        def page_source(self) -> str:
+            visible = (
+                self.create_started
+                and not self.prompt_discarded
+                and clock["seconds"] >= 2.0
+            )
+            prompt = '<node text="继续编辑尚未发布的照片?" />' if visible else ""
+            return super().page_source.replace("</hierarchy>", f"{prompt}</hierarchy>")
+
+        def find_elements(self, by, xpath):
+            prompt_visible = (
+                self.create_started
+                and not self.prompt_discarded
+                and clock["seconds"] >= 2.0
+            )
+            if ("Cancel" in xpath or "取消" in xpath) and prompt_visible:
+                return [self.discard]
+            if ("Upload" in xpath or "上传" in xpath) and not self.prompt_discarded:
+                return []
+            return super().find_elements(by, xpath)
+
+        def _open_create(self) -> None:
+            if self.created.clicks == 1:
+                self.create_started = True
+
+        def _discard_prompt(self) -> None:
+            self.prompt_discarded = True
+
+    driver = SlowPromptDriver()
+    ui = AppiumTikTokPhotoUi(
+        driver,
+        timeout=3,
+        poll_interval=0.25,
+        sleeper=lambda seconds: clock.__setitem__(
+            "seconds", clock["seconds"] + seconds
+        ),
+    )
+    ui.verify_identity("expected")
+
+    ui.prepare(("/sdcard/Pictures/TikPoc/job-1/001.jpg",), "Fresh job")
+
+    assert driver.discard.clicks == 1
+    assert driver.created.clicks == 2
+
+
 def test_appium_photo_ui_holds_route_after_submission_for_upload_grace() -> None:
     sleeps: list[float] = []
     driver = AppiumPublishingDriver()

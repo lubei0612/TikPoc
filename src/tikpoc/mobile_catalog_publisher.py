@@ -165,7 +165,7 @@ class AppiumTikTokPhotoUi:
         if create is not None:
             create.click()
             if self._discard_unpublished_photo_prompt(
-                wait_seconds=min(1.5, self.timeout)
+                wait_seconds=min(5.0, self.timeout)
             ):
                 self._click_required(CREATE_XPATH, "Create control")
         else:
