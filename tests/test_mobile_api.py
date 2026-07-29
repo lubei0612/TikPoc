@@ -356,7 +356,7 @@ def test_mobile_persists_brand_comment_failure_code_for_diagnostics(
     assert attempt["error_code"] == "video_identity_mismatch"
 
 
-def test_mobile_skips_pre_submit_route_failure_and_claims_next_plan(
+def test_mobile_skips_pre_submit_route_failure_without_burning_next_plan(
     tmp_path: Path,
 ) -> None:
     api = client(tmp_path)
@@ -405,11 +405,11 @@ def test_mobile_skips_pre_submit_route_failure_and_claims_next_plan(
         },
         headers=headers,
     )
-    second = api.post("/api/mobile/pull", json=pull, headers=headers).json()["tasks"][0]
+    next_pull = api.post("/api/mobile/pull", json=pull, headers=headers)
 
     assert result.json()["comment_state"] == "skipped"
     assert sessions.plan(first["plan_id"]).state == "skipped"
-    assert second["plan_id"] != first["plan_id"]
+    assert next_pull.json()["tasks"] == []
 
 
 def test_mobile_heartbeat_rejects_wrong_device_token(tmp_path: Path) -> None:

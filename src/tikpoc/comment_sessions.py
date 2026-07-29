@@ -362,8 +362,7 @@ class CommentSessionService:
                     )) AS failed_at_ms
                     FROM comment_attempts AS attempt
                     JOIN comment_plans AS plan ON plan.plan_id = attempt.plan_id
-                    WHERE plan.account_id = ? AND plan.state = 'failed'
-                      AND attempt.state = 'failed'
+                    WHERE plan.account_id = ? AND attempt.state = 'failed'
                     """,
                     (account_id,),
                 ).fetchone()

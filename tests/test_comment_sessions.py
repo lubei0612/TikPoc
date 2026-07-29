@@ -240,16 +240,17 @@ def test_failed_comment_attempt_temporarily_backs_off_new_plans(
     assert sessions.claim_for_account("account-1", "worker") is not None
 
 
-def test_pre_submit_skip_records_diagnostics_without_backing_off(
+def test_pre_submit_skip_records_diagnostics_and_backs_off(
     tmp_path: Path,
 ) -> None:
+    now_ms = [NOW_MS]
     repository = AcquisitionRepository(
-        tmp_path / "acquisition.db", clock_ms=lambda: NOW_MS
+        tmp_path / "acquisition.db", clock_ms=lambda: now_ms[0]
     )
     repository.migrate()
     sessions = CommentSessionService(
         repository,
-        clock_ms=lambda: NOW_MS,
+        clock_ms=lambda: now_ms[0],
         submission_interval_ms=0,
         submission_jitter_ms=0,
         failure_backoff_ms=60_000,
@@ -269,6 +270,8 @@ def test_pre_submit_skip_records_diagnostics_without_backing_off(
     )
 
     assert sessions.plan(first.plan_id).state == "skipped"
+    assert sessions.claim_for_account("account-1", "worker") is None
+    now_ms[0] += 60_000
     assert sessions.claim_for_account("account-1", "worker") is not None
     with repository._connect_read_only() as connection:
         attempt = connection.execute(
