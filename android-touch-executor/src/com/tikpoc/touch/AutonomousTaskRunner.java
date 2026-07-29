@@ -7,6 +7,7 @@ public final class AutonomousTaskRunner {
     private static final long HEARTBEAT_INTERVAL_MS = 60_000L;
     private static final long ACTIVE_DELAY_MS = 0L;
     private static final long IDLE_DELAY_MS = 1_000L;
+    private static final long IDLE_BROWSE_INTERVAL_MS = 30_000L;
     public interface Client {
         void heartbeat(String appVersion, String phase, int queueDepth, long nowMs)
                 throws Exception;
@@ -20,6 +21,10 @@ public final class AutonomousTaskRunner {
 
     public interface Pacing {
         void afterTarget(long completedTargets) throws Exception;
+    }
+
+    public interface IdleActivity {
+        void browseHomeReadOnly() throws Exception;
     }
 
     public static final class VerificationRequired extends Exception {
@@ -40,26 +45,34 @@ public final class AutonomousTaskRunner {
     private final long sessionEpoch;
     private final Executor executor;
     private final Pacing pacing;
+    private final IdleActivity idleActivity;
     private long completedTargets;
     private int consecutiveFailures;
     private State state = State.HEALTHY;
     private long lastHeartbeatAtMs = -1L;
+    private long lastIdleBrowseAtMs = -1L;
     private long recommendedDelayMs = IDLE_DELAY_MS;
 
     public AutonomousTaskRunner(Client client, DeviceTaskStore store,
             String roundId, long sessionEpoch) {
-        this(client, store, roundId, sessionEpoch, null, completed -> {});
+        this(client, store, roundId, sessionEpoch, null, completed -> {}, () -> {});
     }
 
     public AutonomousTaskRunner(Client client, DeviceTaskStore store,
             String roundId, long sessionEpoch, Executor executor) {
-        this(client, store, roundId, sessionEpoch, executor, completed -> {});
+        this(client, store, roundId, sessionEpoch, executor, completed -> {}, () -> {});
     }
 
     public AutonomousTaskRunner(Client client, DeviceTaskStore store,
             String roundId, long sessionEpoch, Executor executor, Pacing pacing) {
+        this(client, store, roundId, sessionEpoch, executor, pacing, () -> {});
+    }
+
+    public AutonomousTaskRunner(Client client, DeviceTaskStore store,
+            String roundId, long sessionEpoch, Executor executor, Pacing pacing,
+            IdleActivity idleActivity) {
         if (client == null || store == null || roundId == null || roundId.trim().isEmpty()
-                || sessionEpoch <= 0 || pacing == null)
+                || sessionEpoch <= 0 || pacing == null || idleActivity == null)
             throw new IllegalArgumentException("invalid runner");
         this.client = client;
         this.store = store;
@@ -67,6 +80,7 @@ public final class AutonomousTaskRunner {
         this.sessionEpoch = sessionEpoch;
         this.executor = executor;
         this.pacing = pacing;
+        this.idleActivity = idleActivity;
     }
 
     public synchronized State runOnce(long nowMs) {
@@ -92,14 +106,20 @@ public final class AutonomousTaskRunner {
                     flushResults();
                     completedTargets++;
                     pacing.afterTarget(completedTargets);
+                    lastIdleBrowseAtMs = nowMs;
                     depth = store.queueDepth(sessionEpoch, nowMs);
                 }
             }
             if (executor != null && depth < MAX_QUEUE_DEPTH) {
                 pullIntoQueue(MAX_QUEUE_DEPTH - depth);
             }
-            recommendedDelayMs = store.queueDepth(sessionEpoch, nowMs) > 0
-                    ? ACTIVE_DELAY_MS : IDLE_DELAY_MS;
+            int finalDepth = store.queueDepth(sessionEpoch, nowMs);
+            if (finalDepth == 0 && (lastIdleBrowseAtMs < 0L
+                    || nowMs - lastIdleBrowseAtMs >= IDLE_BROWSE_INTERVAL_MS)) {
+                lastIdleBrowseAtMs = nowMs;
+                idleActivity.browseHomeReadOnly();
+            }
+            recommendedDelayMs = finalDepth > 0 ? ACTIVE_DELAY_MS : IDLE_DELAY_MS;
             consecutiveFailures = 0;
             state = State.HEALTHY;
         } catch (VerificationRequired error) {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -47,12 +48,18 @@ class CommentSessionService:
         *,
         clock_ms: Callable[[], int],
         daily_limit: int = 20,
+        submission_interval_ms: int = 40 * 60 * 1_000,
+        submission_jitter_ms: int = 25 * 60 * 1_000,
     ) -> None:
         if daily_limit <= 0:
             raise ValueError("daily_limit must be positive")
+        if submission_interval_ms < 0 or submission_jitter_ms < 0:
+            raise ValueError("submission intervals must not be negative")
         self.repository = repository
         self.clock_ms = clock_ms
         self.daily_limit = daily_limit
+        self.submission_interval_ms = submission_interval_ms
+        self.submission_jitter_ms = submission_jitter_ms
 
     def table_names(self) -> tuple[str, ...]:
         with self.repository._connect_read_only() as connection:
@@ -329,6 +336,23 @@ class CommentSessionService:
             ).fetchone()
             if int(used["count"]) >= self.daily_limit:
                 return None
+            last_submission = connection.execute(
+                """
+                SELECT MAX(attempt.submitted_at_ms) AS submitted_at_ms
+                FROM comment_attempts AS attempt
+                JOIN comment_plans AS plan ON plan.plan_id = attempt.plan_id
+                WHERE plan.account_id = ?
+                  AND attempt.state IN ('submitted','uncertain','visible_confirmed')
+                """,
+                (account_id,),
+            ).fetchone()
+            submitted_at_ms = last_submission["submitted_at_ms"]
+            if submitted_at_ms is not None:
+                cooldown_ms = self._submission_cooldown_ms(
+                    account_id, int(used["count"])
+                )
+                if now_ms < int(submitted_at_ms) + cooldown_ms:
+                    return None
             row = connection.execute(
                 """
                 SELECT * FROM comment_plans
@@ -352,6 +376,13 @@ class CommentSessionService:
             updated["state"] = "leased"
             updated["lease_owner"] = worker_id
         return self._plan(updated)
+
+    def _submission_cooldown_ms(self, account_id: str, used_count: int) -> int:
+        if self.submission_jitter_ms == 0:
+            return self.submission_interval_ms
+        digest = hashlib.sha256(f"{account_id}:{used_count}".encode()).digest()
+        jitter = int.from_bytes(digest[:4], "big") % (self.submission_jitter_ms + 1)
+        return self.submission_interval_ms + jitter
 
     def list_plans(self) -> list[dict[str, object]]:
         with self.repository._connect_read_only() as connection:

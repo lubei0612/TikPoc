@@ -10,10 +10,45 @@ public final class AutonomousTaskRunnerTest {
         appliesPacingAfterACompletedTarget();
         activeQueueUsesShortDelayWithoutHeartbeatFlooding();
         heartbeatDoesNotConsumeControlPlanePerTarget();
+        emptyCommentQueueBrowsesHomeAtBoundedCadence();
+        completedCommentDoesNotImmediatelyDuplicateHomeBrowse();
         transientFailuresRemainDegradedAndRecover();
         verificationPausesClaimsAndPreservesCurrentTask();
         verificationReceiptUploadsWithoutRemovingTask();
         System.out.println("AutonomousTaskRunnerTest PASS");
+    }
+
+    private static void completedCommentDoesNotImmediatelyDuplicateHomeBrowse()
+            throws Exception {
+        DeviceTaskStore store = new DeviceTaskStore(new DeviceTaskStore.MemoryBackend());
+        store.enqueue(new DeviceTaskStore.Task(
+                "comment:1", "lease-1", 7L, 9_000L, "pending", "{}"));
+        FakeClient client = new FakeClient();
+        final int[] browses = {0};
+        AutonomousTaskRunner runner = new AutonomousTaskRunner(
+                client, store, "brand_comment", 7L,
+                task -> new DeviceTaskStore.Result("result-1", task.taskId, "{}"),
+                completed -> {}, () -> browses[0]++);
+
+        runner.runOnce(1_000L);
+        check(browses[0] == 0, "comment recovery owns the immediate home browse");
+        runner.runOnce(31_000L);
+        check(browses[0] == 1, "idle browse resumes after comment cadence");
+    }
+
+    private static void emptyCommentQueueBrowsesHomeAtBoundedCadence() throws Exception {
+        DeviceTaskStore store = new DeviceTaskStore(new DeviceTaskStore.MemoryBackend());
+        FakeClient client = new FakeClient();
+        final int[] browses = {0};
+        AutonomousTaskRunner runner = new AutonomousTaskRunner(
+                client, store, "brand_comment", 7L, null, completed -> {},
+                () -> browses[0]++);
+
+        runner.runOnce(1_000L);
+        runner.runOnce(2_000L);
+        check(browses[0] == 1, "empty queue does not swipe on every poll");
+        runner.runOnce(31_000L);
+        check(browses[0] == 2, "idle browsing resumes after bounded interval");
     }
 
     private static void verificationReceiptUploadsWithoutRemovingTask() throws Exception {

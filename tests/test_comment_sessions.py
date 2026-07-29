@@ -16,7 +16,13 @@ def service(tmp_path: Path, *, limit: int = 20) -> CommentSessionService:
         tmp_path / "acquisition.db", clock_ms=lambda: NOW_MS
     )
     repository.migrate()
-    return CommentSessionService(repository, clock_ms=lambda: NOW_MS, daily_limit=limit)
+    return CommentSessionService(
+        repository,
+        clock_ms=lambda: NOW_MS,
+        daily_limit=limit,
+        submission_interval_ms=0,
+        submission_jitter_ms=0,
+    )
 
 
 def candidate(persona: str = "zoey", suffix: str = "") -> CommentCandidate:
@@ -136,6 +142,35 @@ def test_local_day_quota_counts_confirmed_and_unresolved_submissions(
     sessions.record_submission(second.plan_id, "submit-2", state="uncertain")
 
     assert sessions.claim_for_account("account-1", "worker") is None
+
+
+def test_comment_claims_are_spread_between_home_browsing_periods(
+    tmp_path: Path,
+) -> None:
+    now_ms = [NOW_MS]
+    repository = AcquisitionRepository(
+        tmp_path / "acquisition.db", clock_ms=lambda: now_ms[0]
+    )
+    repository.migrate()
+    sessions = CommentSessionService(
+        repository,
+        clock_ms=lambda: now_ms[0],
+        submission_interval_ms=60_000,
+        submission_jitter_ms=0,
+    )
+    sessions.save_persona("zoey", "account-1", "IKUN BAGS | ZOEY")
+    for offset in range(2):
+        video = sessions.add_video(str(7523456789012345678 + offset))
+        draft = sessions.save_candidate(video.video_id, candidate(suffix=str(offset)))
+        sessions.approve_plan("account-1", video.video_id, draft.candidate_id)
+
+    first = sessions.claim_for_account("account-1", "worker")
+    assert first is not None
+    sessions.record_submission(first.plan_id, "submit-1", state="visible_confirmed")
+    assert sessions.claim_for_account("account-1", "worker") is None
+
+    now_ms[0] += 60_000
+    assert sessions.claim_for_account("account-1", "worker") is not None
 
 
 def test_reconciliation_and_observation_are_idempotently_recorded(
