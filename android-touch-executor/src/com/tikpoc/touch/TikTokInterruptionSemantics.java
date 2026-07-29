@@ -100,9 +100,9 @@ public final class TikTokInterruptionSemantics {
             SemanticSnapshot snapshot, String creatorUsername, String captionAnchor) {
         String creator = normalizeIdentity(creatorUsername);
         String anchor = normalizePhrase(captionAnchor);
-        if (creator.isEmpty() || anchor.isEmpty()) return false;
-        boolean creatorVisible = false;
-        boolean captionVisible = false;
+        if (creator.isEmpty() && anchor.isEmpty()) return false;
+        boolean creatorVisible = creator.isEmpty();
+        boolean captionVisible = anchor.isEmpty();
         for (SemanticSnapshot.Node node : snapshot.nodes) {
             if (!node.visible || !node.enabled || !node.bounds.hasArea()) continue;
             String visible = normalizePhrase(node.searchableText());

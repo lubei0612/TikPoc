@@ -12,6 +12,7 @@ public final class TikTokInterruptionSemanticsTest {
         classifiesEnglishVerification();
         ignoresHiddenChallengeText();
         verifiesCreatorInsideVisibleControlDescription();
+        verifiesCaptionAnchorWhenCreatorLabelIsUnavailable();
         selectsClickableParentOfExactHomeLabel();
         System.out.println("TikTokInterruptionSemanticsTest PASS");
     }
@@ -61,6 +62,22 @@ public final class TikTokInterruptionSemanticsTest {
         check(TikTokInterruptionSemantics.hasVisibleVideoIdentity(
                         snapshot, "loveluxury.com", "rare archive piece"),
                 "creator token and caption anchor verified");
+    }
+
+
+    private static void verifiesCaptionAnchorWhenCreatorLabelIsUnavailable()
+            throws Exception {
+        SemanticSnapshot.Node caption = node(
+                "Passing by Love Luxury and she found dream exotic Mini Kellys", true);
+        SemanticSnapshot.Node root = new SemanticSnapshot.Node(
+                "", "android.widget.FrameLayout", "", "",
+                new SemanticSnapshot.Bounds(0, 0, 720, 1280), true, false, true, false,
+                Collections.singletonList(caption));
+        SemanticSnapshot snapshot = SemanticSnapshot.fromRoot(root, 1L, 100L);
+
+        check(TikTokInterruptionSemantics.hasVisibleVideoIdentity(
+                        snapshot, "", "dream exotic Mini Kellys"),
+                "distinct caption anchor verifies the requested deeplink video");
     }
 
     private static void selectsClickableParentOfExactHomeLabel() throws Exception {
