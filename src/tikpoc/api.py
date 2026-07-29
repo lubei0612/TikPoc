@@ -544,6 +544,8 @@ def create_app(
         if session.session_epoch != body.session_epoch:
             return _json({"error": "stale_session"}, 409)
         if body.task_kind == "brand_comment":
+            if database.worker_control() != "running":
+                return _json({"tasks": []})
             if comment_sessions.device_block(body.device_id) is not None:
                 return _json({"tasks": []})
             plan = comment_sessions.claim_for_account(

@@ -160,6 +160,49 @@ def test_mobile_claims_immutable_brand_comment_and_verification_preserves_it(
     }
 
 
+def test_mobile_brand_comment_pull_honors_global_pause(tmp_path: Path) -> None:
+    api = client(tmp_path)
+    sessions = api.app.state.comment_sessions
+    sessions.save_persona("zoey", "account-1", "IKUN BAGS | ZOEY")
+    video = sessions.add_video(
+        "https://www.tiktok.com/@bag/video/7523456789012345678",
+        creator_username="bag",
+        caption_anchor="rare archive piece",
+    )
+    draft = sessions.save_candidate(
+        video.video_id,
+        CommentCandidate(
+            "That structured shape changes the whole outfit",
+            "这个有型的包型改变了整套穿搭",
+            0,
+            "zoey",
+        ),
+    )
+    sessions.approve_plan("account-1", video.video_id, draft.candidate_id)
+    registered = api.post(
+        "/api/mobile/register",
+        json={"device_id": "device-1", "account_id": "account-1"},
+        headers={"Authorization": "Bearer bootstrap-secret"},
+    ).json()
+    headers = {"Authorization": f"Bearer {registered['access_token']}"}
+    pull = {
+        "device_id": "device-1",
+        "session_epoch": 1,
+        "task_kind": "brand_comment",
+        "limit": 1,
+    }
+
+    assert api.post("/api/control/pause").json() == {"control": "paused"}
+    assert api.post("/api/mobile/pull", json=pull, headers=headers).json() == {
+        "tasks": []
+    }
+    assert api.post("/api/control/resume").json() == {"control": "running"}
+    assert (
+        len(api.post("/api/mobile/pull", json=pull, headers=headers).json()["tasks"])
+        == 1
+    )
+
+
 def test_mobile_heartbeat_authenticates_device_and_epoch(tmp_path: Path) -> None:
     api = client(tmp_path)
     registered = api.post(
