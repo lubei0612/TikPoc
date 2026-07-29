@@ -211,6 +211,19 @@ class VmosCloudClient:
             raise RuntimeError("VMOS online-ADB response is incomplete")
         return str(first["taskId"])
 
+    def restart_instance(self, pad_code: str) -> str:
+        normalized = str(pad_code).strip()
+        if not normalized:
+            raise ValueError("pad_code is required")
+        data = self._post(
+            "/vcpcloud/api/padApi/restart",
+            {"padCodes": [normalized]},
+        )
+        first = data[0] if isinstance(data, list) and data else data
+        if not isinstance(first, dict) or not first.get("taskId"):
+            raise RuntimeError("VMOS restart response is incomplete")
+        return str(first["taskId"])
+
     def _post(
         self,
         path: str,
@@ -248,9 +261,15 @@ def _parse_instance(row: Mapping[str, object]) -> VmosInstance:
     pad_code = str(row.get("padCode") or "").strip()
     if not pad_code:
         raise RuntimeError("VMOS instance row is missing padCode")
+    if row.get("online") is not None:
+        online = str(row["online"]) == "1"
+    elif row.get("vmStatus") is not None:
+        online = str(row["vmStatus"]) == "1"
+    else:
+        online = str(row.get("padStatus") or "") == "10"
     return VmosInstance(
         pad_code=pad_code,
-        online=str(row.get("online") or row.get("vmStatus") or "0") == "1",
+        online=online,
         model=str(row.get("brandModel") or row.get("model") or ""),
     )
 

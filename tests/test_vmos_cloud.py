@@ -104,6 +104,28 @@ def test_vmos_client_parses_instances_and_adb_lease() -> None:
     )
 
 
+def test_vmos_client_treats_documented_running_pad_status_as_online() -> None:
+    client = VmosCloudClient(
+        VmosCredentials("ACCESS", "SECRET"),
+        transport=lambda _request: json.dumps(
+            {
+                "code": 200,
+                "data": {
+                    "pageData": [
+                        {
+                            "padCode": "ACP250625501MXP",
+                            "padStatus": 10,
+                        }
+                    ]
+                },
+            }
+        ),
+        clock=lambda: 1784919000,
+    )
+
+    assert client.list_instances()[0].online is True
+
+
 def test_vmos_client_rejects_error_response_without_exposing_credentials() -> None:
     client = VmosCloudClient(
         VmosCredentials("ACCESS", "SECRET"),
@@ -209,3 +231,33 @@ def test_vmos_client_accepts_synchronous_online_adb_success() -> None:
     )
 
     assert client.set_online_adb("ACP250625501MXP", enabled=True) is None
+
+
+def test_vmos_client_restarts_one_instance_with_bounded_payload() -> None:
+    requests: list[VmosSignedRequest] = []
+
+    def transport(request: VmosSignedRequest) -> str:
+        requests.append(request)
+        return json.dumps(
+            {
+                "code": 200,
+                "data": [
+                    {
+                        "taskId": 4844869,
+                        "padCode": "ACP250625501MXP",
+                        "vmStatus": 0,
+                        "taskStatus": 1,
+                    }
+                ],
+            }
+        )
+
+    client = VmosCloudClient(
+        VmosCredentials("ACCESS", "SECRET"),
+        transport=transport,
+        clock=lambda: 1784919000,
+    )
+
+    assert client.restart_instance("ACP250625501MXP") == "4844869"
+    assert requests[0].path == "/vcpcloud/api/padApi/restart"
+    assert requests[0].body == '{"padCodes":["ACP250625501MXP"]}'
