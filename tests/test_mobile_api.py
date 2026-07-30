@@ -1,6 +1,7 @@
 import sqlite3
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from tikpoc.acquisition_db import AcquisitionRepository
@@ -391,8 +392,17 @@ def test_mobile_persists_brand_comment_failure_code_for_diagnostics(
     assert attempt["error_code"] == "video_identity_mismatch"
 
 
-def test_mobile_skips_pre_submit_route_failure_without_burning_next_plan(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    "error_code",
+    (
+        "comment_video_not_verified",
+        "video_open_rejected",
+        "comment_post_control_missing",
+        "comment_text_input_failed",
+    ),
+)
+def test_mobile_skips_pre_submit_failure_without_burning_next_plan(
+    tmp_path: Path, error_code: str
 ) -> None:
     api = client(tmp_path)
     sessions = api.app.state.comment_sessions
@@ -436,7 +446,7 @@ def test_mobile_skips_pre_submit_route_failure_without_burning_next_plan(
             "idempotency_key": "route-failed-1",
             "state": "deferred",
             "phase": "video_opening",
-            "evidence": {"error_code": "comment_video_not_verified"},
+            "evidence": {"error_code": error_code},
         },
         headers=headers,
     )

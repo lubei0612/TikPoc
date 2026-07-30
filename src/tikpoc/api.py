@@ -671,6 +671,8 @@ def create_app(
                 pre_submit_route_failure = error_code in {
                     "comment_video_not_verified",
                     "video_open_rejected",
+                    "comment_post_control_missing",
+                    "comment_text_input_failed",
                 }
                 if not visible and pre_submit_route_failure and plan.state == "leased":
                     comment_sessions.record_pre_submit_skip(
