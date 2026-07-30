@@ -20,6 +20,7 @@ public final class TikTokSemanticsTest {
         recognizesLocalizedObfuscatedVideoControls();
         recognizesLocalizedSelectedLikeState();
         recognizesSelectedFavoriteFromItsIconChild();
+        recognizesLocalizedSelectedFavoriteState();
         matchesMovedControlOnlyByStableSemanticIdentity();
         recognizesLocalizedRepostConfirmation();
         selectsUniqueCommentPostControlBesideComposer();
@@ -38,6 +39,16 @@ public final class TikTokSemanticsTest {
 
         check(TikTokSemantics.actionState(favorite).equals("on"),
                 "selected favorite icon propagates to its control");
+    }
+
+    private static void recognizesLocalizedSelectedFavoriteState() throws Exception {
+        SemanticSnapshot.Node favorite = new SemanticSnapshot.Node(
+                "g4g", "Button", "", "取消收藏",
+                new SemanticSnapshot.Bounds(0, 0, 100, 50), true, true, true, false,
+                Collections.<SemanticSnapshot.Node>emptyList());
+
+        check(TikTokSemantics.actionState(favorite).equals("on"),
+                "localized selected favorite state");
     }
 
     private static void matchesMovedControlOnlyByStableSemanticIdentity() {

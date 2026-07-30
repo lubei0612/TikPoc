@@ -123,7 +123,10 @@ public final class TikTokSemantics {
         if (hasSelectedNode(node)) return "on";
         String searchable = node.searchableText();
         if (searchable.contains("selected") || searchable.contains("remove")
-                || searchable.contains("点赞的视频")) return "on";
+                || searchable.contains("点赞的视频")
+                || searchable.contains("取消收藏")
+                || searchable.contains("已收藏")
+                || searchable.contains("移出收藏")) return "on";
         return "off";
     }
 
