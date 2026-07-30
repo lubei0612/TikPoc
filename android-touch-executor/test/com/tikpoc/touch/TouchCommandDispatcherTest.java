@@ -44,6 +44,7 @@ public final class TouchCommandDispatcherTest {
         actionConfirmsFromVisibleCounterIncrement();
         alreadySelectedActionIsConfirmedWithoutClick();
         repostUsesShareSurfaceAndVerifiesResult();
+        repostWaitsForSlowShareSurface();
         missingFinalEvidenceIsUncertainWithoutSecondClick();
         diagnosticsContainsNoVisibleText();
         System.out.println("TouchCommandDispatcherTest PASS");
@@ -552,6 +553,28 @@ public final class TouchCommandDispatcherTest {
         check(evidence.get("control_resource_id").equals("repost_state"),
                 "repost confirmation evidence source");
         check(fixture.source.index == 5, "repost intermediate snapshots polled");
+    }
+
+    private static void repostWaitsForSlowShareSurface() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.source.snapshots = Arrays.asList(
+                controlsSnapshot(1, control("share", "分享视频。4 次分享")),
+                controlsSnapshot(2, label("loading", "正在加载")),
+                controlsSnapshot(3, label("loading", "正在加载")),
+                controlsSnapshot(4, label("loading", "正在加载")),
+                controlsSnapshot(5, label("loading", "正在加载")),
+                controlsSnapshot(6, label("loading", "正在加载")),
+                controlsSnapshot(7, label("loading", "正在加载")),
+                controlsSnapshot(8, control("repost", "转发")),
+                controlsSnapshot(9, label("loading", "正在处理")),
+                controlsSnapshot(10, label("repost_state", "你已转发")));
+
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("apply_action", map("action", "repost")));
+
+        check(response.values.get("status").equals("ok"),
+                "slow repost share surface verified");
+        check(fixture.actuator.clicks == 2, "slow repost clicks exactly once per control");
     }
 
     private static void missingFinalEvidenceIsUncertainWithoutSecondClick() throws Exception {

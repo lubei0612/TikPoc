@@ -7,6 +7,7 @@ public final class TouchCommandDispatcher {
     private static final int ACTION_CONTROL_ATTEMPTS = 5;
     private static final int ACTION_CONFIRMATION_ATTEMPTS = 5;
     private static final int PROFILE_POST_GRID_ATTEMPTS = 5;
+    private static final int REPOST_SURFACE_ATTEMPTS = 8;
     public interface SnapshotSource {
         SemanticSnapshot current() throws Exception;
 
@@ -425,7 +426,7 @@ public final class TouchCommandDispatcher {
         }
         SemanticSnapshot shareSurface = before;
         SemanticSnapshot.Node repost = null;
-        for (int attempt = 0; attempt < 5 && repost == null; attempt++) {
+        for (int attempt = 0; attempt < REPOST_SURFACE_ATTEMPTS && repost == null; attempt++) {
             shareSurface = snapshots.awaitAfter(shareSurface.eventSequence, 400L);
             try {
                 repost = TikTokSemantics.uniqueControl(shareSurface, "repost");
@@ -442,7 +443,7 @@ public final class TouchCommandDispatcher {
         }
         SemanticSnapshot after = shareSurface;
         SemanticSnapshot.Node confirmation = null;
-        for (int attempt = 0; attempt < 5 && confirmation == null; attempt++) {
+        for (int attempt = 0; attempt < REPOST_SURFACE_ATTEMPTS && confirmation == null; attempt++) {
             after = snapshots.awaitAfter(after.eventSequence, 400L);
             confirmation = TikTokSemantics.repostConfirmation(after);
         }
