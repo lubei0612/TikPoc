@@ -40,6 +40,7 @@ from .api_models import (
     LeadCommand,
     LeadSaleCommand,
     LeadTakeoverCommand,
+    LiveBatchRequest,
     ManualReplyPlanCommand,
     MobileHeartbeatRequest,
     MobilePullRequest,
@@ -57,6 +58,7 @@ from .comment_sessions import CommentSessionService
 from .db import Database, OperatorCommandConflict
 from .device_api import MobileTaskResult
 from .hot_comment_planner import CommentCandidate, CommentEvidence
+from .live_batch_service import LiveBatchService, LiveTargetInput
 from .messaging import RuntimeAiReplyClient, probe_openai_provider
 from .runtime_metadata import runtime_metadata
 from .runtime_settings import (
@@ -187,12 +189,15 @@ def create_app(
     runtime_settings: RuntimeSettingsStore | None = None,
     provider_tester: Callable[[ProviderCredentials], tuple[bool, int]] | None = None,
     mobile_bootstrap_token: str = "",
+    live_batch_token: str = "",
     comment_submission_interval_ms: int = 40 * 60 * 1_000,
     comment_submission_jitter_ms: int = 25 * 60 * 1_000,
 ) -> FastAPI:
     database = Database(database_path)
     database.migrate()
-    acquisition = AcquisitionRepository(database_path)
+    acquisition = AcquisitionRepository(
+        database_path, clock_ms=lambda: int(clock() * 1_000)
+    )
     acquisition.migrate()
     acquisition_service = AcquisitionService(
         acquisition,
@@ -207,6 +212,7 @@ def create_app(
         submission_interval_ms=comment_submission_interval_ms,
         submission_jitter_ms=comment_submission_jitter_ms,
     )
+    live_batches = LiveBatchService(acquisition)
     runtime_settings = runtime_settings or RuntimeSettingsStore(
         database_path.parent / "config" / "secrets" / "operator-settings.json"
     )
@@ -256,6 +262,7 @@ def create_app(
     app.state.acquisition = acquisition
     app.state.acquisition_service = acquisition_service
     app.state.comment_sessions = comment_sessions
+    app.state.live_batches = live_batches
     app.state.registry = registry
     app.state.browser_dm_service = browser_dm_service
     app.state.browser_welcome_service = browser_welcome_service
@@ -265,6 +272,7 @@ def create_app(
     app.state.webhook_max_age_seconds = webhook_max_age_seconds
     app.state.clock = clock
     app.state.mobile_bootstrap_token = mobile_bootstrap_token
+    app.state.live_batch_token = live_batch_token
 
     def bearer_token(request: Request) -> str:
         authorization = request.headers.get("authorization", "")
@@ -272,6 +280,43 @@ def create_app(
         if separator != " " or scheme.casefold() != "bearer" or not token.strip():
             return ""
         return token.strip()
+
+    def claim_comment_task(
+        body: MobilePullRequest, session
+    ) -> dict[str, object] | None:
+        if database.worker_control() != "running":
+            return None
+        if comment_sessions.device_block(body.device_id) is not None:
+            return None
+        plan = comment_sessions.claim_for_account(
+            session.account_id,
+            f"mobile:{body.device_id}:{body.session_epoch}",
+            include_reconciliation=True,
+        )
+        if plan is None:
+            return None
+        video = comment_sessions.video(plan.video_id)
+        return {
+            "task_kind": "brand_comment",
+            "task_id": f"comment:{plan.plan_id}",
+            "plan_id": plan.plan_id,
+            "attempt_id": f"comment:{plan.plan_id}",
+            "device_id": body.device_id,
+            "account_id": session.account_id,
+            "session_epoch": body.session_epoch,
+            "lease_id": f"comment:{plan.plan_id}:{body.session_epoch}",
+            "lease_expires_at_ms": int(clock() * 1_000) + 120_000,
+            "phase": (
+                "comment_reconciling"
+                if plan.state in {"submitted", "uncertain"}
+                else "video_opening"
+            ),
+            "video_id": plan.video_id,
+            "video_url": video.source_url,
+            "creator_username": video.creator_username,
+            "caption_anchor": video.caption_anchor,
+            "publish_text": plan.english,
+        }
 
     @app.middleware("http")
     async def browser_request_gate(request: Request, call_next: Callable):
@@ -503,6 +548,46 @@ def create_app(
     def comment_plan_status() -> JSONResponse:
         return _json(comment_sessions.list_plans())
 
+    @app.post("/api/live-batches")
+    async def live_batch_submit(request: Request) -> JSONResponse:
+        supplied = bearer_token(request)
+        if (
+            not supplied
+            or not live_batch_token
+            or not hmac.compare_digest(supplied, live_batch_token)
+        ):
+            return _json({"error": "invalid_live_batch_token"}, 401)
+        try:
+            body = LiveBatchRequest.model_validate(await _json_object(request))
+            summary = live_batches.submit(
+                host_round_id=body.host_round_id,
+                source_live_id=body.source_live_id,
+                navigation_mode=body.navigation_mode,
+                targets=tuple(
+                    LiveTargetInput(
+                        username=item.username,
+                        sec_uid=item.sec_uid,
+                        uid=item.uid,
+                        source_video_id=item.source_video_id,
+                        collected_at_ms=item.collected_at_ms,
+                    )
+                    for item in body.targets
+                ),
+            )
+        except (KeyError, TypeError, ValueError, ValidationError) as error:
+            return _json({"error": str(error)}, 400)
+        return _json(
+            {
+                "batch_id": summary.batch_id,
+                "source_live_id": summary.source_live_id,
+                "unique_targets": summary.unique_targets,
+                "skipped_duplicates": summary.skipped_duplicates,
+                "skipped_invalid": summary.skipped_invalid,
+                "device_count": summary.device_count,
+                "navigation_mode": summary.navigation_mode,
+            }
+        )
+
     @app.post("/api/mobile/heartbeat")
     async def mobile_heartbeat(request: Request) -> JSONResponse:
         try:
@@ -549,61 +634,40 @@ def create_app(
         if session.session_epoch != body.session_epoch:
             return _json({"error": "stale_session"}, 409)
         if body.task_kind == "brand_comment":
-            if database.worker_control() != "running":
-                return _json({"tasks": []})
-            if comment_sessions.device_block(body.device_id) is not None:
-                return _json({"tasks": []})
-            plan = comment_sessions.claim_for_account(
-                session.account_id,
-                f"mobile:{body.device_id}:{body.session_epoch}",
-                include_reconciliation=True,
-            )
-            if plan is None:
-                return _json({"tasks": []})
-            video = comment_sessions.video(plan.video_id)
-            return _json(
-                {
-                    "tasks": [
-                        {
-                            "task_kind": "brand_comment",
-                            "task_id": f"comment:{plan.plan_id}",
-                            "plan_id": plan.plan_id,
-                            "attempt_id": f"comment:{plan.plan_id}",
-                            "device_id": body.device_id,
-                            "account_id": session.account_id,
-                            "session_epoch": body.session_epoch,
-                            "lease_id": f"comment:{plan.plan_id}:{body.session_epoch}",
-                            "lease_expires_at_ms": int(clock() * 1_000) + 120_000,
-                            "phase": (
-                                "comment_reconciling"
-                                if plan.state in {"submitted", "uncertain"}
-                                else "video_opening"
-                            ),
-                            "video_id": plan.video_id,
-                            "video_url": video.source_url,
-                            "creator_username": video.creator_username,
-                            "caption_anchor": video.caption_anchor,
-                            "publish_text": plan.english,
-                        }
-                    ]
-                }
-            )
+            task = claim_comment_task(body, session)
+            return _json({"tasks": [] if task is None else [task]})
         if not body.round_id:
             return _json({"error": "round_id is required"}, 400)
         try:
-            tasks = acquisition.claim_mobile_tasks(
-                body.round_id,
-                body.device_id,
-                session_epoch=body.session_epoch,
-                limit=body.limit,
-                now_ms=int(clock() * 1_000),
+            tasks = (
+                acquisition.claim_mobile_priority_tasks(
+                    body.round_id,
+                    body.device_id,
+                    session_epoch=body.session_epoch,
+                    limit=body.limit,
+                    now_ms=int(clock() * 1_000),
+                )
+                if body.task_kind == "hybrid"
+                else acquisition.claim_mobile_tasks(
+                    body.round_id,
+                    body.device_id,
+                    session_epoch=body.session_epoch,
+                    limit=body.limit,
+                    now_ms=int(clock() * 1_000),
+                )
             )
         except ValueError as error:
             return _json({"error": str(error)}, 409)
+        if body.task_kind == "hybrid" and not tasks:
+            if acquisition.live_interrupt_pending(body.round_id):
+                return _json({"tasks": []})
+            task = claim_comment_task(body, session)
+            return _json({"tasks": [] if task is None else [task]})
         return _json(
             {
                 "tasks": [
                     {
+                        "task_kind": "profile_touch",
                         "task_id": task.task_id,
                         "assignment_id": task.assignment_id,
                         "round_id": task.round_id,

@@ -140,8 +140,23 @@ class MobilePullRequest(ApiRequest):
     device_id: Identifier
     session_epoch: int = Field(gt=0)
     round_id: VisibleUsername = ""
-    task_kind: Literal["touch", "brand_comment"] = "touch"
+    task_kind: Literal["touch", "brand_comment", "hybrid"] = "touch"
     limit: int = Field(default=20, ge=1, le=50)
+
+
+class LiveBatchTargetRequest(ApiRequest):
+    username: Identifier
+    sec_uid: VisibleUsername = ""
+    uid: VisibleUsername = ""
+    source_video_id: VisibleUsername = ""
+    collected_at_ms: int = Field(default=0, ge=0)
+
+
+class LiveBatchRequest(ApiRequest):
+    host_round_id: Identifier
+    source_live_id: Identifier
+    navigation_mode: Literal["deeplink", "search"] = "deeplink"
+    targets: list[LiveBatchTargetRequest] = Field(min_length=1, max_length=10_000)
 
 
 class MobileResultRequest(ApiRequest):

@@ -975,6 +975,7 @@ class AcquisitionRepository:
         limit: int,
         now_ms: int,
         lease_ttl_ms: int = 120_000,
+        priority_only: bool = False,
     ) -> tuple[MobileTaskEnvelope, ...]:
         round_id = str(round_id).strip()
         device_id = str(device_id).strip()
@@ -1113,12 +1114,22 @@ class AcquisitionRepository:
                 )
         claimed: list[MobileTaskEnvelope] = []
         for _ in range(limit):
-            assignment = self.claim_scheduled_assignment(
-                round_id,
-                device_id,
-                owner_id,
-                now_ms=now_ms,
-                lease_ttl_ms=lease_ttl_ms,
+            assignment = (
+                self.claim_priority_assignment(
+                    round_id,
+                    device_id,
+                    owner_id,
+                    now_ms=now_ms,
+                    lease_ttl_ms=lease_ttl_ms,
+                )
+                if priority_only
+                else self.claim_scheduled_assignment(
+                    round_id,
+                    device_id,
+                    owner_id,
+                    now_ms=now_ms,
+                    lease_ttl_ms=lease_ttl_ms,
+                )
             )
             if assignment is None:
                 break
@@ -1130,6 +1141,26 @@ class AcquisitionRepository:
                 )
             )
         return tuple(claimed)
+
+    def claim_mobile_priority_tasks(
+        self,
+        round_id: str,
+        device_id: str,
+        *,
+        session_epoch: int,
+        limit: int,
+        now_ms: int,
+        lease_ttl_ms: int = 120_000,
+    ) -> tuple[MobileTaskEnvelope, ...]:
+        return self.claim_mobile_tasks(
+            round_id,
+            device_id,
+            session_epoch=session_epoch,
+            limit=limit,
+            now_ms=now_ms,
+            lease_ttl_ms=lease_ttl_ms,
+            priority_only=True,
+        )
 
     def _mobile_task_envelope(
         self,

@@ -45,6 +45,20 @@ def _parser() -> argparse.ArgumentParser:
     priority_import.add_argument("--json", action="store_true", dest="json_output")
     priority_status = commands.add_parser("priority-status")
     priority_status.add_argument("--db", type=Path, required=True)
+    live_host = commands.add_parser("live-host-init")
+    live_host.add_argument("--db", type=Path, required=True)
+    live_host.add_argument("--devices", type=Path, required=True)
+    live_host.add_argument("--host-id", required=True)
+    live_submit = commands.add_parser("live-batch-submit")
+    live_submit.add_argument("--db", type=Path, required=True)
+    live_submit.add_argument("--host-round", required=True)
+    live_submit.add_argument("--file", type=Path, required=True)
+    live_submit.add_argument("--source-live", required=True)
+    live_submit.add_argument(
+        "--navigation-mode", choices=("deeplink", "search"), default="deeplink"
+    )
+    live_status = commands.add_parser("live-batch-status")
+    live_status.add_argument("--db", type=Path, required=True)
     supabase_pool_import = commands.add_parser("supabase-pool-import")
     supabase_pool_import.add_argument("--csv", type=Path, required=True)
     supabase_pool_import.add_argument(
@@ -316,6 +330,62 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         print(json.dumps(_public_helper_status(result), sort_keys=True, indent=2))
+        return 0
+    if args.command in {"live-host-init", "live-batch-submit", "live-batch-status"}:
+        from .live_batch_service import LiveBatchService, LiveTargetInput
+        from .priority_importer import read_priority_targets
+        from .priority_service import PriorityBatchService
+
+        repository = AcquisitionRepository(args.db)
+        repository.migrate()
+        try:
+            if args.command == "live-host-init":
+                _require_file(args.devices, "device configuration")
+                fleet = FleetConfig.from_path(args.devices)
+                seeds = {
+                    device.device_id: hashlib.sha256(
+                        f"{args.host_id}\0{device.device_id}".encode()
+                    ).hexdigest()
+                    for device in fleet.devices
+                }
+                host_round_id = repository.ensure_live_host_round(
+                    host_id=args.host_id,
+                    device_seeds=seeds,
+                    now_ms=int(time.time() * 1_000),
+                )
+                payload = {
+                    "host_round_id": host_round_id,
+                    "device_count": len(seeds),
+                }
+            elif args.command == "live-batch-submit":
+                _require_file(args.file, "live batch input")
+                parsed = read_priority_targets(
+                    args.file, source_live_id=args.source_live
+                )
+                summary = LiveBatchService(repository).submit(
+                    host_round_id=args.host_round,
+                    source_live_id=args.source_live,
+                    navigation_mode=args.navigation_mode,
+                    targets=tuple(
+                        LiveTargetInput(
+                            username=target.username,
+                            sec_uid=target.sec_uid,
+                            uid=target.target_id,
+                            source_video_id=target.source_video_id,
+                        )
+                        for target in parsed.targets
+                    ),
+                )
+                payload = {
+                    **asdict(summary),
+                    "skipped_duplicates": parsed.skipped_duplicates,
+                    "skipped_invalid": parsed.skipped_invalid,
+                }
+            else:
+                payload = PriorityBatchService(repository).status()
+        except (KeyError, OSError, ValueError) as error:
+            raise SystemExit(str(error)) from None
+        print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
         return 0
     if args.command in {"priority-import", "priority-status"}:
         from .priority_service import PriorityBatchService, summary_json
@@ -759,6 +829,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 os.getenv("TIKPOC_WEBHOOK_MAX_AGE_SECONDS", "300")
             ),
             mobile_bootstrap_token=os.getenv("TIKPOC_MOBILE_BOOTSTRAP_TOKEN", ""),
+            live_batch_token=os.getenv("TIKPOC_LIVE_BATCH_TOKEN", ""),
             comment_submission_interval_ms=(
                 int(os.getenv("TIKPOC_COMMENT_INTERVAL_MINUTES", "40")) * 60_000
             ),

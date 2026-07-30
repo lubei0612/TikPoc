@@ -57,6 +57,171 @@ def test_api_wires_configured_comment_interval(tmp_path: Path) -> None:
     assert sessions.claim_for_account("account-1", "worker") is not None
 
 
+def test_hybrid_pull_prioritizes_live_touch_and_blocks_comment_at_barrier(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "hybrid.db"
+    api = TestClient(
+        create_app(
+            path,
+            clock=lambda: 12.0,
+            mobile_bootstrap_token="bootstrap-secret",
+            live_batch_token="live-secret",
+        )
+    )
+    repository = api.app.state.acquisition
+    host = repository.ensure_live_host_round(
+        host_id="main",
+        device_seeds={"device-1": "seed-1", "device-2": "seed-2"},
+        now_ms=100,
+    )
+    sessions = api.app.state.comment_sessions
+    sessions.save_persona("zoey", "account-1", "IKUN BAGS | ZOEY")
+    video = sessions.add_video("7523456789012345678")
+    draft = sessions.save_candidate(
+        video.video_id,
+        CommentCandidate("A useful detail", "一个实用的细节", 0, "zoey"),
+    )
+    sessions.approve_plan("account-1", video.video_id, draft.candidate_id)
+    live = api.post(
+        "/api/live-batches",
+        headers={"Authorization": "Bearer live-secret"},
+        json={
+            "host_round_id": host,
+            "source_live_id": "live-1",
+            "targets": [{"username": "buyer.one", "sec_uid": "sec-one"}],
+        },
+    )
+    assert live.status_code == 200
+
+    credentials = {}
+    for number in (1, 2):
+        registered = api.post(
+            "/api/mobile/register",
+            json={"device_id": f"device-{number}", "account_id": f"account-{number}"},
+            headers={"Authorization": "Bearer bootstrap-secret"},
+        ).json()
+        credentials[number] = {"Authorization": f"Bearer {registered['access_token']}"}
+    first = api.post(
+        "/api/mobile/pull",
+        headers=credentials[1],
+        json={
+            "device_id": "device-1",
+            "session_epoch": 1,
+            "round_id": host,
+            "task_kind": "hybrid",
+            "limit": 1,
+        },
+    ).json()["tasks"][0]
+    assert first["task_kind"] == "profile_touch"
+    assert first["username"] == "buyer.one"
+    assert first["navigation_mode"] == "deeplink"
+    with repository._connect() as connection:
+        connection.execute(
+            """
+            UPDATE round_assignments
+            SET phase='completed', completed_at_ms=12000,
+                lease_owner=NULL, lease_expires_at_ms=0
+            WHERE assignment_id=?
+            """,
+            (int(first["assignment_id"]),),
+        )
+
+    waiting = api.post(
+        "/api/mobile/pull",
+        headers=credentials[1],
+        json={
+            "device_id": "device-1",
+            "session_epoch": 1,
+            "round_id": host,
+            "task_kind": "hybrid",
+            "limit": 1,
+        },
+    )
+    assert waiting.json() == {"tasks": []}
+    assert sessions.plan(draft.candidate_id).state == "approved"
+
+
+def test_hybrid_pull_falls_through_to_due_comment_without_live_batch(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "hybrid-comment.db"
+    api = TestClient(
+        create_app(
+            path,
+            clock=lambda: 12.0,
+            mobile_bootstrap_token="bootstrap-secret",
+        )
+    )
+    repository = api.app.state.acquisition
+    host = repository.ensure_live_host_round(
+        host_id="main", device_seeds={"device-1": "seed-1"}, now_ms=100
+    )
+    sessions = api.app.state.comment_sessions
+    sessions.save_persona("zoey", "account-1", "IKUN BAGS | ZOEY")
+    video = sessions.add_video("7523456789012345678")
+    draft = sessions.save_candidate(
+        video.video_id,
+        CommentCandidate("A useful detail", "一个实用的细节", 0, "zoey"),
+    )
+    sessions.approve_plan("account-1", video.video_id, draft.candidate_id)
+    registered = api.post(
+        "/api/mobile/register",
+        json={"device_id": "device-1", "account_id": "account-1"},
+        headers={"Authorization": "Bearer bootstrap-secret"},
+    ).json()
+
+    pulled = api.post(
+        "/api/mobile/pull",
+        headers={"Authorization": f"Bearer {registered['access_token']}"},
+        json={
+            "device_id": "device-1",
+            "session_epoch": 1,
+            "round_id": host,
+            "task_kind": "hybrid",
+            "limit": 1,
+        },
+    )
+
+    assert pulled.status_code == 200
+    assert pulled.json()["tasks"][0]["task_kind"] == "brand_comment"
+
+
+def test_live_batch_endpoint_authenticates_and_replays(tmp_path: Path) -> None:
+    api = TestClient(
+        create_app(
+            tmp_path / "live-api.db",
+            clock=lambda: 12.0,
+            live_batch_token="live-secret",
+        )
+    )
+    host = api.app.state.acquisition.ensure_live_host_round(
+        host_id="main", device_seeds={"device-1": "seed-1"}, now_ms=100
+    )
+    payload = {
+        "host_round_id": host,
+        "source_live_id": "live-1",
+        "targets": [{"username": "buyer.one"}],
+    }
+
+    rejected = api.post("/api/live-batches", json=payload)
+    first = api.post(
+        "/api/live-batches",
+        json=payload,
+        headers={"Authorization": "Bearer live-secret"},
+    )
+    replay = api.post(
+        "/api/live-batches",
+        json=payload,
+        headers={"Authorization": "Bearer live-secret"},
+    )
+
+    assert rejected.status_code == 401
+    assert first.status_code == 200
+    assert replay.json() == first.json()
+    assert first.json()["device_count"] == 1
+
+
 def test_mobile_registration_requires_bootstrap_bearer(tmp_path: Path) -> None:
     api = client(tmp_path)
     payload = {"device_id": "device-1", "account_id": "account-1"}

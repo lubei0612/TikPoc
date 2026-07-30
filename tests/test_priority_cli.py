@@ -58,6 +58,56 @@ def _write_priority_jsonl(path: Path) -> None:
     )
 
 
+def test_live_host_cli_initializes_and_submits_without_active_background_round(
+    tmp_path: Path, capsys
+) -> None:
+    database = tmp_path / "live-host.db"
+    devices = tmp_path / "devices.yaml"
+    _write_fleet_config(devices)
+    source = tmp_path / "live.jsonl"
+    _write_priority_jsonl(source)
+
+    assert (
+        main(
+            [
+                "live-host-init",
+                "--db",
+                str(database),
+                "--devices",
+                str(devices),
+                "--host-id",
+                "main",
+            ]
+        )
+        == 0
+    )
+    host = json.loads(capsys.readouterr().out)
+    assert host["device_count"] == 2
+    assert host["host_round_id"].startswith("round-live-host-")
+
+    assert (
+        main(
+            [
+                "live-batch-submit",
+                "--db",
+                str(database),
+                "--host-round",
+                host["host_round_id"],
+                "--file",
+                str(source),
+                "--source-live",
+                "live-1",
+            ]
+        )
+        == 0
+    )
+    submitted = json.loads(capsys.readouterr().out)
+    assert submitted["unique_targets"] == 2
+    assert submitted["skipped_duplicates"] == 1
+    assert submitted["skipped_invalid"] == 1
+    assert submitted["device_count"] == 2
+
+
 def test_priority_import_is_idempotent_and_prints_redacted_json(
     tmp_path: Path, capsys
 ) -> None:
