@@ -135,6 +135,83 @@ def _set_device_control(
         )
 
 
+def test_live_host_round_is_empty_idempotent_and_immutable(tmp_path: Path) -> None:
+    repository = AcquisitionRepository(tmp_path / "live-host.db", clock_ms=lambda: 500)
+    repository.migrate()
+
+    host = repository.ensure_live_host_round(
+        host_id="main",
+        device_seeds={"d1": "seed-1", "d2": "seed-2"},
+        now_ms=100,
+    )
+
+    assert repository.round_device_ids(host) == ("d1", "d2")
+    with repository._connect_read_only() as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM round_assignments WHERE round_id = ?", (host,)
+            ).fetchone()[0]
+            == 0
+        )
+    assert (
+        repository.ensure_live_host_round(
+            host_id="main",
+            device_seeds={"d1": "seed-1", "d2": "seed-2"},
+            now_ms=200,
+        )
+        == host
+    )
+    with pytest.raises(ValueError, match="different devices"):
+        repository.ensure_live_host_round(
+            host_id="main",
+            device_seeds={"d1": "changed"},
+            now_ms=300,
+        )
+
+
+def test_priority_only_claim_waits_at_live_barrier_without_parent_work(
+    tmp_path: Path,
+) -> None:
+    repository = AcquisitionRepository(tmp_path / "live-host.db", clock_ms=lambda: 500)
+    repository.migrate()
+    host = repository.ensure_live_host_round(
+        host_id="main",
+        device_seeds={"d1": "seed-1", "d2": "seed-2"},
+        now_ms=100,
+    )
+    live = _create_live_interrupt(
+        repository,
+        host,
+        name="live-now",
+        checksum_char="f",
+    )
+
+    first = repository.claim_priority_assignment(host, "d1", "worker-1", now_ms=600)
+    assert first is not None and first.round_id == live
+    _mark_assignment_terminal(repository, first.assignment_id, now_ms=700)
+
+    assert repository.live_interrupt_pending(host) is True
+    assert (
+        repository.claim_priority_assignment(host, "d1", "worker-1", now_ms=800) is None
+    )
+    second = repository.claim_priority_assignment(host, "d2", "worker-2", now_ms=800)
+    assert second is not None and second.round_id == live
+    _mark_assignment_terminal(repository, second.assignment_id, now_ms=900)
+
+    assert (
+        repository.claim_priority_assignment(host, "d1", "worker-1", now_ms=1_000)
+        is None
+    )
+    assert repository.live_interrupt_pending(host) is False
+    with repository._connect_read_only() as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM round_assignments WHERE round_id = ?", (host,)
+            ).fetchone()[0]
+            == 0
+        )
+
+
 def test_scheduler_finishes_current_lease_then_prefers_oldest_priority_batch(
     tmp_path: Path,
 ) -> None:

@@ -2525,6 +2525,120 @@ class AcquisitionRepository:
                 is not None
             )
 
+    def ensure_live_host_round(
+        self,
+        *,
+        host_id: str,
+        device_seeds: Mapping[str, str],
+        now_ms: int,
+    ) -> str:
+        normalized_host = str(host_id).strip()
+        normalized_items = tuple(
+            (str(device_id).strip(), str(seed).strip())
+            for device_id, seed in device_seeds.items()
+        )
+        normalized_seeds = dict(normalized_items)
+        if not normalized_host or now_ms < 0:
+            raise ValueError("live host identifiers are required")
+        if (
+            not normalized_seeds
+            or len(normalized_seeds) != len(normalized_items)
+            or any(not device_id or not seed for device_id, seed in normalized_items)
+            or len(set(normalized_seeds.values())) != len(normalized_seeds)
+        ):
+            raise ValueError("live host devices and seeds must be distinct")
+        digest = hashlib.sha256(f"live-host\0{normalized_host}".encode()).hexdigest()
+        pool_id = f"pool-live-host-{digest[:16]}"
+        round_id = f"round-live-host-{digest[:16]}"
+        checksum = hashlib.sha256(
+            f"live-host-pool\0{normalized_host}".encode()
+        ).hexdigest()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT pool_id FROM exposure_rounds WHERE round_id = ?", (round_id,)
+            ).fetchone()
+            if existing is not None:
+                stored_seeds = {
+                    str(row["device_id"]): str(row["order_seed"])
+                    for row in connection.execute(
+                        "SELECT device_id, order_seed FROM round_device_seeds WHERE round_id = ?",
+                        (round_id,),
+                    )
+                }
+                if (
+                    str(existing["pool_id"]) != pool_id
+                    or stored_seeds != normalized_seeds
+                ):
+                    raise ValueError("live host already has different devices")
+                return round_id
+            connection.execute(
+                """
+                INSERT INTO target_pools(
+                    pool_id, source_name, source_checksum,
+                    unique_targets, source_rows, created_at_ms
+                ) VALUES (?, ?, ?, 0, 0, ?)
+                """,
+                (pool_id, f"live-host:{normalized_host}", checksum, now_ms),
+            )
+            connection.execute(
+                """
+                INSERT INTO exposure_rounds(
+                    round_id, pool_id, state, starts_at_ms,
+                    min_inter_device_gap_ms, min_repeat_gap_ms, created_at_ms,
+                    navigation_mode
+                ) VALUES (?, ?, 'running', ?, 0, 0, ?, 'deeplink')
+                """,
+                (round_id, pool_id, now_ms, now_ms),
+            )
+            connection.executemany(
+                """
+                INSERT INTO round_device_seeds(round_id, device_id, order_seed)
+                VALUES (?, ?, ?)
+                """,
+                [
+                    (round_id, device_id, seed)
+                    for device_id, seed in sorted(normalized_seeds.items())
+                ],
+            )
+        return round_id
+
+    def live_interrupt_pending(self, parent_round_id: str) -> bool:
+        normalized_parent = str(parent_round_id).strip()
+        if not normalized_parent:
+            raise ValueError("parent round is required")
+        with self._connect_read_only() as connection:
+            return (
+                connection.execute(
+                    """
+                    SELECT 1 FROM priority_batches
+                    WHERE parent_round_id = ? AND batch_class = 'live_interrupt'
+                      AND state <> 'completed'
+                    LIMIT 1
+                    """,
+                    (normalized_parent,),
+                ).fetchone()
+                is not None
+            )
+
+    def claim_priority_assignment(
+        self,
+        parent_round_id: str,
+        device_id: str,
+        owner_id: str,
+        *,
+        now_ms: int,
+        lease_ttl_ms: int = 120_000,
+    ) -> RoundAssignment | None:
+        return self.claim_scheduled_assignment(
+            parent_round_id,
+            device_id,
+            owner_id,
+            now_ms=now_ms,
+            lease_ttl_ms=lease_ttl_ms,
+            priority_only=True,
+        )
+
     def claim_scheduled_assignment(
         self,
         parent_round_id: str,
@@ -2535,6 +2649,7 @@ class AcquisitionRepository:
         lease_ttl_ms: int = 120_000,
         worker_account_id: str | None = None,
         worker_fence_token: int | None = None,
+        priority_only: bool = False,
     ) -> RoundAssignment | None:
         normalized_parent = str(parent_round_id).strip()
         normalized_device = str(device_id).strip()
@@ -2589,6 +2704,7 @@ class AcquisitionRepository:
                     """
                     SELECT * FROM priority_batches
                     WHERE parent_round_id = ? AND state <> 'completed'
+                      AND (? = 0 OR batch_class = 'live_interrupt')
                       AND (
                         batch_class = 'live_interrupt'
                         OR NOT EXISTS (
@@ -2617,9 +2733,11 @@ class AcquisitionRepository:
                       queue_sequence
                     LIMIT 1
                     """,
-                    (normalized_parent,),
+                    (normalized_parent, int(priority_only)),
                 ).fetchone()
                 if batch is None:
+                    if priority_only:
+                        return None
                     blocked_priority = connection.execute(
                         """
                         SELECT 1 FROM priority_batches
