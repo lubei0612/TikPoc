@@ -20,6 +20,7 @@ public final class TikTokSemanticsTest {
         recognizesLocalizedObfuscatedVideoControls();
         recognizesLocalizedSelectedLikeState();
         recognizesSelectedFavoriteFromItsIconChild();
+        matchesMovedControlOnlyByStableSemanticIdentity();
         recognizesLocalizedRepostConfirmation();
         selectsUniqueCommentPostControlBesideComposer();
         System.out.println("TikTokSemanticsTest PASS");
@@ -37,6 +38,23 @@ public final class TikTokSemanticsTest {
 
         check(TikTokSemantics.actionState(favorite).equals("on"),
                 "selected favorite icon propagates to its control");
+    }
+
+    private static void matchesMovedControlOnlyByStableSemanticIdentity() {
+        SemanticSnapshot.Node expected = nodeAt(
+                "elq", "", "分享视频。4 次分享", true,
+                612, 979, 720, 1087, "Button");
+        SemanticSnapshot.Node moved = nodeAt(
+                "elq", "", "分享视频。4 次分享", true,
+                612, 940, 720, 1048, "Button");
+        SemanticSnapshot.Node sibling = nodeAt(
+                "elq", "", "点赞视频。24 个赞", true,
+                612, 655, 720, 763, "Button");
+
+        check(TikTokSemantics.sameControlIdentity(expected, moved),
+                "moved semantic control matches");
+        check(!TikTokSemantics.sameControlIdentity(expected, sibling),
+                "same resource sibling remains distinct");
     }
 
     private static void parsesCoherentProfileEvidence() throws Exception {

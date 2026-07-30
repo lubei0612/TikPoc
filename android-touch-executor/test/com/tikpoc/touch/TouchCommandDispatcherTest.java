@@ -33,7 +33,12 @@ public final class TouchCommandDispatcherTest {
         searchRequiresExactProfileEvidence();
         searchAcceptsAnAlreadyLoadedExactProfile();
         searchNoMatchIsTerminalEvidence();
+        profileObservationWaitsForDelayedPostGrid();
         actionClicksOnceAndVerifiesResult();
+        actionWaitsForDelayedControl();
+        actionWaitsForSlowFavoriteStatePropagation();
+        actionObservationWaitsForDelayedSelectedState();
+        repostObservationUsesVisibleConfirmation();
         actionWaitsPastAStalePostClickSnapshot();
         actionWaitsForDelayedPlatformStatePropagation();
         actionConfirmsFromVisibleCounterIncrement();
@@ -395,6 +400,80 @@ public final class TouchCommandDispatcherTest {
         check(evidence.get("control_resource_id").equals("like_button"), "control");
     }
 
+    private static void profileObservationWaitsForDelayedPostGrid() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.source.snapshots = Arrays.asList(
+                profileSnapshotWithoutPosts(1), profileSnapshot(2));
+
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("observe_profile", map("expected_username", "target_user")));
+
+        @SuppressWarnings("unchecked") Map<String, Object> evidence =
+                (Map<String, Object>) response.values.get("evidence");
+        check(((Number) evidence.get("video_count")).intValue() == 1,
+                "delayed post grid observed");
+        check(fixture.source.index == 2, "profile observation waited for post event");
+    }
+
+    private static void actionWaitsForDelayedControl() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.source.snapshots = Arrays.asList(
+                controlsSnapshot(1, control("favorite_button", "Favorite")),
+                actionSnapshot(false, 2), actionSnapshot(true, 3));
+
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("apply_action", map("action", "like")));
+
+        check(response.values.get("status").equals("ok"), "delayed control verified");
+        check(fixture.actuator.clicks == 1, "delayed control clicked once");
+    }
+
+    private static void actionWaitsForSlowFavoriteStatePropagation() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.source.snapshots = Arrays.asList(
+                countedActionSnapshot(2, 1),
+                countedActionSnapshot(2, 1), countedActionSnapshot(2, 1),
+                countedActionSnapshot(2, 1), countedActionSnapshot(2, 1),
+                countedActionSnapshot(3, 2));
+
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("apply_action", map("action", "favorite")));
+
+        check(response.values.get("status").equals("ok"), "slow favorite verified");
+        check(fixture.actuator.clicks == 1, "slow favorite clicked once");
+    }
+
+    private static void actionObservationWaitsForDelayedSelectedState() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.source.snapshots = Arrays.asList(
+                controlsSnapshot(1, control("favorite_button", "Favorite")),
+                controlsSnapshot(1, control("favorite_button", "Favorite")),
+                selectedFavoriteSnapshot(2));
+
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("observe_action", map("action", "favorite")));
+
+        @SuppressWarnings("unchecked") Map<String, Object> evidence =
+                (Map<String, Object>) response.values.get("evidence");
+        check(evidence.get("state").equals("on"), "delayed selected state reconciled");
+        check(fixture.actuator.clicks == 0, "reconciliation remains read only");
+    }
+
+    private static void repostObservationUsesVisibleConfirmation() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.source.snapshots = Collections.singletonList(
+                controlsSnapshot(1, label("repost_state", "你已转发")));
+
+        Protocol.Response response = fixture.dispatcher.dispatch(
+                request("observe_action", map("action", "repost")));
+
+        @SuppressWarnings("unchecked") Map<String, Object> evidence =
+                (Map<String, Object>) response.values.get("evidence");
+        check(response.values.get("status").equals("ok"), "repost observation succeeds");
+        check(evidence.get("state").equals("on"), "repost confirmation reconciled");
+        check(fixture.actuator.clicks == 0, "repost reconciliation remains read only");
+    }
+
     private static void actionWaitsPastAStalePostClickSnapshot() throws Exception {
         Fixture fixture = new Fixture();
         fixture.source.snapshots = Arrays.asList(
@@ -440,7 +519,7 @@ public final class TouchCommandDispatcherTest {
         check(response.values.get("status").equals("uncertain"),
                 "late platform state remains outside bounded observation");
         check(fixture.actuator.clicks == 1, "delayed platform state clicked once");
-        check(fixture.source.index == 4, "late platform state stops after three polls");
+        check(fixture.source.index == 6, "late platform state stops after five polls");
     }
 
     private static void alreadySelectedActionIsConfirmedWithoutClick() throws Exception {
@@ -482,7 +561,7 @@ public final class TouchCommandDispatcherTest {
                 request("apply_action", map("action", "like")));
         check(fixture.actuator.clicks == 1, "no second click");
         check(response.values.get("status").equals("uncertain"), "uncertain status");
-        check(fixture.source.index == 4, "action observation capped at three polls");
+        check(fixture.source.index == 6, "action observation capped at five polls");
     }
 
     private static void diagnosticsContainsNoVisibleText() throws Exception {
@@ -636,6 +715,18 @@ public final class TouchCommandDispatcherTest {
         }
     }
 
+    private static SemanticSnapshot selectedFavoriteSnapshot(long sequence) {
+        SemanticSnapshot.Node selectedIcon = new SemanticSnapshot.Node(
+                "favorite_icon", "ImageView", "", "",
+                new SemanticSnapshot.Bounds(0, 0, 100, 40), true, false, true, true,
+                Collections.<SemanticSnapshot.Node>emptyList());
+        SemanticSnapshot.Node favorite = new SemanticSnapshot.Node(
+                "favorite_button", "Button", "", "Favorite",
+                new SemanticSnapshot.Bounds(0, 0, 100, 50), true, true, true, false,
+                Collections.singletonList(selectedIcon));
+        return controlsSnapshot(sequence, favorite);
+    }
+
     private static SemanticSnapshot controlsSnapshot(
             long sequence, SemanticSnapshot.Node... controls) {
         try {
@@ -708,6 +799,29 @@ public final class TouchCommandDispatcherTest {
                     "root", "Frame", "", "", new SemanticSnapshot.Bounds(0, 0, 1080, 1920),
                     true, false, true, false,
                     Arrays.asList(username, following, followers, post));
+            return SemanticSnapshot.fromRoot(root, sequence, 1_000L);
+        } catch (Exception error) {
+            throw new RuntimeException(error);
+        }
+    }
+
+    private static SemanticSnapshot profileSnapshotWithoutPosts(long sequence) {
+        try {
+            SemanticSnapshot.Node username = new SemanticSnapshot.Node(
+                    "username", "TextView", "@target_user", "",
+                    new SemanticSnapshot.Bounds(0, 0, 100, 50), true, false, true, false,
+                    Collections.<SemanticSnapshot.Node>emptyList());
+            SemanticSnapshot.Node following = new SemanticSnapshot.Node(
+                    "following_count", "TextView", "12", "Following",
+                    new SemanticSnapshot.Bounds(0, 50, 100, 100), true, false, true, false,
+                    Collections.<SemanticSnapshot.Node>emptyList());
+            SemanticSnapshot.Node followers = new SemanticSnapshot.Node(
+                    "followers_count", "TextView", "4", "Followers",
+                    new SemanticSnapshot.Bounds(100, 50, 200, 100), true, false, true, false,
+                    Collections.<SemanticSnapshot.Node>emptyList());
+            SemanticSnapshot.Node root = new SemanticSnapshot.Node(
+                    "root", "Frame", "", "", new SemanticSnapshot.Bounds(0, 0, 1080, 1920),
+                    true, false, true, false, Arrays.asList(username, following, followers));
             return SemanticSnapshot.fromRoot(root, sequence, 1_000L);
         } catch (Exception error) {
             throw new RuntimeException(error);

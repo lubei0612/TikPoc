@@ -58,6 +58,24 @@ Acceptance requires `service_enabled=true`, `tiktok_foreground=true`,
 `busy=false`, helper version `1.0.0`, and a current TikTok surface. The command
 creates a serial-scoped ADB forward and removes it before exit.
 
+### Safe In-Place Upgrade
+
+ADB is a provisioning and diagnostic channel only; the installed worker pulls
+and reports tasks over HTTPS. For an in-place APK upgrade:
+
+1. Pause the device control and wait for the current task to become terminal.
+2. Run `adb -s ADB_ENDPOINT install -r touch-executor.apk`.
+3. Launch `com.tikpoc.touch/.ProvisioningActivity` once so Android clears the
+   package stopped state.
+4. Visibly disable and re-enable **TikPoc Touch Executor** in Accessibility.
+5. Resume only after the server receives a fresh HTTPS heartbeat and reports
+   the worker as idle or running.
+
+Do not force-stop the package after enabling Accessibility: that leaves the
+package stopped and prevents Android from binding the service. Treat an ADB
+disconnect after step 5 as non-fatal when HTTPS heartbeats and task progress
+continue. Reopen ADB only for the next install or a bounded diagnostic.
+
 ## Canary Gates
 
 Use a fresh ignored SQLite database and a fresh round at every gate. Do not

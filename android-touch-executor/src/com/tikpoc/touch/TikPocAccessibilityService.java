@@ -175,11 +175,16 @@ public final class TikPocAccessibilityService extends AccessibilityService
             List<AccessibilityNodeInfo> matches = new ArrayList<AccessibilityNodeInfo>();
             collectMatches(root, expected, matches);
             if (matches.size() != 1) {
-                for (AccessibilityNodeInfo match : matches) match.recycle();
-                return false;
+                recycleAll(matches);
+                matches.clear();
+                collectSemanticMatches(root, expected, matches);
+                if (matches.size() != 1) {
+                    recycleAll(matches);
+                    return false;
+                }
             }
             boolean clicked = matches.get(0).performAction(AccessibilityNodeInfo.ACTION_CLICK);
-            matches.get(0).recycle();
+            recycleAll(matches);
             return clicked;
         } finally {
             root.recycle();
@@ -838,6 +843,32 @@ public final class TikPocAccessibilityService extends AccessibilityService
             if (child == null) continue;
             try {
                 collectMatches(child, expected, matches);
+            } finally {
+                child.recycle();
+            }
+        }
+    }
+
+    private static void collectSemanticMatches(
+            AccessibilityNodeInfo node, SemanticSnapshot.Node expected,
+            List<AccessibilityNodeInfo> matches) {
+        Rect rect = new Rect();
+        node.getBoundsInScreen(rect);
+        SemanticSnapshot.Node candidate = new SemanticSnapshot.Node(
+                string(node.getViewIdResourceName()), string(node.getClassName()),
+                string(node.getText()), string(node.getContentDescription()),
+                new SemanticSnapshot.Bounds(rect.left, rect.top, rect.right, rect.bottom),
+                node.isVisibleToUser(), node.isClickable(), node.isEnabled(),
+                node.isSelected() || node.isChecked(),
+                Collections.<SemanticSnapshot.Node>emptyList());
+        if (TikTokSemantics.sameControlIdentity(expected, candidate)) {
+            matches.add(AccessibilityNodeInfo.obtain(node));
+        }
+        for (int index = 0; index < node.getChildCount(); index++) {
+            AccessibilityNodeInfo child = node.getChild(index);
+            if (child == null) continue;
+            try {
+                collectSemanticMatches(child, expected, matches);
             } finally {
                 child.recycle();
             }

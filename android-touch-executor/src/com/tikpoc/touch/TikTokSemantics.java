@@ -127,6 +127,17 @@ public final class TikTokSemantics {
         return "off";
     }
 
+    public static boolean sameControlIdentity(
+            SemanticSnapshot.Node expected, SemanticSnapshot.Node candidate) {
+        if (expected == null || candidate == null || expected.resourceId.isEmpty()
+                || !candidate.visible || !candidate.enabled || !candidate.clickable) {
+            return false;
+        }
+        return expected.resourceId.equals(candidate.resourceId)
+                && expected.className.equals(candidate.className)
+                && expected.searchableText().equals(candidate.searchableText());
+    }
+
     private static boolean hasSelectedNode(SemanticSnapshot.Node node) {
         if (node.selected) return true;
         for (SemanticSnapshot.Node child : node.children) {

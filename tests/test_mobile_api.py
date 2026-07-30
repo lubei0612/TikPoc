@@ -950,8 +950,18 @@ def test_mobile_profile_result_reuses_round_snapshot_across_devices(
             assert assignment.last_error_code == "profile_post_handles_incomplete"
 
 
+@pytest.mark.parametrize(
+    ("reconciliation_state", "expected_plan_state", "expected_error"),
+    [
+        ("completed", ActionPlanState.CONFIRMED, None),
+        ("uncertain", ActionPlanState.UNCERTAIN, "action_unverified_terminal"),
+    ],
+)
 def test_mobile_profile_result_creates_video_bound_follow_up_plan(
     tmp_path: Path,
+    reconciliation_state: str,
+    expected_plan_state: ActionPlanState,
+    expected_error: str | None,
 ) -> None:
     path = tmp_path / "mobile.db"
     repo = AcquisitionRepository(path)
@@ -1075,23 +1085,42 @@ def test_mobile_profile_result_creates_video_bound_follow_up_plan(
     )
 
     assert uncertain.status_code == 200
+    reconciling = repo.assignment(int(task["task_id"]))
+    assert reconciling.phase is AssignmentPhase.ACTION_RECONCILING
+    assert reconciling.last_error_code is None
+    assert repo.action_plan_by_id(plan.plan_id).state is ActionPlanState.UNCERTAIN
+    reconciliation = api.post(
+        "/api/mobile/pull",
+        json={
+            "device_id": "device-1",
+            "session_epoch": 1,
+            "round_id": round_id,
+            "limit": 1,
+        },
+        headers=headers,
+    ).json()["tasks"]
+    assert len(reconciliation) == 1
+    assert reconciliation[0]["phase"] == "action_reconciling"
+
+    resolved = api.post(
+        "/api/mobile/results",
+        json={
+            "device_id": "device-1",
+            "session_epoch": 1,
+            "task_id": task["task_id"],
+            "lease_id": task["lease_id"],
+            "idempotency_key": "action-reconciled-1",
+            "state": reconciliation_state,
+            "phase": "action_reconciling",
+            "evidence": {"code": "action_reconciled", "plan_id": plan.plan_id},
+        },
+        headers=headers,
+    )
+    assert resolved.status_code == 200
     terminal = repo.assignment(int(task["task_id"]))
     assert terminal.phase is AssignmentPhase.COMPLETED
-    assert terminal.last_error_code == "action_uncertain_terminal"
-    assert repo.action_plan_by_id(plan.plan_id).state is ActionPlanState.UNCERTAIN
-    assert (
-        api.post(
-            "/api/mobile/pull",
-            json={
-                "device_id": "device-1",
-                "session_epoch": 1,
-                "round_id": round_id,
-                "limit": 1,
-            },
-            headers=headers,
-        ).json()["tasks"]
-        == []
-    )
+    assert terminal.last_error_code == expected_error
+    assert repo.action_plan_by_id(plan.plan_id).state is expected_plan_state
 
 
 def test_live_mobile_profile_result_with_posts_requires_interaction(

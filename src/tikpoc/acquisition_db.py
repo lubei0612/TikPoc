@@ -1259,11 +1259,7 @@ class AcquisitionRepository:
         ):
             self._apply_mobile_action_result(result, now_ms=now_ms)
         elif (
-            result.phase
-            in {
-                AssignmentPhase.ACTION_EXECUTING.value,
-                AssignmentPhase.ACTION_RECONCILING.value,
-            }
+            result.phase == AssignmentPhase.ACTION_EXECUTING.value
             and result.state == "uncertain"
         ):
             self._apply_mobile_uncertain_action_result(result, now_ms=now_ms)
@@ -1274,7 +1270,7 @@ class AcquisitionRepository:
             self._apply_mobile_reconciled_action_result(result, now_ms=now_ms)
         elif (
             result.phase == AssignmentPhase.ACTION_RECONCILING.value
-            and result.state == "deferred"
+            and result.state in {"deferred", "uncertain"}
         ):
             self._complete_mobile_unresolved_action(result, now_ms=now_ms)
         return "accepted"
@@ -1348,13 +1344,12 @@ class AcquisitionRepository:
             )
         self.mark_action_executing(plan_id)
         self.record_action_result(plan_id, ActionResult.UNCERTAIN, now_ms=now_ms)
-        self.complete_assignment(
+        self.transition_assignment(
             assignment_id,
             owner_id,
             AssignmentPhase.ACTION_EXECUTING,
+            AssignmentPhase.ACTION_RECONCILING,
             now_ms=now_ms,
-            terminal_error_code="action_uncertain_terminal",
-            completion_details={"reason": "action_uncertain"},
         )
 
     def _apply_mobile_reconciled_action_result(
@@ -1386,6 +1381,8 @@ class AcquisitionRepository:
             owner_id,
             AssignmentPhase.ACTION_RECONCILING,
             now_ms=now_ms,
+            terminal_error_code="action_unverified_terminal",
+            completion_details={"reason": "action_reconciliation_unresolved"},
         )
 
     def _apply_mobile_action_result(

@@ -4,6 +4,9 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 public final class TouchCommandDispatcher {
+    private static final int ACTION_CONTROL_ATTEMPTS = 5;
+    private static final int ACTION_CONFIRMATION_ATTEMPTS = 5;
+    private static final int PROFILE_POST_GRID_ATTEMPTS = 5;
     public interface SnapshotSource {
         SemanticSnapshot current() throws Exception;
 
@@ -312,11 +315,45 @@ public final class TouchCommandDispatcher {
             throws Exception {
         String action = requiredArgument(request, "action");
         SemanticSnapshot snapshot = snapshots.current();
-        SemanticSnapshot.Node control = TikTokSemantics.uniqueControl(snapshot, action);
+        SemanticSnapshot.Node observedControl = null;
+        for (int attempt = 0; attempt <= ACTION_CONFIRMATION_ATTEMPTS; attempt++) {
+            if (action.equals("repost")) {
+                SemanticSnapshot.Node confirmation =
+                        TikTokSemantics.repostConfirmation(snapshot);
+                if (confirmation != null) {
+                    return observedAction(
+                            request, startedAt, snapshot, action, "on",
+                            confirmation.resourceId);
+                }
+            }
+            try {
+                observedControl = TikTokSemantics.uniqueControl(snapshot, action);
+                if (TikTokSemantics.actionState(observedControl).equals("on")) {
+                    return observedAction(
+                            request, startedAt, snapshot, action, "on",
+                            observedControl.resourceId);
+                }
+            } catch (TikTokSemantics.SemanticException error) {
+                if (!error.code.equals("missing_control")) throw error;
+            }
+            if (attempt < ACTION_CONFIRMATION_ATTEMPTS) {
+                snapshot = snapshots.awaitAfter(snapshot.eventSequence, 400L);
+            }
+        }
+        if (observedControl == null) {
+            throw new TikTokSemantics.SemanticException("missing_control");
+        }
+        return observedAction(
+                request, startedAt, snapshot, action, "off", observedControl.resourceId);
+    }
+
+    private Protocol.Response observedAction(
+            Protocol.Request request, long startedAt, SemanticSnapshot snapshot,
+            String action, String state, String resourceId) {
         Map<String, Object> evidence = new LinkedHashMap<String, Object>();
         evidence.put("action", action);
-        evidence.put("state", TikTokSemantics.actionState(control));
-        evidence.put("control_resource_id", control.resourceId);
+        evidence.put("state", state);
+        evidence.put("control_resource_id", resourceId);
         return success(request, startedAt, snapshot, evidence);
     }
 
@@ -324,8 +361,9 @@ public final class TouchCommandDispatcher {
             throws Exception {
         String action = requiredArgument(request, "action");
         if (action.equals("repost")) return applyRepost(request, startedAt);
-        SemanticSnapshot before = snapshots.current();
-        SemanticSnapshot.Node control = TikTokSemantics.uniqueControl(before, action);
+        ControlObservation observedControl = awaitControl(action);
+        SemanticSnapshot before = observedControl.snapshot;
+        SemanticSnapshot.Node control = observedControl.control;
         String beforeState = TikTokSemantics.actionState(control);
         long beforeCount = TikTokSemantics.actionCounter(control);
         if (beforeState.equals("on")) {
@@ -344,7 +382,7 @@ public final class TouchCommandDispatcher {
         evidence.put("action", action);
         evidence.put("before", beforeState);
         evidence.put("control_resource_id", control.resourceId);
-        for (int attempt = 0; attempt < 3; attempt++) {
+        for (int attempt = 0; attempt < ACTION_CONFIRMATION_ATTEMPTS; attempt++) {
             after = snapshots.awaitAfter(after.eventSequence, 500L);
             try {
                 SemanticSnapshot.Node afterControl = TikTokSemantics.uniqueControl(after, action);
@@ -441,6 +479,23 @@ public final class TouchCommandDispatcher {
         SemanticSnapshot snapshot = snapshots.current();
         TikTokSemantics.Profile profile = TikTokSemantics.parseProfile(
                 snapshot, clock.elapsedRealtimeMs(), 500L, expectedUsername);
+        if (profile.accessState.equals("available") && profile.videoCount == 0) {
+            long observedSequence = snapshot.eventSequence;
+            for (int attempt = 0; attempt < PROFILE_POST_GRID_ATTEMPTS; attempt++) {
+                SemanticSnapshot candidate = snapshots.awaitAfter(observedSequence, 400L);
+                if (candidate.eventSequence <= observedSequence) continue;
+                observedSequence = candidate.eventSequence;
+                try {
+                    TikTokSemantics.Profile candidateProfile = TikTokSemantics.parseProfile(
+                            candidate, clock.elapsedRealtimeMs(), 500L, expectedUsername);
+                    snapshot = candidate;
+                    profile = candidateProfile;
+                    if (profile.videoCount > 0 || !profile.accessState.equals("available")) break;
+                } catch (TikTokSemantics.SemanticException intermediate) {
+                    // Header and post grid can update in separate accessibility events.
+                }
+            }
+        }
         Map<String, Object> evidence = new LinkedHashMap<String, Object>();
         evidence.put("access_state", profile.accessState);
         evidence.put("username", profile.username);
@@ -451,6 +506,30 @@ public final class TouchCommandDispatcher {
         evidence.put("following_resource_id", profile.followingResourceId);
         evidence.put("followers_resource_id", profile.followersResourceId);
         return success(request, startedAt, snapshot, evidence);
+    }
+
+    private ControlObservation awaitControl(String action) throws Exception {
+        SemanticSnapshot snapshot = snapshots.current();
+        for (int attempt = 0; ; attempt++) {
+            try {
+                return new ControlObservation(
+                        snapshot, TikTokSemantics.uniqueControl(snapshot, action));
+            } catch (TikTokSemantics.SemanticException error) {
+                if (!error.code.equals("missing_control")
+                        || attempt >= ACTION_CONTROL_ATTEMPTS) throw error;
+            }
+            snapshot = snapshots.awaitAfter(snapshot.eventSequence, 400L);
+        }
+    }
+
+    private static final class ControlObservation {
+        final SemanticSnapshot snapshot;
+        final SemanticSnapshot.Node control;
+
+        ControlObservation(SemanticSnapshot snapshot, SemanticSnapshot.Node control) {
+            this.snapshot = snapshot;
+            this.control = control;
+        }
     }
 
     private Protocol.Response openProfile(Protocol.Request request, long startedAt)
