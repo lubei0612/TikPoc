@@ -46,6 +46,16 @@ TIKPOC_BUILD_COMMIT="$COMMIT" \
 切换 `current` 链接并重启服务。systemd 模板位于
 `deploy/systemd/tikpoc.service.example`。
 
+systemd 的 `ExecStart` 必须引用 `/opt/tikpoc/current/.../tikpoc`，不得固化某个
+`releases/COMMIT` 路径。切换后立即核对实际启动命令：
+
+```bash
+systemctl show -p ExecStart --value tikpoc
+readlink -f /opt/tikpoc/current
+```
+
+两者必须指向同一发布版本；仅切换软链接但服务仍启动旧 release 不算部署成功。
+
 ## 部署后门槛
 
 ```bash
