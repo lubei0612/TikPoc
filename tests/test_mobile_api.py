@@ -1094,6 +1094,94 @@ def test_mobile_profile_result_creates_video_bound_follow_up_plan(
     )
 
 
+def test_live_mobile_profile_result_with_posts_requires_interaction(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "live-mobile.db"
+    repo = AcquisitionRepository(path, clock_ms=lambda: 1_000)
+    repo.migrate()
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "INSERT OR REPLACE INTO sqlite_sequence(name, seq) "
+            "VALUES ('round_assignments', 5)"
+        )
+    host = repo.ensure_live_host_round(
+        host_id="host",
+        device_seeds={"device-1": "host-seed"},
+        now_ms=1_000,
+    )
+    target = Target(
+        target_id="target-1",
+        username="target_user",
+        profile_url="https://www.tiktok.com/@target_user",
+        source_video_id="",
+        sec_uid="sec-1",
+        identity_key="sec:sec-1",
+        source_line_numbers=(1,),
+    )
+    pool = repo.import_pool("live.jsonl", "b" * 64, (target,))
+    batch = repo.create_priority_batch(
+        batch_id="live-batch",
+        parent_round_id=host,
+        pool_id=pool.pool_id,
+        source_live_id="room-one",
+        source_checksum="b" * 64,
+        device_seeds={"device-1": "live-seed"},
+    )
+    api = TestClient(
+        create_app(path, clock=lambda: 1.0, mobile_bootstrap_token="bootstrap-secret")
+    )
+    registered = api.post(
+        "/api/mobile/register",
+        json={"device_id": "device-1", "account_id": "account-1"},
+        headers={"Authorization": "Bearer bootstrap-secret"},
+    ).json()
+    headers = {"Authorization": f"Bearer {registered['access_token']}"}
+    task = api.post(
+        "/api/mobile/pull",
+        json={
+            "device_id": "device-1",
+            "session_epoch": 1,
+            "round_id": host,
+            "task_kind": "hybrid",
+            "limit": 1,
+        },
+        headers=headers,
+    ).json()["tasks"][0]
+
+    response = api.post(
+        "/api/mobile/results",
+        json={
+            "device_id": "device-1",
+            "session_epoch": 1,
+            "task_id": task["task_id"],
+            "lease_id": task["lease_id"],
+            "idempotency_key": "profile-1",
+            "state": "completed",
+            "phase": "identity_confirmed",
+            "evidence": {
+                "observed_username": "target_user",
+                "access_state": "available",
+                "following": 1,
+                "followers": 999,
+                "video_count": 2,
+                "post_handles": ["post:0", "post:1"],
+            },
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    plan = repo.action_plan(batch.priority_round_id, target.identity_key, "device-1")
+    assert plan is not None
+    assert plan.requested_outcome in {
+        OutcomeKind.LIKE,
+        OutcomeKind.FAVORITE,
+        OutcomeKind.REPOST,
+    }
+    assert plan.policy_version == "live-posts-gte-1-interaction-v1"
+
+
 def test_mobile_ineligible_profile_confirms_trace_and_completes(
     tmp_path: Path,
 ) -> None:

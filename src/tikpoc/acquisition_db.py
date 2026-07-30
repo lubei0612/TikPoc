@@ -1488,6 +1488,11 @@ class AcquisitionRepository:
                 completion_details={"reason": "profile_evidence_incomplete"},
             )
             return
+        interaction_only = self.round_navigation_mode(
+            assignment.round_id
+        ) == NavigationMode.SEARCH.value or self.round_is_live_interrupt(
+            assignment.round_id
+        )
         plan = self.create_paced_action_plan(
             round_id=assignment.round_id,
             identity_key=assignment.identity_key,
@@ -1495,6 +1500,15 @@ class AcquisitionRepository:
             seed=f"mobile:{assignment.assignment_id}",
             now_ms=now_ms,
             hourly_limits=_CAPACITY_QUOTA_LIMITS,
+            allowed_outcomes=(
+                (
+                    OutcomeKind.LIKE,
+                    OutcomeKind.FAVORITE,
+                    OutcomeKind.REPOST,
+                )
+                if interaction_only
+                else None
+            ),
         )
         if not snapshot.eligible:
             self.confirm_trace_plan(plan.plan_id, now_ms=now_ms)
