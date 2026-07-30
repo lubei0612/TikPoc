@@ -187,6 +187,8 @@ def create_app(
     runtime_settings: RuntimeSettingsStore | None = None,
     provider_tester: Callable[[ProviderCredentials], tuple[bool, int]] | None = None,
     mobile_bootstrap_token: str = "",
+    comment_submission_interval_ms: int = 40 * 60 * 1_000,
+    comment_submission_jitter_ms: int = 25 * 60 * 1_000,
 ) -> FastAPI:
     database = Database(database_path)
     database.migrate()
@@ -200,7 +202,10 @@ def create_app(
     )
     acquisition_service.migrate()
     comment_sessions = CommentSessionService(
-        acquisition, clock_ms=lambda: int(clock() * 1000)
+        acquisition,
+        clock_ms=lambda: int(clock() * 1000),
+        submission_interval_ms=comment_submission_interval_ms,
+        submission_jitter_ms=comment_submission_jitter_ms,
     )
     runtime_settings = runtime_settings or RuntimeSettingsStore(
         database_path.parent / "config" / "secrets" / "operator-settings.json"

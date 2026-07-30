@@ -21,6 +21,41 @@ def client(tmp_path: Path) -> TestClient:
     )
 
 
+def test_api_wires_configured_comment_interval(tmp_path: Path) -> None:
+    now_s = [12.0]
+    api = TestClient(
+        create_app(
+            tmp_path / "paced.db",
+            clock=lambda: now_s[0],
+            mobile_bootstrap_token="bootstrap-secret",
+            comment_submission_interval_ms=20 * 60_000,
+            comment_submission_jitter_ms=0,
+        )
+    )
+    sessions = api.app.state.comment_sessions
+    sessions.save_persona("zoey", "account-1", "IKUN BAGS | ZOEY")
+    for offset in range(2):
+        video = sessions.add_video(str(7523456789012345678 + offset))
+        draft = sessions.save_candidate(
+            video.video_id,
+            CommentCandidate(
+                f"A polished shape that changes the whole outfit {offset}",
+                f"这个精致包型改变了整套穿搭 {offset}",
+                0,
+                "zoey",
+            ),
+        )
+        sessions.approve_plan("account-1", video.video_id, draft.candidate_id)
+
+    first = sessions.claim_for_account("account-1", "worker")
+    assert first is not None
+    sessions.record_submission(first.plan_id, "submit-1", state="visible_confirmed")
+    now_s[0] += 20 * 60 - 0.001
+    assert sessions.claim_for_account("account-1", "worker") is None
+    now_s[0] += 0.001
+    assert sessions.claim_for_account("account-1", "worker") is not None
+
+
 def test_mobile_registration_requires_bootstrap_bearer(tmp_path: Path) -> None:
     api = client(tmp_path)
     payload = {"device_id": "device-1", "account_id": "account-1"}

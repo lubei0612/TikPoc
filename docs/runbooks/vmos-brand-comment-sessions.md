@@ -110,9 +110,11 @@ daily quota until reconciliation.
 - All six VMOS account/device pairs run the signed TikPoc APK in active
   `brand_comment` mode. Each reported an authenticated `idle` heartbeat with
   app version `1.0.0` after the latest reinstall and Accessibility restart.
-- The production schedule is one comment every 40 minutes plus deterministic
-  account-scoped jitter of up to 25 minutes, with a hard local-day limit of 20.
-  Empty periods perform a bounded read-only Home-feed browse every 30 seconds.
+- The production schedule is one comment every 20 minutes with no additional
+  jitter, with a hard local-day limit of 20 per account. Empty periods perform
+  a bounded read-only Home-feed browse every 30 seconds. Production overrides
+  use `TIKPOC_COMMENT_INTERVAL_MINUTES=20` and
+  `TIKPOC_COMMENT_JITTER_MINUTES=0`.
 - The idle browse gesture is derived from the current Android viewport rather
   than fixed 1080p coordinates. A live 720×1280 VMOS command returned verified
   Home evidence and a completed browse gesture in 1.444 seconds.

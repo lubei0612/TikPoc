@@ -759,6 +759,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 os.getenv("TIKPOC_WEBHOOK_MAX_AGE_SECONDS", "300")
             ),
             mobile_bootstrap_token=os.getenv("TIKPOC_MOBILE_BOOTSTRAP_TOKEN", ""),
+            comment_submission_interval_ms=(
+                int(os.getenv("TIKPOC_COMMENT_INTERVAL_MINUTES", "40")) * 60_000
+            ),
+            comment_submission_jitter_ms=(
+                int(os.getenv("TIKPOC_COMMENT_JITTER_MINUTES", "25")) * 60_000
+            ),
         )
         if args.with_web_worker:
             if registry is None:
