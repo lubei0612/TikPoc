@@ -37,8 +37,9 @@ tikpoc comment-plan-status --db DB --json
 ```
 
 Approval freezes the account, video, persona, and publish text. One account can
-approve only one plan for a video. Status output is redacted and excludes both
-comment texts.
+approve only one plan for a video, and one video can be assigned to only one
+brand account globally. Status output is redacted and excludes both comment
+texts.
 
 ## Provision One VMOS Device
 

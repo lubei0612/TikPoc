@@ -87,6 +87,19 @@ def test_approved_plan_is_immutable_and_unique_per_account_video(
         sessions.approve_plan("account-1", video.video_id, replacement.candidate_id)
 
 
+def test_video_can_be_assigned_to_only_one_account(tmp_path: Path) -> None:
+    sessions = service(tmp_path)
+    sessions.save_persona("zoey", "account-1", "IKUN BAGS | ZOEY")
+    sessions.save_persona("ava", "account-2", "IKUN BAGS | AVA")
+    video = sessions.add_video("7523456789012345678")
+    first = sessions.save_candidate(video.video_id, candidate("zoey"))
+    sessions.approve_plan("account-1", video.video_id, first.candidate_id)
+    second = sessions.save_candidate(video.video_id, candidate("ava", suffix="2"))
+
+    with pytest.raises(ValueError, match="video_assigned_to_other_account"):
+        sessions.approve_plan("account-2", video.video_id, second.candidate_id)
+
+
 def test_plan_persona_must_belong_to_approving_account(tmp_path: Path) -> None:
     sessions = service(tmp_path)
     sessions.save_persona("zoey", "account-1", "IKUN BAGS | ZOEY")

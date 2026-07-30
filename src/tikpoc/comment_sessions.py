@@ -248,6 +248,17 @@ class CommentSessionService:
         try:
             with self.repository._connect() as connection:
                 connection.execute("BEGIN IMMEDIATE")
+                assigned = connection.execute(
+                    """
+                    SELECT account_id FROM comment_plans
+                    WHERE video_id = ? AND account_id IS NOT NULL
+                      AND account_id <> ?
+                    LIMIT 1
+                    """,
+                    (canonical, str(account_id).strip()),
+                ).fetchone()
+                if assigned is not None:
+                    raise ValueError("video_assigned_to_other_account")
                 owner = connection.execute(
                     """
                     SELECT persona.account_id

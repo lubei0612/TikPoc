@@ -18,11 +18,8 @@ or text-input command returned successfully.
 - One VMOS device maps to one named IKUN BAGS employee account.
 - Each account may publish at most 20 first-level comments per local calendar
   day.
-- One account may publish at most one comment on a given TikTok video.
-- Normal production assignment prefers different videos across accounts. An
-  explicitly marked experiment may assign the same video to multiple accounts,
-  but every account still receives a distinct comment plan and never replies to
-  another IKUN BAGS account merely to amplify the thread.
+- One TikTok video is assigned to exactly one brand account. A second account
+  cannot approve or publish another brand comment under that video.
 - Comments are English. Every plan stores a Chinese translation for operator
   review, but the translation is never submitted to TikTok.
 - Comments contain no direct profile invitation, shop invitation, contact

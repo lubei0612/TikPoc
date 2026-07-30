@@ -16,6 +16,9 @@ them here.
   publishes at most 20 first-level comments per Asia/Shanghai day; the Android
   worker browses relevant feed content between due comments and pulls work over
   HTTPS without a persistent ADB dependency.
+- Production assignment is globally exclusive by video: one TikTok video maps
+  to exactly one brand account. Do not assign or publish comments from multiple
+  IKUN BAGS accounts under the same video.
 - A verification challenge stops comment gestures and triggers one bounded
   page reset using exactly two Android Back actions. Resume only after visible
   stable TikTok Home evidence; if the challenge remains, pause the affected
