@@ -9,9 +9,37 @@ public final class DeviceApiClientTest {
         pullsTypedTasksWithBearerAuthentication();
         preservesSearchNavigationModeInDurablePayload();
         pullsBrandCommentTasksWithoutRoundBinding();
+        pullsHybridTasksWithHostBinding();
         postsHeartbeatAndIdempotentResult();
         redactsTokenFromTransportErrors();
         System.out.println("DeviceApiClientTest PASS");
+    }
+
+    private static void pullsHybridTasksWithHostBinding() throws Exception {
+        RecordingExchange exchange = new RecordingExchange();
+        exchange.response = new DeviceApiClient.HttpResponse(200,
+                "{\"tasks\":[{\"task_kind\":\"profile_touch\","
+                + "\"task_id\":\"31\",\"lease_id\":\"lease-31\","
+                + "\"session_epoch\":7,\"lease_expires_at_ms\":9000,"
+                + "\"phase\":\"profile_opening\",\"username\":\"buyer.one\"}]}" );
+        DeviceApiClient client = new DeviceApiClient(
+                "https://api.example.test", "device-1", "secret", 7L, exchange);
+
+        DeviceTaskStore.Task task = client.pull("hybrid:round-live-host-main", 1).get(0);
+
+        check(task.taskId.equals("31"), "hybrid task decoded");
+        check(task.payload.contains("\"task_kind\":\"profile_touch\""),
+                "hybrid task kind retained");
+        check(exchange.body.contains("\"task_kind\":\"hybrid\""),
+                "hybrid request kind");
+        check(exchange.body.contains("\"round_id\":\"round-live-host-main\""),
+                "hybrid host round");
+        check(DeviceApiClient.managesHome("hybrid:round-live-host-main"),
+                "hybrid owns home recovery");
+        check(DeviceApiClient.managesHome("brand_comment"),
+                "comment owns home recovery");
+        check(!DeviceApiClient.managesHome("round-ordinary"),
+                "ordinary touch leaves home unchanged");
     }
 
     private static void pullsBrandCommentTasksWithoutRoundBinding() throws Exception {

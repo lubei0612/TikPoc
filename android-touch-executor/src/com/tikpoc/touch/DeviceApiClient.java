@@ -114,6 +114,11 @@ public final class DeviceApiClient implements AutonomousTaskRunner.Client {
         request.put("session_epoch", sessionEpoch);
         if ("brand_comment".equals(roundId)) {
             request.put("task_kind", "brand_comment");
+        } else if (roundId.startsWith("hybrid:")) {
+            String hostRoundId = roundId.substring("hybrid:".length()).trim();
+            if (hostRoundId.isEmpty()) throw new IllegalArgumentException("invalid hybrid round");
+            request.put("task_kind", "hybrid");
+            request.put("round_id", hostRoundId);
         } else {
             request.put("round_id", roundId);
         }
@@ -131,6 +136,12 @@ public final class DeviceApiClient implements AutonomousTaskRunner.Client {
                     string(task, "phase"), encodeTask(task)));
         }
         return tasks;
+    }
+
+    public static boolean managesHome(String roundId) {
+        return "brand_comment".equals(roundId)
+                || (roundId != null && roundId.startsWith("hybrid:")
+                    && roundId.length() > "hybrid:".length());
     }
 
     public void heartbeat(String appVersion, String phase, int queueDepth,

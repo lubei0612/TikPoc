@@ -103,14 +103,14 @@ public final class TikPocAccessibilityService extends AccessibilityService
                             : AutonomousTaskExecutor.Mode.SHADOW,
                     commentExecutor);
             AutonomousTaskRunner.IdleActivity idleActivity =
-                    "brand_comment".equals(settings.roundId)
+                    DeviceApiClient.managesHome(settings.roundId)
                             ? executor::browseHomeReadOnly
                             : () -> {};
             AutonomousTaskRunner runner = new AutonomousTaskRunner(
                     client, store, settings.roundId, settings.sessionEpoch, executor,
                     completed -> {}, idleActivity);
             autonomousThread = new Thread(() -> {
-                if ("brand_comment".equals(settings.roundId)) {
+                if (DeviceApiClient.managesHome(settings.roundId)) {
                     try {
                         AutonomousStartupRecovery.Outcome outcome =
                                 AutonomousStartupRecovery.run(
