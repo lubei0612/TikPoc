@@ -19,9 +19,10 @@ background checkpoints, exact identity verification, or per-account evidence.
 - A live target is a profile-touch target, not a comment target. The global
   one-video/one-brand-account rule continues to govern first-level brand
   comments only.
-- A live profile with at least one visibly confirmed post receives the one
-  immutable, quota-constrained interaction already planned by the server. A
-  profile visit or interaction counts only from visible-state evidence.
+- A live profile with at least one visibly confirmed post draws only like,
+  favorite, or repost; following/follower ratios do not gate this decision. A
+  zero-post profile is trace-only. The immutable, quota-constrained outcome and
+  the profile visit count only from visible-state evidence.
 - Missing, suspended, or visibly unavailable targets terminate immediately for
   that device. Ordinary route or observation errors record one explicit result
   and release the worker for the next target; uncertain actions receive the

@@ -56,7 +56,9 @@ def get_or_create_plan(
     )
     if forced_draw is None:
         allowed_outcomes = None
-        if repository.round_navigation_mode(round_id) == "search":
+        if repository.round_navigation_mode(
+            round_id
+        ) == "search" or repository.round_is_live_interrupt(round_id):
             allowed_outcomes = (
                 OutcomeKind.LIKE,
                 OutcomeKind.FAVORITE,

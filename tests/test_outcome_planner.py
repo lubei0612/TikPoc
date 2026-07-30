@@ -118,6 +118,77 @@ def test_search_policy_with_posts_never_draws_trace(tmp_path: Path) -> None:
     }
 
 
+def test_live_interrupt_with_posts_never_draws_trace(tmp_path: Path) -> None:
+    repository = AcquisitionRepository(tmp_path / "tikpoc.db", clock_ms=lambda: 1_000)
+    repository.migrate()
+    host_round = repository.ensure_live_host_round(
+        host_id="live-host",
+        device_seeds={"phone-01": "host-seed"},
+        now_ms=1_000,
+    )
+    target = Target(
+        target_id="live-user",
+        username="live_buyer",
+        profile_url="https://www.tiktok.com/@live_buyer",
+        source_video_id="",
+        sec_uid="live-sec",
+        identity_key="sec:live-sec",
+        source_line_numbers=(1,),
+    )
+    pool = repository.import_pool("live.jsonl", "a" * 64, (target,))
+    batch = repository.create_priority_batch(
+        batch_id="live-batch",
+        parent_round_id=host_round,
+        pool_id=pool.pool_id,
+        source_live_id="room-one",
+        source_checksum="a" * 64,
+        device_seeds={"phone-01": "live-seed"},
+        navigation_mode="deeplink",
+    )
+    assignment = repository.claim_priority_assignment(
+        host_round, "phone-01", "worker", now_ms=1_000
+    )
+    assert assignment is not None
+    repository.record_visit_confirmed(assignment.assignment_id, "worker", now_ms=1_001)
+    repository.complete_assignment(
+        assignment.assignment_id,
+        "worker",
+        AssignmentPhase.IDENTITY_CONFIRMED,
+        now_ms=1_001,
+    )
+    assert repository.claim_snapshot_lease(
+        batch.priority_round_id,
+        target.identity_key,
+        "phone-01",
+        now_ms=1_001,
+        ttl_ms=30_000,
+    )
+    repository.publish_profile_snapshot(
+        batch.priority_round_id,
+        target.identity_key,
+        device_id="phone-01",
+        observed_username=target.username,
+        metrics=ProfileMetrics(1, 999, 1),
+        private_account=False,
+        observed_at_ms=1_002,
+    )
+
+    plan = get_or_create_plan(
+        repository,
+        batch.priority_round_id,
+        target.identity_key,
+        "phone-01",
+        now_ms=1_003,
+    )
+
+    assert plan.requested_outcome in {
+        OutcomeKind.LIKE,
+        OutcomeKind.FAVORITE,
+        OutcomeKind.REPOST,
+    }
+    assert plan.policy_version == "live-posts-gte-1-interaction-v1"
+
+
 def test_each_device_persists_an_independent_paced_plan(tmp_path: Path) -> None:
     repository, round_id, identities = _eligible_repository(
         tmp_path,

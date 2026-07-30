@@ -40,6 +40,7 @@ from .importer import Target, target_identity_key
 from .models import ProfileMetrics
 from .navigation import NavigationMode
 from .rules import (
+    LIVE_INTERACTION_POLICY_VERSION,
     POLICY_VERSION,
     SEARCH_POLICY_VERSION,
     evaluate_profile,
@@ -5033,8 +5034,28 @@ class AcquisitionRepository:
             raise KeyError(f"unknown round: {round_id}")
         return NavigationMode.parse(str(row["navigation_mode"])).value
 
+    def round_is_live_interrupt(self, round_id: str) -> bool:
+        with self._connect_read_only() as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM priority_batches
+                WHERE priority_round_id = ? AND batch_class = 'live_interrupt'
+                """,
+                (round_id,),
+            ).fetchone()
+        return row is not None
+
     @staticmethod
     def _policy_version_for_round(connection: sqlite3.Connection, round_id: str) -> str:
+        live = connection.execute(
+            """
+            SELECT 1 FROM priority_batches
+            WHERE priority_round_id = ? AND batch_class = 'live_interrupt'
+            """,
+            (round_id,),
+        ).fetchone()
+        if live is not None:
+            return LIVE_INTERACTION_POLICY_VERSION
         row = connection.execute(
             "SELECT navigation_mode FROM exposure_rounds WHERE round_id = ?",
             (round_id,),

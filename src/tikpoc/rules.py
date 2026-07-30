@@ -4,6 +4,7 @@ from .models import ProfileMetrics
 
 POLICY_VERSION = "posts-gte-1-v2"
 SEARCH_POLICY_VERSION = "search-posts-gte-1-composite-v1"
+LIVE_INTERACTION_POLICY_VERSION = "live-posts-gte-1-interaction-v1"
 
 
 @dataclass(frozen=True)

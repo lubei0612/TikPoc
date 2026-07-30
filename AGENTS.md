@@ -178,6 +178,10 @@ user-approved document and update this guide in the same change.
 - Deeplink eligibility is `video_count >= 1`; following and follower metrics are
   retained for observation and reporting but do not gate interaction.
 - Search experiments use immutable policy `search-posts-gte-1-composite-v1`: an exact profile with at least one visible post receives one planned like/favorite/repost outcome; a zero-post profile is trace-only. Search never clicks a similar username and never falls back to Deeplink.
+- Live-room interrupt batches use immutable policy
+  `live-posts-gte-1-interaction-v1`: an exact public profile with at least one
+  visible post draws only like, favorite, or repost. Following/follower ratios
+  do not gate the decision; zero-post profiles remain trace-only.
 - For an eligible profile, open one randomly selected video. Durable per-action
   token buckets and rolling quota headroom select a due like, favorite, or
   repost; when no action is due, retain the visit as trace-only.
