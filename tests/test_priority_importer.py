@@ -265,6 +265,90 @@ def test_priority_jsonl_accepts_followers_source_contract(tmp_path: Path) -> Non
     assert [target.username for target in result.targets] == ["buyer.one"]
 
 
+def test_priority_jsonl_accepts_qualified_live_audience_contract(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "live-audience.jsonl"
+    source.write_text(
+        json.dumps(
+            {
+                "username": "buyer.one",
+                "source_type": "live_audience",
+                "source_id": "live-1",
+                "lead_level": "A",
+                "qualification_reasons": ["comment"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = read_priority_targets(source, source_live_id="live-1")
+
+    assert [target.username for target in result.targets] == ["buyer.one"]
+
+
+def test_priority_jsonl_rejects_explicit_c_level_audience(tmp_path: Path) -> None:
+    source = tmp_path / "live-audience.jsonl"
+    source.write_text(
+        json.dumps(
+            {
+                "username": "passive.viewer",
+                "lead_level": "C",
+                "qualification_reasons": ["join_only"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="JSONL line 1.*lead_level.*A or B"):
+        read_priority_targets(source, source_live_id="live-2")
+
+
+@pytest.mark.parametrize(
+    ("row", "exception_type", "message"),
+    [
+        ({"lead_level": "A"}, ValueError, "qualification_reasons.*required"),
+        ({"qualification_reasons": ["comment"]}, ValueError, "lead_level.*required"),
+        (
+            {"lead_level": "A", "qualification_reasons": "comment"},
+            TypeError,
+            "qualification_reasons.*array",
+        ),
+        (
+            {"lead_level": "A", "qualification_reasons": []},
+            ValueError,
+            "qualification_reasons.*nonempty",
+        ),
+        (
+            {"lead_level": "A", "qualification_reasons": [""]},
+            ValueError,
+            "qualification_reasons.*nonempty strings",
+        ),
+        (
+            {"lead_level": "A", "qualification_reasons": ["join_only"]},
+            ValueError,
+            "qualification_reasons.*unsupported",
+        ),
+    ],
+)
+def test_priority_jsonl_rejects_malformed_quality_metadata(
+    tmp_path: Path,
+    row: dict[str, object],
+    exception_type: type[Exception],
+    message: str,
+) -> None:
+    source = tmp_path / "live-audience.jsonl"
+    source.write_text(
+        json.dumps({"username": "buyer", **row}) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(exception_type, match=rf"JSONL line 1.*{message}"):
+        read_priority_targets(source, source_live_id="live-3")
+
+
 def test_priority_jsonl_rejects_different_source_id(tmp_path: Path) -> None:
     source = tmp_path / "followers.jsonl"
     source.write_text(

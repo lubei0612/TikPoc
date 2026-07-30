@@ -26,6 +26,15 @@ _JSON_TEXT_FIELDS = (
     "source_id",
     "collected_at",
 )
+_QUALITY_REASONS = {
+    "comment",
+    "follow",
+    "gift",
+    "share",
+    "like",
+    "multiple_event_types",
+    "multiple_rooms",
+}
 
 
 @dataclass(frozen=True)
@@ -65,12 +74,18 @@ def _read_jsonl(path: Path, live_id: str) -> PriorityImportResult:
                 raise ValueError(f"JSONL line {line_number} is malformed") from error
             if not isinstance(row, dict):
                 raise TypeError(f"JSONL line {line_number} must be an object")
+            _validate_quality_metadata(row, line_number)
             values = {
                 field: _json_text(row, field, line_number)
                 for field in _JSON_TEXT_FIELDS
             }
             source_type = str(values["source_type"] or "").strip()
-            if source_type and source_type not in {"followers", "comments", "live"}:
+            if source_type and source_type not in {
+                "followers",
+                "comments",
+                "live",
+                "live_audience",
+            }:
                 raise ValueError(
                     f"JSONL line {line_number} has an unsupported source_type"
                 )
@@ -242,6 +257,40 @@ def _json_text(row: dict[str, Any], field: str, line_number: int) -> str | None:
     if value is None or isinstance(value, str):
         return value
     raise ValueError(f"JSONL line {line_number} field {field} must be a string or null")
+
+
+def _validate_quality_metadata(row: dict[str, Any], line_number: int) -> None:
+    has_level = "lead_level" in row
+    has_reasons = "qualification_reasons" in row
+    if not has_level and not has_reasons:
+        return
+    if not has_level:
+        raise ValueError(f"JSONL line {line_number} lead_level is required")
+    if not has_reasons:
+        raise ValueError(f"JSONL line {line_number} qualification_reasons is required")
+
+    level = row["lead_level"]
+    if level not in {"A", "B"}:
+        raise ValueError(f"JSONL line {line_number} lead_level must be A or B")
+    reasons = row["qualification_reasons"]
+    if not isinstance(reasons, list):
+        raise TypeError(
+            f"JSONL line {line_number} qualification_reasons must be an array"
+        )
+    if not reasons:
+        raise ValueError(
+            f"JSONL line {line_number} qualification_reasons must be nonempty"
+        )
+    if any(not isinstance(reason, str) or not reason.strip() for reason in reasons):
+        raise ValueError(
+            f"JSONL line {line_number} qualification_reasons must contain "
+            "nonempty strings"
+        )
+    if any(reason not in _QUALITY_REASONS for reason in reasons):
+        raise ValueError(
+            f"JSONL line {line_number} qualification_reasons contains an "
+            "unsupported value"
+        )
 
 
 def _profile_url(value: Any, username: str, line_number: int) -> str:
