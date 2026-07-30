@@ -4,8 +4,10 @@
 
 ## 前置条件
 
-- SQLite 中恰好有一个 `pending` 或 `running` 的普通触达轮次。
-- `--devices` 必须与该轮次的设备 ID 完全一致；系统会从中快照命令提交时控制状态为 `running` 的设备，暂停或停止的设备不参加本次实时插队。
+- 纯触达模式可以继续使用一个活动普通轮次；热评/养号混合模式使用一次性
+  `live-host-init` 创建的零目标宿主轮次。
+- 宿主的设备 ID 必须与 APK 注册设备一致；系统会从中快照提交时控制状态为
+  `running` 的设备，暂停或停止设备不参加该批。
 - 采集程序先在临时文件中写完整内容并关闭文件，再原子重命名为最终路径，最后调用 CLI。
 - 不要边追加文件边执行导入。TikPoc 会拒绝读取期间发生变化的文件。
 
@@ -35,6 +37,35 @@
 系统也接受带有 `follower_handle`、`follower_uid`、`follower_sec_uid` 表头的 `.xlsx`/`.xlsm` 文件。
 
 ## 导入命令
+
+### Hybrid 热评/养号运行
+
+```bash
+uv run tikpoc live-host-init \
+  --db /path/to/tikpoc.db \
+  --devices /path/to/devices.yaml \
+  --host-id main
+
+uv run tikpoc live-batch-submit \
+  --db /path/to/tikpoc.db \
+  --host-round HOST_ROUND_ID \
+  --file /path/to/live-users.jsonl \
+  --source-live live-20260730-01 \
+  --navigation-mode deeplink
+
+uv run tikpoc live-batch-status --db /path/to/tikpoc.db
+```
+
+APK provision 的 round 值为 `hybrid:HOST_ROUND_ID`。每次 HTTPS 拉取由服务器
+统一仲裁：未完成的 `live_interrupt` 优先；参与设备到达 barrier 时保持等待；
+直播队列清空后领取已经到期的 `brand_comment`；两者都为空时执行有界只读 Home
+浏览。APK 运行期间不依赖 ADB。
+
+浏览器或采集服务也可以向 `POST /api/live-batches` 发送相同规范化目标；请求使用
+服务端配置的 `TIKPOC_LIVE_BATCH_TOKEN` Bearer。服务只接收目标字段，不读取浏览器
+Cookie、登录存储或凭据。
+
+### 普通触达轮次
 
 ```bash
 uv run tikpoc priority-import \

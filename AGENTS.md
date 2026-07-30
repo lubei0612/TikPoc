@@ -10,6 +10,12 @@ them here.
 - **Active product direction (2026-07-28):** the high-volume profile-visit
   workflow is paused after repeated loss of visible visitor-record evidence.
   Do not resume it merely to satisfy the historical capacity queue below.
+- **Approved live exception (2026-07-30):** browser/followers collectors may
+  submit current live-room audience as `live_interrupt` profile-touch batches.
+  Hybrid APK workers finish the current UI operation, process live targets
+  before due comments, wait at the immutable participant barrier, then resume
+  comment pacing and Home browsing. This exception does not resume the old CSV
+  background visitor campaign.
 - Continue the VMOS brand-comment session defined in
   `docs/superpowers/specs/2026-07-28-vmos-comment-session-design.md`: desktop
   discovery and comment evidence produce reviewed immutable plans; each account

@@ -155,21 +155,33 @@ uv run tikpoc dashboard \
 
 ### 3. 导入直播兴趣用户插队批次
 
-采集器先完整写入临时文件，再原子重命名为最终 JSONL/XLSX 文件，然后调用：
+热评/养号生产模式先初始化一次空的直播宿主轮次：
 
 ```bash
-uv run tikpoc priority-import \
+uv run tikpoc live-host-init \
   --db runtime/tikpoc.db \
   --devices config/devices.yaml \
-  --file runtime/live-batch.jsonl \
-  --source-id LIVE_SOURCE_ID \
-  --navigation-mode search \
-  --json
-
-uv run tikpoc priority-status --db runtime/tikpoc.db
+  --host-id main
 ```
 
-`priority-import` 会快照提交时控制状态为 `running` 的设备。输出中的 `batch_class` 为 `live_interrupt`；暂停设备不参加该批，相同文件与 `source-id` 重放仍返回第一次的参与快照。
+将设备 APK 的 round 配置设为输出的 `hybrid:HOST_ROUND_ID`。采集器完整写入
+临时文件并原子重命名后，提交直播用户：
+
+```bash
+uv run tikpoc live-batch-submit \
+  --db runtime/tikpoc.db \
+  --host-round HOST_ROUND_ID \
+  --file runtime/live-batch.jsonl \
+  --source-live LIVE_SOURCE_ID \
+  --navigation-mode deeplink
+
+uv run tikpoc live-batch-status --db runtime/tikpoc.db
+```
+
+Hybrid 调度顺序为“直播插队留痕 → 到期热评 → 只读养号浏览”。提交会快照
+当时为 `running` 的设备；暂停设备不参加，相同来源与内容重放仍返回第一次的
+参与快照。直播批次是用户主页触达，同一目标需要所有快照账号分别触达；热评
+仍严格保持一个视频只对应一个品牌账号。
 
 详细机器合同见 [直播插队 CLI](docs/priority-live-batch-cli.md)。
 搜索触达验收见 [搜索触达 Canary](docs/runbooks/search-touch-canary.md)。
