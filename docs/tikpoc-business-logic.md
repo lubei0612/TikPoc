@@ -125,6 +125,8 @@ following > followers AND video_count >= 1
 
 直播间采集器可以把当前在线且与产品相关的用户作为 `live_interrupt` 插队批次提交。系统先让各设备完成已经持有租约的当前用户，再抢占预载的 `background` 策略 B 波次。导入瞬间控制状态为 `running` 的设备形成不可变参与快照；暂停或停止设备不参与该批。快设备在参与设备屏障等待，多个实时插队按提交顺序执行，全部完成后从原 background assignment、attempt 和乱序断点继续。
 
+采集端保留全部公开直播事件，但只提交 A/B 级用户。A 级至少发生评论、关注、分享或送礼；B 级没有 A 级事件，但发生点赞、至少两种公开事件或跨直播间重复出现；只在一个直播间出现 `join` 的 C 级保留在分析 CSV，不进入触达队列。每个新交接记录携带 `lead_level` 和可复算的 `qualification_reasons`，导入边界拒绝显式 C 级和畸形质量字段，同时兼容未携带质量字段的历史文件。
+
 插队批次沿用当前普通轮次的设备账号快照，每台设备仍使用不同的持久化乱序种子。同一设备账号在本轮已确认访问的身份不会重复触达：普通任务的 confirmed visit 可以满足插队 assignment，插队 confirmed visit 也可以满足该设备尚未开始的普通 assignment 和后续重复插队 assignment。该传播只接受明确 confirmed visit；skipped、deferred/uncertain、缺少访问证据或稳定身份冲突都不传播，也不跨设备账号传播。
 
 采集 AI 通过 `priority-import` 提交完整 JSONL/XLSX 文件，通过 `priority-status` 读取 FIFO 状态、逐设备 pending/deferred/completed/skipped 和普通任务断点。采集程序必须先写临时文件、关闭并原子重命名，再调用 CLI；读取期间变化的文件会被拒绝。详细机器合同见 `docs/priority-live-batch-cli.md`。
