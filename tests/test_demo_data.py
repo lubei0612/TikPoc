@@ -515,6 +515,39 @@ def test_portfolio_seed_persists_exact_interaction_and_trace_counts(
             WHERE account_id LIKE 'demo-account-%' AND state='claimed'
             """
         ).fetchone()[0]
+        handled = connection.execute(
+            """
+            WITH handled(source_key) AS (
+                SELECT source_inbound_fingerprint FROM browser_reply_plans
+                WHERE account_id LIKE 'demo-account-%'
+                  AND plan_origin='ai' AND state='sent'
+                UNION ALL
+                SELECT source_inbound_fingerprint FROM browser_reply_plans
+                WHERE account_id LIKE 'demo-account-%'
+                  AND plan_origin='manual' AND state='sent'
+                UNION ALL
+                SELECT message.message_id
+                FROM web_messages AS message
+                JOIN web_conversations AS conversation
+                  ON conversation.account_id=message.account_id
+                 AND conversation.conversation_id=message.conversation_id
+                WHERE message.account_id LIKE 'demo-account-%'
+                  AND message.direction='inbound'
+                  AND conversation.human_required=1
+            )
+            SELECT COUNT(*), COUNT(DISTINCT source_key) FROM handled
+            """
+        ).fetchone()
+        invalid_terminal_flags = connection.execute(
+            """
+            SELECT COUNT(*) FROM web_conversations
+            WHERE account_id LIKE 'demo-account-%' AND (
+                (human_required=1 AND stage <> 'human_required')
+                OR (contact_captured_at_ms > 0
+                    AND stage NOT IN ('contact_captured', 'closed'))
+            )
+            """
+        ).fetchone()[0]
 
     assert tuple(counts) == (4_410, 68_420 - 4_410, 5, 4_410)
     account_ids = tuple(account.account_id for account in blueprint.accounts)
@@ -533,7 +566,14 @@ def test_portfolio_seed_persists_exact_interaction_and_trace_counts(
     assert manual_handled == 98
     assert 486 - (331 + manual_handled + 28) == 29
     assert 331 / (331 + manual_handled + 28) == pytest.approx(0.7243, abs=0.0001)
+    assert tuple(handled) == (457, 457)
+    assert invalid_terminal_flags == 0
     assert claimed_leases == 0
+    assert Database(path).reply_latency_snapshot() == {
+        "confirmed_replies": 331,
+        "median_ms": 38_000,
+        "p90_ms": 38_000,
+    }
     assert result.summary["interaction_plans"] == 4_410
     assert result.summary["uncertain_action_plans"] == 5
     assert result.created_total == sum(result.created.values())
@@ -651,15 +691,15 @@ def test_seed_conversion_populates_inbox_settings_and_sales(tmp_path: Path) -> N
             """
         ).fetchall()
 
-    assert message_counts == {"inbound": 8, "outbound": 7}
+    assert message_counts == {"inbound": 8, "outbound": 6}
     assert ai_states == {"sent": 5, "uncertain": 1}
-    assert manual_outcomes == 2
+    assert manual_outcomes == 1
     assert human_outcomes == 1
-    assert 5 / (5 + manual_outcomes + human_outcomes) == 0.625
+    assert 5 / (5 + manual_outcomes + human_outcomes) == pytest.approx(5 / 7)
     assert leases == 0
     assert dict(health) == {"activity": 3, "messages": 3}
     assert first.created["ai_reply_plans"] == 6
-    assert first.created["manual_reply_plans"] == 2
+    assert first.created["manual_reply_plans"] == 1
     assert second.created_total == 0
 
 
@@ -726,6 +766,7 @@ def test_clear_demo_database_preserves_unrelated_rows_and_settings(
                 "provider": {
                     "base_url": "https://provider.example.invalid",
                     "api_key": "KEEP",
+                    "model": "demo-model",
                 },
                 "accounts": {"real-account": {"brand_name": "Keep"}},
             }
@@ -740,6 +781,12 @@ def test_clear_demo_database_preserves_unrelated_rows_and_settings(
         runtime_settings_path=settings_path,
         backup_dir=tmp_path / "backups",
     )
+    active_settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert active_settings["provider"] == {
+        "base_url": "https://provider.example.invalid",
+        "api_key": "",
+        "model": "demo-model",
+    }
     result = clear_demo_database(
         path,
         web_accounts_path=accounts_path,
@@ -768,10 +815,71 @@ def test_clear_demo_database_preserves_unrelated_rows_and_settings(
         )
     restored_settings = json.loads(settings_path.read_text(encoding="utf-8"))
     assert restored_settings == {
-        "provider": {"base_url": "https://provider.example.invalid", "api_key": "KEEP"},
+        "provider": {
+            "base_url": "https://provider.example.invalid",
+            "api_key": "",
+            "model": "demo-model",
+        },
         "accounts": {"real-account": {"brand_name": "Keep"}},
     }
     assert not accounts_path.exists()
+
+
+def test_seed_uses_detailed_blueprint_identities_and_plan_semantics(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "portfolio.db"
+    blueprint = build_demo_blueprint(now_ms=NOW_MS)
+    seed_demo_database(path, blueprint)
+
+    with sqlite3.connect(path) as connection:
+        connection.row_factory = sqlite3.Row
+        for expected in blueprint.conversations:
+            row = connection.execute(
+                """
+                SELECT account_id, conversation_id, participant_username, stage
+                FROM web_conversations WHERE participant_username=?
+                """,
+                (expected.lead_id,),
+            ).fetchone()
+            assert row is not None
+            assert dict(row) == {
+                "account_id": expected.account_id,
+                "conversation_id": expected.conversation_key,
+                "participant_username": expected.lead_id,
+                "stage": expected.stage,
+            }
+            inbound = connection.execute(
+                """
+                SELECT text FROM web_messages
+                WHERE account_id=? AND conversation_id=? AND direction='inbound'
+                """,
+                (expected.account_id, expected.conversation_key),
+            ).fetchone()
+            assert inbound is not None and inbound[0] == expected.inbound_text
+
+        plan_states = dict(
+            connection.execute(
+                """
+                SELECT participant_username, state FROM browser_reply_plans
+                WHERE participant_username IN ('demo_lead_002', 'demo_lead_003')
+                  AND plan_origin='ai'
+                """
+            )
+        )
+        new_plan_count = connection.execute(
+            """
+            SELECT COUNT(*) FROM browser_reply_plans
+            WHERE participant_username='demo_lead_010'
+            """
+        ).fetchone()[0]
+
+    assert plan_states == {
+        "demo_lead_002": "uncertain",
+        "demo_lead_003": "superseded",
+    }
+    assert blueprint.conversations[9].stage == "new"
+    assert new_plan_count == 0
 
 
 def test_configuration_promotion_failure_restores_database_and_files(

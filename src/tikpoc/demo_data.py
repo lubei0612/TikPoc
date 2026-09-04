@@ -562,6 +562,14 @@ def _stage_configuration_files(
     settings_document.setdefault(
         "provider", {"base_url": "", "api_key": "", "model": ""}
     )
+    provider = settings_document["provider"]
+    if not isinstance(provider, dict):
+        provider = {}
+    settings_document["provider"] = {
+        "base_url": str(provider.get("base_url") or ""),
+        "api_key": "",
+        "model": str(provider.get("model") or ""),
+    }
     settings_document["accounts"] = runtime_accounts
     staged: dict[Path, Path] = {}
     try:
@@ -887,6 +895,9 @@ def _seed_conversion(
     detailed = {
         index: item for index, item in enumerate(blueprint.conversations, start=1)
     }
+    ai_states, manual_indexes, human_indexes = _conversion_decisions(
+        blueprint, detailed
+    )
     inbound_count = blueprint.metrics.inbound
     follower_count = blueprint.metrics.followers
 
@@ -902,24 +913,26 @@ def _seed_conversion(
         (
             (
                 _conversion_account(blueprint, index).account_id,
-                _conversation_key(index),
+                _conversation_key(blueprint, index),
                 f"demo:participant:{index:04d}",
-                _lead_id(index),
+                _lead_id(blueprint, index),
                 int(index <= follower_count),
-                _conversation_stage(blueprint, index, detailed),
+                _conversation_stage(blueprint, index, detailed, human_indexes),
                 int(index <= blueprint.metrics.engaged),
-                int(index <= blueprint.metrics.ai_sent),
+                int(ai_states.get(index) == "sent"),
                 (
                     _conversion_timestamp(blueprint, index)
-                    if index <= blueprint.metrics.invited
+                    if _conversation_stage(blueprint, index, detailed, human_indexes)
+                    in {"invited", "contact_captured", "closed"}
                     else 0
                 ),
                 (
                     _conversion_timestamp(blueprint, index)
-                    if index <= blueprint.metrics.contact_captured
+                    if _conversation_stage(blueprint, index, detailed, human_indexes)
+                    in {"contact_captured", "closed"}
                     else 0
                 ),
-                int(index <= blueprint.metrics.human_required),
+                int(index in human_indexes),
             )
             for index in range(1, max(inbound_count, follower_count) + 1)
         ),
@@ -935,7 +948,7 @@ def _seed_conversion(
         (
             (
                 _conversion_account(blueprint, index).account_id,
-                _conversation_key(index),
+                _conversation_key(blueprint, index),
                 _inbound_fingerprint(index),
                 (
                     detailed[index].inbound_text
@@ -962,9 +975,9 @@ def _seed_conversion(
         (
             (
                 _conversion_account(blueprint, index).account_id,
-                _conversation_key(index),
+                _conversation_key(blueprint, index),
                 _inbound_fingerprint(index),
-                _lead_id(index),
+                _lead_id(blueprint, index),
                 (
                     detailed[index].inbound_text
                     if index in detailed
@@ -976,22 +989,23 @@ def _seed_conversion(
                     if index in detailed
                     else _aggregate_outbound_text(index)
                 ),
-                _conversation_stage(blueprint, index, detailed),
-                _ai_plan_state(blueprint, index),
+                _conversation_stage(blueprint, index, detailed, human_indexes),
+                ai_states[index],
                 _inbound_fingerprint(index),
-                int(index <= blueprint.metrics.invited),
+                int(
+                    _conversation_stage(blueprint, index, detailed, human_indexes)
+                    in {"invited", "contact_captured", "closed"}
+                ),
                 _conversion_timestamp(blueprint, index) + 100,
                 (
-                    _conversion_timestamp(blueprint, index) + 500
-                    if index <= blueprint.metrics.ai_sent
+                    _conversion_timestamp(blueprint, index) + 38_100
+                    if ai_states[index] == "sent"
                     else 0
                 ),
             )
-            for index in range(1, blueprint.metrics.ai_plans + 1)
+            for index in ai_states
         ),
     )
-    manual_start = blueprint.metrics.ai_plans + 1
-    manual_stop = manual_start + blueprint.scale.manual_handled
     created["manual_reply_plans"] = _executemany_bounded(
         connection,
         """
@@ -1006,18 +1020,18 @@ def _seed_conversion(
         (
             (
                 _conversion_account(blueprint, index).account_id,
-                _conversation_key(index),
+                _conversation_key(blueprint, index),
                 f"demo:manual-plan:{index:04d}",
-                _lead_id(index),
+                _lead_id(blueprint, index),
                 _aggregate_inbound_text(index),
                 _conversion_timestamp(blueprint, index),
                 "DEMO manual reply / 演示人工回复。",
-                _conversation_stage(blueprint, index, detailed),
+                _conversation_stage(blueprint, index, detailed, human_indexes),
                 _inbound_fingerprint(index),
-                _conversion_timestamp(blueprint, index) + 200,
+                0,
                 _conversion_timestamp(blueprint, index) + 600,
             )
-            for index in range(manual_start, manual_stop)
+            for index in manual_indexes
         ),
     )
     created["outbound_messages"] = _executemany_bounded(
@@ -1031,17 +1045,18 @@ def _seed_conversion(
         (
             (
                 _conversion_account(blueprint, index).account_id,
-                _conversation_key(index),
+                _conversation_key(blueprint, index),
                 f"demo:outbound:{index:04d}",
                 (
                     detailed[index].outbound_text
                     if index in detailed
                     else _aggregate_outbound_text(index)
                 ),
-                _conversion_timestamp(blueprint, index) + 500,
+                _conversion_timestamp(blueprint, index) + 38_100,
                 _inbound_fingerprint(index),
             )
-            for index in range(1, blueprint.metrics.ai_sent + 1)
+            for index, state in ai_states.items()
+            if state == "sent"
         ),
     )
     created["outbound_messages"] += _executemany_bounded(
@@ -1055,13 +1070,13 @@ def _seed_conversion(
         (
             (
                 _conversion_account(blueprint, index).account_id,
-                _conversation_key(index),
+                _conversation_key(blueprint, index),
                 f"demo:manual-outbound:{index:04d}",
                 "DEMO manual reply / 演示人工回复。",
                 _conversion_timestamp(blueprint, index) + 600,
                 _inbound_fingerprint(index),
             )
-            for index in range(manual_start, manual_stop)
+            for index in manual_indexes
         ),
     )
 
@@ -1089,8 +1104,8 @@ def _seed_conversion(
             (
                 (
                     _conversion_account(blueprint, index).account_id,
-                    _lead_id(index),
-                    _conversation_key(index),
+                    _lead_id(blueprint, index),
+                    _conversation_key(blueprint, index),
                     stage,
                     f"demo:funnel:{stage}:{index:04d}",
                     _conversion_timestamp(blueprint, index),
@@ -1116,11 +1131,11 @@ def _seed_conversion(
         (
             (
                 _conversion_account(blueprint, index).account_id,
-                _lead_id(index),
+                _lead_id(blueprint, index),
                 12_900 + index * 100,
                 _conversion_timestamp(blueprint, index) + 900,
                 _conversion_account(blueprint, index).account_id,
-                _lead_id(index),
+                _lead_id(blueprint, index),
                 _conversion_timestamp(blueprint, index) + 900,
             )
             for index in range(1, blueprint.metrics.sales + 1)
@@ -1801,14 +1816,25 @@ def _build_account(index: int) -> DemoAccount:
 
 
 def _conversion_account(blueprint: DemoBlueprint, index: int) -> DemoAccount:
+    if index <= len(blueprint.conversations):
+        account_id = blueprint.conversations[index - 1].account_id
+        return next(
+            account
+            for account in blueprint.accounts
+            if account.account_id == account_id
+        )
     return blueprint.accounts[(index - 1) % len(blueprint.accounts)]
 
 
-def _conversation_key(index: int) -> str:
+def _conversation_key(blueprint: DemoBlueprint, index: int) -> str:
+    if index <= len(blueprint.conversations):
+        return blueprint.conversations[index - 1].conversation_key
     return f"demo:conversation:{index:04d}"
 
 
-def _lead_id(index: int) -> str:
+def _lead_id(blueprint: DemoBlueprint, index: int) -> str:
+    if index <= len(blueprint.conversations):
+        return blueprint.conversations[index - 1].lead_id
     return f"demo_lead_{index:04d}"
 
 
@@ -1837,11 +1863,12 @@ def _conversation_stage(
     blueprint: DemoBlueprint,
     index: int,
     detailed: Mapping[int, DemoConversation],
+    human_indexes: frozenset[int],
 ) -> str:
+    if index in human_indexes:
+        return "human_required"
     if index in detailed:
         return detailed[index].stage
-    if index <= blueprint.metrics.human_required:
-        return "human_required"
     if index <= blueprint.metrics.sales:
         return "closed"
     if index <= blueprint.metrics.contact_captured:
@@ -1855,12 +1882,48 @@ def _conversation_stage(
     return "new"
 
 
-def _ai_plan_state(blueprint: DemoBlueprint, index: int) -> str:
-    if index <= blueprint.metrics.ai_sent:
-        return "sent"
-    if index <= blueprint.metrics.ai_sent + blueprint.metrics.ai_uncertain:
-        return "uncertain"
-    return "superseded"
+def _conversion_decisions(
+    blueprint: DemoBlueprint,
+    detailed: Mapping[int, DemoConversation],
+) -> tuple[dict[int, str], tuple[int, ...], frozenset[int]]:
+    inbound_indexes = tuple(range(1, blueprint.metrics.inbound + 1))
+    human_candidates = [
+        index for index, item in detailed.items() if item.stage == "human_required"
+    ]
+    human_candidates.extend(
+        index for index in reversed(inbound_indexes) if index not in human_candidates
+    )
+    human_indexes = frozenset(human_candidates[: blueprint.metrics.human_required])
+    available = [
+        index
+        for index in inbound_indexes
+        if index not in human_indexes
+        and not (index in detailed and detailed[index].stage == "new")
+    ]
+    uncertain = ([2] if blueprint.metrics.ai_uncertain and 2 in available else []) + [
+        index for index in available if index not in {2, 3}
+    ][: max(0, blueprint.metrics.ai_uncertain - 1)]
+    preferred_superseded = bool(
+        blueprint.metrics.ai_superseded and 3 in available and 3 not in uncertain
+    )
+    superseded = ([3] if preferred_superseded else []) + [
+        index for index in available if index not in uncertain and index != 3
+    ][: max(0, blueprint.metrics.ai_superseded - int(preferred_superseded))]
+    remaining = [
+        index
+        for index in available
+        if index not in uncertain and index not in superseded
+    ]
+    sent = remaining[: blueprint.metrics.ai_sent]
+    ai_states = {
+        **dict.fromkeys(sent, "sent"),
+        **dict.fromkeys(uncertain, "uncertain"),
+        **dict.fromkeys(superseded, "superseded"),
+    }
+    manual_indexes = tuple(index for index in available if index not in ai_states)[
+        : blueprint.scale.manual_handled
+    ]
+    return ai_states, manual_indexes, human_indexes
 
 
 def _build_timeline(
@@ -1953,6 +2016,12 @@ def _build_conversations(
             "human_required",
             "I have a complaint about the demo order.",
             "A demo specialist will review this conversation.",
+        ),
+        (
+            "en",
+            "new",
+            "Hello, I just found this demo catalog.",
+            "Thanks for reaching out to the DEMO catalog.",
         ),
     )
     conversations: list[DemoConversation] = []
