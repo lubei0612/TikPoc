@@ -3,6 +3,7 @@ import json
 import os
 import random
 import sqlite3
+import tempfile
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -243,6 +244,13 @@ def seed_demo_database(
     backup_path: Path | None = None
     AcquisitionRepository(database_path).migrate()
     Database(database_path).migrate()
+    with sqlite3.connect(database_path) as state_connection:
+        demo_preexisting = bool(
+            state_connection.execute(
+                "SELECT 1 FROM exposure_rounds WHERE round_id=?",
+                (blueprint.round_id,),
+            ).fetchone()
+        )
 
     if web_accounts_path is not None and runtime_settings_path is not None:
         destinations = (Path(web_accounts_path), Path(runtime_settings_path))
@@ -278,11 +286,12 @@ def seed_demo_database(
         connection.commit()
         for destination, staged in staged_files.items():
             os.replace(staged, destination)
+            os.chmod(destination, 0o600)
     except BaseException:
         connection.rollback()
         connection.close()
-        if backup_path is not None:
-            _restore_database_backup(database_path, backup_path)
+        if backup_path is not None and not demo_preexisting:
+            clear_demo_database(database_path)
         for destination, previous in prior_files.items():
             _restore_file(destination, previous)
         raise
@@ -599,8 +608,13 @@ def _stage_configuration_files(
 
 def _stage_bytes(destination: Path, content: bytes) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f".{destination.name}.demo.tmp")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.demo.",
+        suffix=".tmp",
+        dir=destination.parent,
+    )
+    temporary = Path(temporary_name)
+    os.fchmod(descriptor, 0o600)
     with os.fdopen(descriptor, "wb") as stream:
         stream.write(content)
         stream.flush()

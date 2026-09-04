@@ -1,6 +1,7 @@
 import json
 import math
 import sqlite3
+import stat
 from collections import Counter
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
@@ -999,3 +1000,134 @@ def test_configuration_promotion_failure_restores_database_and_files(
             ).fetchone()[0]
             == 0
         )
+
+
+def test_configuration_failure_preserves_concurrent_unrelated_database_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "tikpoc.db"
+    accounts_path = tmp_path / "web-accounts.yaml"
+    settings_path = tmp_path / "operator-settings.json"
+    blueprint = build_demo_blueprint(now_ms=NOW_MS, scale=DemoScale.test_fixture())
+    real_replace = demo_data.os.replace
+    injected = False
+
+    def write_unrelated_then_fail(source: object, destination: object) -> None:
+        nonlocal injected
+        if Path(destination) == settings_path and not injected:
+            injected = True
+            Database(path).append_web_message(
+                "concurrent-account",
+                "concurrent-conversation",
+                "concurrent-message",
+                direction="inbound",
+                message_type="TEXT",
+                text="preserve concurrent write",
+                timestamp_ms=NOW_MS,
+            )
+            raise OSError("settings promotion failed after concurrent write")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(demo_data.os, "replace", write_unrelated_then_fail)
+
+    with pytest.raises(OSError, match="after concurrent write"):
+        seed_demo_database(
+            path,
+            blueprint,
+            web_accounts_path=accounts_path,
+            runtime_settings_path=settings_path,
+            backup_dir=tmp_path / "backups",
+        )
+
+    with sqlite3.connect(path) as connection:
+        assert (
+            connection.execute(
+                "SELECT text FROM web_messages WHERE message_id='concurrent-message'"
+            ).fetchone()[0]
+            == "preserve concurrent write"
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM pool_targets WHERE identity_key LIKE 'demo:%'"
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM browser_reply_plans WHERE account_id LIKE 'demo-account-%'"
+            ).fetchone()[0]
+            == 0
+        )
+
+
+def test_failed_idempotent_reseed_preserves_preexisting_demo_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "tikpoc.db"
+    accounts_path = tmp_path / "web-accounts.yaml"
+    settings_path = tmp_path / "operator-settings.json"
+    blueprint = build_demo_blueprint(now_ms=NOW_MS, scale=DemoScale.test_fixture())
+    seed_demo_database(
+        path,
+        blueprint,
+        web_accounts_path=accounts_path,
+        runtime_settings_path=settings_path,
+        backup_dir=tmp_path / "backups",
+    )
+    real_replace = demo_data.os.replace
+    failed = False
+
+    def fail_settings(source: object, destination: object) -> None:
+        nonlocal failed
+        if Path(destination) == settings_path and not failed:
+            failed = True
+            raise OSError("reseed settings promotion failed")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(demo_data.os, "replace", fail_settings)
+    with pytest.raises(OSError, match="reseed settings"):
+        seed_demo_database(
+            path,
+            blueprint,
+            web_accounts_path=accounts_path,
+            runtime_settings_path=settings_path,
+            backup_dir=tmp_path / "backups",
+        )
+
+    with sqlite3.connect(path) as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM pool_targets WHERE identity_key LIKE 'demo:%'"
+            ).fetchone()[0]
+            == 14
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM browser_reply_plans WHERE account_id LIKE 'demo-account-%'"
+            ).fetchone()[0]
+            == 7
+        )
+
+
+def test_configuration_staging_uses_unique_private_temporary_files(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tikpoc.db"
+    accounts_path = tmp_path / "web-accounts.yaml"
+    settings_path = tmp_path / "operator-settings.json"
+    predictable = settings_path.with_name(f".{settings_path.name}.demo.tmp")
+    predictable.write_text("do not touch", encoding="utf-8")
+    predictable.chmod(0o666)
+    blueprint = build_demo_blueprint(now_ms=NOW_MS, scale=DemoScale.test_fixture())
+
+    seed_demo_database(
+        path,
+        blueprint,
+        web_accounts_path=accounts_path,
+        runtime_settings_path=settings_path,
+        backup_dir=tmp_path / "backups",
+    )
+
+    assert predictable.read_text(encoding="utf-8") == "do not touch"
+    assert stat.S_IMODE(settings_path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(accounts_path.stat().st_mode) == 0o600
