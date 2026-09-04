@@ -774,3 +774,40 @@ update the checkpoint, and continue from the latest verified state.
   two-device visible action verification, endurance runs, and the seven-device
   `10,000`-target/`70,000`-visit capacity proof. Do not describe those gates as
   passed from synthetic browser evidence.
+
+## Portfolio Demo Checkpoint (2026-09-04)
+
+- The AI product-manager portfolio dataset is deployed at
+  `https://tikpoc.tikpoc.site` from commit `f7eff1b`. Its namespace is
+  `demo-ai-growth-v1`; every identity and destination is synthetic and the
+  console labels the analytics view `DEMO · 合成演示数据`.
+- The main demo round contains `10,000` targets, `70,000` assignments, `68,420`
+  confirmed visits, `9,770` fully covered targets (`97.7%`), seven devices, six
+  healthy device rows, one deliberate warning, and two small completed history
+  rounds. These figures are synthetic product evidence, not a live capacity
+  result.
+- The conversion dataset contains `486` inbound messages, `173` qualified
+  leads, `126` invitations, `72` captured contacts, `28` human handoffs, and
+  `19` synthetic sales. Persisted automation evidence derives `331` confirmed
+  AI sends, `98` manual outcomes, `29` pending decisions, a `72.4%` automatic
+  handling rate, and a 38-second median/P90 response time.
+- The newest 100-item inbox includes all 20 representative detailed leads.
+  `demo_lead_001` and `demo_lead_004` expose three-message Chinese and English
+  histories; `demo_lead_002` and `demo_lead_003` expose uncertain and superseded
+  plan states.
+- The pre-demo backup and provenance sidecar live under `/data/backups` in the
+  `tikpoc-admin_tikpoc_data` volume. Both files are owner-only, and the backup
+  directory is owner-only. Restore and clear commands are documented in
+  `docs/runbooks/portfolio-demo-data.md`.
+- Fresh implementation regression before deployment passed Python `1168`,
+  Chrome Node `111`, frontend unit `37`, Playwright `15`, Android build, scoped
+  Ruff check/format, and `git diff --check`. Repository-wide Ruff retains its
+  pre-existing lint/format debt outside the demo surface.
+- Live acceptance verified the four console routes, the three-round selector,
+  seven device rows, coverage and latency evidence, 100 visible inbox rows,
+  bilingual multi-turn drawers, 14-day trend, `72.4%` automation rate, 19
+  sales, and seven automation-setting cards without browser console warnings.
+- The deployed application starts without `--with-web-worker`. No TikPoc mobile
+  worker or standalone browser worker was started; account AI/DM/follow-back
+  execution switches remain disabled and no claimed browser action lease was
+  created.
