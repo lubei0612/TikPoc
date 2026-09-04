@@ -20,6 +20,10 @@ DEMO_HISTORY_ROUND_IDS = (
     "demo-round-ai-growth-history-01",
     "demo-round-ai-growth-history-02",
 )
+DEMO_HISTORY_POOL_IDS = (
+    "demo-pool-ai-growth-history-01",
+    "demo-pool-ai-growth-history-02",
+)
 _DAY_MS = 86_400_000
 _SQL_BATCH_SIZE = 1_000
 _ACTION_OUTCOMES = ("like", "favorite", "repost", "trace")
@@ -284,6 +288,50 @@ def _seed_acquisition(
         """,
         target_rows,
     )
+    history_pools = tuple(
+        (
+            pool_id,
+            f"{blueprint.label} · 历史 {index:02d}",
+            hashlib.sha256(
+                f"{blueprint.namespace}\0history\0{index}".encode()
+            ).hexdigest(),
+            1,
+            1,
+            max(1, _demo_started_at_ms(blueprint) - index * 14 * _DAY_MS),
+        )
+        for index, pool_id in enumerate(DEMO_HISTORY_POOL_IDS, start=1)
+    )
+    created["historical_pools"] = _executemany_bounded(
+        connection,
+        """
+        INSERT OR IGNORE INTO target_pools(
+            pool_id, source_name, source_checksum,
+            unique_targets, source_rows, created_at_ms
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        history_pools,
+    )
+    created["historical_targets"] = _executemany_bounded(
+        connection,
+        """
+        INSERT OR IGNORE INTO pool_targets(
+            pool_id, identity_key, target_id, sec_uid, username,
+            profile_url, source_video_id, source_line_numbers_json, ordinal
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, '[1]', 0)
+        """,
+        (
+            (
+                pool_id,
+                _history_identity(index),
+                _history_username(index),
+                f"demo-history-sec-uid-{index:02d}",
+                _history_username(index),
+                f"https://example.invalid/demo-history-profile/{index:02d}",
+                f"demo-history-video-{index:02d}",
+            )
+            for index, pool_id in enumerate(DEMO_HISTORY_POOL_IDS, start=1)
+        ),
+    )
     created["rounds"] = _executemany_bounded(
         connection,
         """
@@ -294,7 +342,13 @@ def _seed_acquisition(
         ) VALUES (?, ?, ?, ?, 0, 0, ?, 'deeplink')
         """,
         (
-            (round_id, blueprint.pool_id, state, starts_at_ms, starts_at_ms)
+            (
+                round_id,
+                _round_pool_id(blueprint, round_id),
+                state,
+                starts_at_ms,
+                starts_at_ms,
+            )
             for round_id, state, starts_at_ms in _demo_round_rows(blueprint)
         ),
     )
@@ -338,9 +392,7 @@ def _seed_acquisition(
     )
 
     confirmed_keys = _confirmed_assignment_keys(blueprint)
-    uncertain_keys = frozenset(
-        confirmed_keys[: min(blueprint.metrics.ai_uncertain, len(confirmed_keys))]
-    )
+    uncertain_keys = _uncertain_assignment_keys(blueprint, confirmed_keys)
     assignment_updates = (
         (
             "deferred" if (identity_key, device_id) in uncertain_keys else "completed",
@@ -378,6 +430,7 @@ def _seed_acquisition(
         connection, blueprint, confirmed_keys, uncertain_keys
     )
     created.update(action_counts)
+    created.update(_seed_historical_evidence(connection, blueprint))
     created["device_health"] = _insert_device_health(connection, blueprint)
     created["operator_controls"] = _insert_operator_controls(connection, blueprint)
     return created
@@ -646,6 +699,144 @@ def _insert_quota_windows(
     )
 
 
+def _seed_historical_evidence(
+    connection: sqlite3.Connection, blueprint: DemoBlueprint
+) -> dict[str, int]:
+    history_rows = _demo_round_rows(blueprint)[1:]
+    assignments_created = _executemany_bounded(
+        connection,
+        """
+        INSERT OR IGNORE INTO round_assignments(
+            round_id, identity_key, device_id, order_key
+        ) VALUES (?, ?, ?, ?)
+        """,
+        (
+            (
+                round_id,
+                _history_identity(history_index),
+                account.device_id,
+                _order_key(
+                    f"{blueprint.namespace}:{round_id}",
+                    target_index=1,
+                    device_id=account.device_id,
+                ),
+            )
+            for history_index, (round_id, _state, _started_at_ms) in enumerate(
+                history_rows, start=1
+            )
+            for account in blueprint.accounts
+        ),
+    )
+    completed_created = _executemany_bounded(
+        connection,
+        """
+        UPDATE round_assignments
+        SET phase='completed', attempt_count=1,
+            visit_confirmed_at_ms=?, completed_at_ms=?, last_error_code=NULL
+        WHERE round_id=? AND identity_key=? AND device_id=?
+          AND visit_confirmed_at_ms IS NULL
+        """,
+        (
+            (
+                started_at_ms + 400,
+                started_at_ms + 5_000 + device_index * 100,
+                round_id,
+                _history_identity(history_index),
+                account.device_id,
+            )
+            for history_index, (round_id, _state, round_started_at_ms) in enumerate(
+                history_rows, start=1
+            )
+            for started_at_ms in (round_started_at_ms + _DAY_MS,)
+            for device_index, account in enumerate(blueprint.accounts)
+        ),
+    )
+    phase_history_created = _executemany_bounded(
+        connection,
+        """
+        INSERT INTO assignment_phase_history(
+            assignment_id, from_phase, to_phase, details_json, changed_at_ms
+        )
+        SELECT assignment.assignment_id, 'pending', 'profile_opening', ?, ?
+        FROM round_assignments AS assignment
+        WHERE assignment.round_id=? AND assignment.identity_key=?
+          AND assignment.device_id=?
+          AND NOT EXISTS (
+              SELECT 1 FROM assignment_phase_history AS history
+              WHERE history.assignment_id=assignment.assignment_id
+                AND history.to_phase='profile_opening'
+          )
+        """,
+        (
+            (
+                json.dumps({"source": blueprint.namespace}, separators=(",", ":")),
+                round_started_at_ms + _DAY_MS,
+                round_id,
+                _history_identity(history_index),
+                account.device_id,
+            )
+            for history_index, (round_id, _state, round_started_at_ms) in enumerate(
+                history_rows, start=1
+            )
+            for account in blueprint.accounts
+        ),
+    )
+    snapshots_created = _executemany_bounded(
+        connection,
+        """
+        INSERT OR IGNORE INTO profile_snapshots(
+            round_id, identity_key, observed_by_device_id, observed_username,
+            following_count, followers_count, post_count, private_account,
+            access_state, eligible, reason, observed_at_ms
+        ) VALUES (?, ?, ?, ?, 10, 20, 0, 0, 'public', 0,
+                  'insufficient_posts', ?)
+        """,
+        (
+            (
+                round_id,
+                _history_identity(history_index),
+                blueprint.accounts[0].device_id,
+                _history_username(history_index),
+                round_started_at_ms + _DAY_MS + 500,
+            )
+            for history_index, (round_id, _state, round_started_at_ms) in enumerate(
+                history_rows, start=1
+            )
+        ),
+    )
+    plans_created = _executemany_bounded(
+        connection,
+        """
+        INSERT OR IGNORE INTO device_action_plans(
+            round_id, identity_key, device_id, seed, requested_outcome,
+            effective_outcome, quota_window_start_ms, quota_reason, video_key,
+            state, created_at_ms, policy_version
+        ) VALUES (?, ?, ?, ?, 'trace', 'trace', NULL,
+                  'profile_ineligible', NULL, 'confirmed', ?, 'demo-portfolio-v1')
+        """,
+        (
+            (
+                round_id,
+                _history_identity(history_index),
+                account.device_id,
+                f"{blueprint.namespace}:history:{round_id}:{account.device_id}",
+                round_started_at_ms + _DAY_MS + 600,
+            )
+            for history_index, (round_id, _state, round_started_at_ms) in enumerate(
+                history_rows, start=1
+            )
+            for account in blueprint.accounts
+        ),
+    )
+    return {
+        "historical_assignments": assignments_created,
+        "historical_confirmed_visits": completed_created,
+        "historical_phase_history": phase_history_created,
+        "historical_snapshots": snapshots_created,
+        "historical_action_plans": plans_created,
+    }
+
+
 def _insert_device_health(
     connection: sqlite3.Connection, blueprint: DemoBlueprint
 ) -> int:
@@ -717,6 +908,22 @@ def _confirmed_assignment_keys(
     return tuple(keys)
 
 
+def _uncertain_assignment_keys(
+    blueprint: DemoBlueprint,
+    confirmed_keys: Sequence[tuple[str, str]],
+) -> frozenset[tuple[str, str]]:
+    selected: list[tuple[str, str]] = []
+    for sequence, key in enumerate(confirmed_keys[: blueprint.metrics.interactions]):
+        if _ACTION_OUTCOMES[sequence % len(_ACTION_OUTCOMES)] == "trace":
+            continue
+        selected.append(key)
+        if len(selected) == blueprint.metrics.ai_uncertain:
+            break
+    if len(selected) != blueprint.metrics.ai_uncertain:
+        raise ValueError("uncertain plans exceed non-trace interaction projection")
+    return frozenset(selected)
+
+
 def _take(rows: Iterable[tuple[str, str]], count: int) -> list[tuple[str, str]]:
     result: list[tuple[str, str]] = []
     for row in rows:
@@ -772,6 +979,20 @@ def _assignment_duration_ms(sequence: int) -> int:
 
 def _target_identity(index: int) -> str:
     return f"{DEMO_POOL_IDENTITY_PREFIX}{index:05d}"
+
+
+def _history_identity(index: int) -> str:
+    return f"demo:history:{index:02d}:target:00001"
+
+
+def _history_username(index: int) -> str:
+    return f"demo_history_{index:02d}_target"
+
+
+def _round_pool_id(blueprint: DemoBlueprint, round_id: str) -> str:
+    if round_id == blueprint.round_id:
+        return blueprint.pool_id
+    return DEMO_HISTORY_POOL_IDS[DEMO_HISTORY_ROUND_IDS.index(round_id)]
 
 
 def _target_index(identity_key: str) -> int:

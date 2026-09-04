@@ -1,6 +1,6 @@
 import sqlite3
 from collections import Counter
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 
 import pytest
@@ -180,9 +180,13 @@ def test_seed_acquisition_is_idempotent_and_matches_small_scale(
         assert (
             connection.execute(
                 """
-                SELECT COUNT(*) FROM assignment_phase_history
-                WHERE to_phase = 'profile_opening'
-                """
+                SELECT COUNT(*) FROM assignment_phase_history AS history
+                JOIN round_assignments AS assignment
+                  ON assignment.assignment_id = history.assignment_id
+                WHERE history.to_phase = 'profile_opening'
+                  AND assignment.round_id = ?
+                """,
+                (blueprint.round_id,),
             ).fetchone()[0]
             == 31
         )
@@ -303,6 +307,80 @@ def test_seed_acquisition_provides_valid_capacity_domain_evidence(
     assert audit.quota_overrun_count == 0
     assert audit.uncertain_count == 1
     assert audit.deferred_count == 1
+
+
+def test_historical_rounds_have_coherent_nonempty_completed_evidence(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tikpoc.db"
+    blueprint = build_demo_blueprint(
+        now_ms=NOW_MS,
+        scale=DemoScale.test_fixture(),
+    )
+    seed_demo_database(path, blueprint)
+    repository = AcquisitionRepository(path)
+
+    for round_id in demo_data.DEMO_HISTORY_ROUND_IDS:
+        assert repository.assignment_count(round_id) == blueprint.scale.devices
+        assert repository.round_coverage(round_id) == {
+            "round_id": round_id,
+            "targets": 1,
+            "required_devices": blueprint.scale.devices,
+            "confirmed_visits": blueprint.scale.devices,
+            "fully_covered": 1,
+            "coverage_rate": 1.0,
+        }
+        audit = repository.capacity_audit(
+            round_id,
+            expected_devices=blueprint.scale.devices,
+        )
+        assert len(audit.timings) == blueprint.scale.devices
+        assert audit.false_success_count == 0
+        assert audit.quota_overrun_count == 0
+        with sqlite3.connect(path) as connection:
+            target_count = connection.execute(
+                """
+                SELECT pool.unique_targets
+                FROM exposure_rounds AS round
+                JOIN target_pools AS pool ON pool.pool_id = round.pool_id
+                WHERE round.round_id = ?
+                """,
+                (round_id,),
+            ).fetchone()[0]
+        assert target_count == 1
+
+
+def test_uncertain_plans_are_nontrace_featured_attempts_with_deferred_assignments(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tikpoc.db"
+    scale = replace(DemoScale.test_fixture(), ai_uncertain=5)
+    blueprint = build_demo_blueprint(now_ms=NOW_MS, scale=scale)
+    seed_demo_database(path, blueprint)
+
+    with sqlite3.connect(path) as connection:
+        rows = connection.execute(
+            """
+            SELECT plan.effective_outcome, attempt.result, assignment.phase,
+                   assignment.visit_confirmed_at_ms, assignment.completed_at_ms
+            FROM device_action_plans AS plan
+            JOIN round_assignments AS assignment
+              ON assignment.round_id = plan.round_id
+             AND assignment.identity_key = plan.identity_key
+             AND assignment.device_id = plan.device_id
+            LEFT JOIN action_attempts AS attempt ON attempt.plan_id = plan.plan_id
+            WHERE plan.round_id = ? AND plan.state = 'uncertain'
+            ORDER BY plan.plan_id
+            """,
+            (blueprint.round_id,),
+        ).fetchall()
+
+    assert len(rows) == 5
+    assert all(outcome != "trace" for outcome, *_rest in rows)
+    assert all(attempt == "uncertain" for _outcome, attempt, *_rest in rows)
+    assert all(phase == "deferred" for _outcome, _attempt, phase, *_rest in rows)
+    assert all(visit is not None for *_prefix, visit, _completed in rows)
+    assert all(completed is None for *_prefix, completed in rows)
 
 
 def test_seed_acquisition_rolls_back_when_later_seed_phase_fails(
