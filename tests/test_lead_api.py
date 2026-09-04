@@ -1005,6 +1005,63 @@ def test_demo_lead_api_returns_stable_timeline_and_derived_automation(
     assert later_payload["timeline"] == payload["timeline"]
 
 
+def test_demo_lead_api_surfaces_detailed_conversations_in_recent_inbox(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "portfolio.db"
+    blueprint = build_demo_blueprint(now_ms=1_788_489_600_000)
+    seed_demo_database(path, blueprint)
+    registry = WebAccountRegistry(
+        tuple(
+            WebAccount(
+                account_id=account.account_id,
+                device_id=account.device_id,
+                enabled=False,
+                browser_dm_enabled=False,
+                browser_followback_enabled=False,
+                expected_tiktok_username=account.username,
+            )
+            for account in blueprint.accounts
+        )
+    )
+    client = TestClient(create_app(path, registry=registry))
+
+    conversations = client.get("/api/leads?limit=100").json()["conversations"]
+    visible = {item["participant_username"]: item for item in conversations}
+
+    assert {f"demo_lead_{index:03d}" for index in range(1, 21)} <= visible.keys()
+    for lead_id in ("demo_lead_001", "demo_lead_004"):
+        summary = visible[lead_id]
+        selected = client.get(
+            "/api/leads",
+            params={
+                "limit": 100,
+                "account_id": summary["account_id"],
+                "conversation_id": summary["conversation_id"],
+                "history_limit": 50,
+            },
+        ).json()["selected"]
+        assert len(selected["messages"]) == 3
+    for lead_id, expected_state in (
+        ("demo_lead_002", "uncertain"),
+        ("demo_lead_003", "superseded"),
+    ):
+        summary = visible[lead_id]
+        selected = client.get(
+            "/api/leads",
+            params={
+                "limit": 100,
+                "account_id": summary["account_id"],
+                "conversation_id": summary["conversation_id"],
+                "history_limit": 50,
+                "inbound_fingerprint": (
+                    f"demo:inbound:{int(lead_id.rsplit('_', 1)[1]):04d}"
+                ),
+            },
+        ).json()["selected"]
+        assert selected["draft"]["state"] == expected_state
+
+
 def test_normal_lead_api_returns_inactive_demo_and_empty_timeline(
     tmp_path: Path,
 ) -> None:

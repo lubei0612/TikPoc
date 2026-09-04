@@ -1203,13 +1203,13 @@ def _seed_conversion(
                 int(index <= blueprint.metrics.engaged),
                 int(ai_states.get(index) == "sent"),
                 (
-                    _conversion_timestamp(blueprint, index)
+                    _conversation_activity_timestamp(blueprint, index, detailed)
                     if _conversation_stage(blueprint, index, detailed, human_indexes)
                     in {"invited", "contact_captured", "closed"}
                     else 0
                 ),
                 (
-                    _conversion_timestamp(blueprint, index)
+                    _conversation_activity_timestamp(blueprint, index, detailed)
                     if _conversation_stage(blueprint, index, detailed, human_indexes)
                     in {"contact_captured", "closed"}
                     else 0
@@ -1237,7 +1237,7 @@ def _seed_conversion(
                     if index in detailed
                     else _aggregate_inbound_text(index)
                 ),
-                _conversion_timestamp(blueprint, index),
+                _conversation_activity_timestamp(blueprint, index, detailed),
             )
             for index in range(1, inbound_count + 1)
         ),
@@ -1263,7 +1263,11 @@ def _seed_conversion(
                     if detailed[index].language == "zh"
                     else "Welcome—happy to help with the DEMO catalog."
                 ),
-                max(1, _conversion_timestamp(blueprint, index) - 15_000),
+                max(
+                    1,
+                    _conversation_activity_timestamp(blueprint, index, detailed)
+                    - 15_000,
+                ),
             )
             for index in representative_sent
         ),
@@ -1291,7 +1295,7 @@ def _seed_conversion(
                     if index in detailed
                     else _aggregate_inbound_text(index)
                 ),
-                _conversion_timestamp(blueprint, index),
+                _conversation_activity_timestamp(blueprint, index, detailed),
                 (
                     detailed[index].outbound_text
                     if index in detailed
@@ -1304,9 +1308,10 @@ def _seed_conversion(
                     _conversation_stage(blueprint, index, detailed, human_indexes)
                     in {"invited", "contact_captured", "closed"}
                 ),
-                _conversion_timestamp(blueprint, index) + 100,
+                _conversation_activity_timestamp(blueprint, index, detailed) + 100,
                 (
-                    _conversion_timestamp(blueprint, index) + 38_100
+                    _conversation_activity_timestamp(blueprint, index, detailed)
+                    + 38_100
                     if ai_states[index] == "sent"
                     else 0
                 ),
@@ -1332,12 +1337,12 @@ def _seed_conversion(
                 f"demo:manual-plan:{index:04d}",
                 _lead_id(blueprint, index),
                 _aggregate_inbound_text(index),
-                _conversion_timestamp(blueprint, index),
+                _conversation_activity_timestamp(blueprint, index, detailed),
                 "DEMO manual reply / 演示人工回复。",
                 _conversation_stage(blueprint, index, detailed, human_indexes),
                 _inbound_fingerprint(index),
                 0,
-                _conversion_timestamp(blueprint, index) + 600,
+                _conversation_activity_timestamp(blueprint, index, detailed) + 600,
             )
             for index in manual_indexes
         ),
@@ -1360,7 +1365,7 @@ def _seed_conversion(
                     if index in detailed
                     else _aggregate_outbound_text(index)
                 ),
-                _conversion_timestamp(blueprint, index) + 38_100,
+                _conversation_activity_timestamp(blueprint, index, detailed) + 38_100,
                 _inbound_fingerprint(index),
             )
             for index, state in ai_states.items()
@@ -1381,7 +1386,7 @@ def _seed_conversion(
                 _conversation_key(blueprint, index),
                 f"demo:manual-outbound:{index:04d}",
                 "DEMO manual reply / 演示人工回复。",
-                _conversion_timestamp(blueprint, index) + 600,
+                _conversation_activity_timestamp(blueprint, index, detailed) + 600,
                 _inbound_fingerprint(index),
             )
             for index in manual_indexes
@@ -2168,6 +2173,16 @@ def _conversion_timestamp(
     return start_ms + ((index - 1) * window_ms) // selected_total
 
 
+def _conversation_activity_timestamp(
+    blueprint: DemoBlueprint,
+    index: int,
+    detailed: Mapping[int, DemoConversation],
+) -> int:
+    if index in detailed:
+        return detailed[index].occurred_at_ms
+    return _conversion_timestamp(blueprint, index)
+
+
 def _aggregate_inbound_text(index: int) -> str:
     if index % 2:
         return "请介绍演示商品的规格和交付方式。"
@@ -2373,7 +2388,7 @@ def _build_conversations(
                     else "Sure. Which feature matters most?"
                 )
         account = accounts[rng.randrange(len(accounts))]
-        offset_ms = rng.randrange(0, 14 * _DAY_MS)
+        offset_ms = rng.randrange(60_000, _DAY_MS)
         conversations.append(
             DemoConversation(
                 lead_id=f"demo_lead_{index:03d}",
