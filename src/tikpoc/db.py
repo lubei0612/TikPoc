@@ -4,6 +4,7 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .models import ProfileMetrics, TaskState
@@ -1999,6 +2000,172 @@ class Database:
             "followers": followers,
             **{stage: counts.get(stage, 0) for stage in _FUNNEL_STAGES},
         }
+
+    def lead_funnel_timeline(
+        self,
+        account_ids: tuple[str, ...],
+        start_ms: int,
+        days: int,
+    ) -> list[dict[str, object]]:
+        bounded_days = int(days)
+        if bounded_days < 1 or bounded_days > 366:
+            raise ValueError("lead funnel timeline days must be between 1 and 366")
+        if int(start_ms) < 0:
+            raise ValueError("lead funnel timeline start must be nonnegative")
+        bounded_ids = tuple(dict.fromkeys(account_ids))[:100]
+        if not bounded_ids:
+            return []
+        day_ms = 86_400_000
+        normalized_start = int(start_ms) // day_ms * day_ms
+        end_ms = normalized_start + bounded_days * day_ms
+        placeholders = ", ".join("?" for _ in bounded_ids)
+        with self._connect() as connection:
+            event_rows = connection.execute(
+                f"""
+                SELECT ((occurred_at_ms - ?) / ?) AS day_index,
+                       stage, COUNT(*) AS count
+                FROM lead_funnel_events
+                WHERE account_id IN ({placeholders})
+                  AND occurred_at_ms >= ? AND occurred_at_ms < ?
+                  AND stage IN (
+                      'dm_inbound', 'qualified', 'invited', 'contact_captured'
+                  )
+                GROUP BY day_index, stage
+                """,
+                (
+                    normalized_start,
+                    day_ms,
+                    *bounded_ids,
+                    normalized_start,
+                    end_ms,
+                ),
+            ).fetchall()
+            sale_rows = connection.execute(
+                f"""
+                SELECT ((occurred_at_ms - ?) / ?) AS day_index,
+                       COUNT(*) AS count
+                FROM lead_sales
+                WHERE account_id IN ({placeholders})
+                  AND status='confirmed'
+                  AND occurred_at_ms >= ? AND occurred_at_ms < ?
+                GROUP BY day_index
+                """,
+                (
+                    normalized_start,
+                    day_ms,
+                    *bounded_ids,
+                    normalized_start,
+                    end_ms,
+                ),
+            ).fetchall()
+        timeline: list[dict[str, object]] = []
+        for day_index in range(bounded_days):
+            timestamp_ms = normalized_start + day_index * day_ms
+            timeline.append(
+                {
+                    "date": datetime.fromtimestamp(timestamp_ms / 1_000, tz=UTC)
+                    .date()
+                    .isoformat(),
+                    "dm_inbound": 0,
+                    "qualified": 0,
+                    "invited": 0,
+                    "contact_captured": 0,
+                    "sales": 0,
+                }
+            )
+        for row in event_rows:
+            timeline[int(row["day_index"])][str(row["stage"])] = int(row["count"])
+        for row in sale_rows:
+            timeline[int(row["day_index"])]["sales"] = int(row["count"])
+        return timeline
+
+    def lead_automation_snapshot(
+        self, account_ids: tuple[str, ...]
+    ) -> dict[str, int | float]:
+        empty: dict[str, int | float] = {
+            "ai_plans": 0,
+            "ai_sent": 0,
+            "ai_uncertain": 0,
+            "ai_superseded": 0,
+            "manual_handled": 0,
+            "human_required": 0,
+            "pending_inbound": 0,
+            "automatic_handling_rate": 0.0,
+        }
+        bounded_ids = tuple(dict.fromkeys(account_ids))[:100]
+        if not bounded_ids:
+            return empty
+        placeholders = ", ".join("?" for _ in bounded_ids)
+        with self._connect() as connection:
+            plan_rows = connection.execute(
+                f"""
+                SELECT plan_origin, state, COUNT(*) AS count
+                FROM browser_reply_plans
+                WHERE account_id IN ({placeholders})
+                GROUP BY plan_origin, state
+                """,
+                bounded_ids,
+            ).fetchall()
+            inbound_row = connection.execute(
+                f"""
+                SELECT COUNT(*) AS count FROM web_messages
+                WHERE account_id IN ({placeholders}) AND direction='inbound'
+                """,
+                bounded_ids,
+            ).fetchone()
+            human_row = connection.execute(
+                f"""
+                SELECT COUNT(*) AS count FROM lead_funnel_events
+                WHERE account_id IN ({placeholders}) AND stage='human_required'
+                """,
+                bounded_ids,
+            ).fetchone()
+        counts = {
+            (str(row["plan_origin"]), str(row["state"])): int(row["count"])
+            for row in plan_rows
+        }
+        ai_sent = counts.get(("ai", "sent"), 0)
+        ai_uncertain = counts.get(("ai", "uncertain"), 0)
+        ai_superseded = counts.get(("ai", "superseded"), 0)
+        ai_plans = sum(
+            count for (origin, _state), count in counts.items() if origin == "ai"
+        )
+        manual_handled = counts.get(("manual", "sent"), 0)
+        human_required = 0 if human_row is None else int(human_row["count"])
+        inbound = 0 if inbound_row is None else int(inbound_row["count"])
+        handled = ai_sent + manual_handled + human_required
+        return {
+            "ai_plans": ai_plans,
+            "ai_sent": ai_sent,
+            "ai_uncertain": ai_uncertain,
+            "ai_superseded": ai_superseded,
+            "manual_handled": manual_handled,
+            "human_required": human_required,
+            "pending_inbound": max(0, inbound - handled),
+            "automatic_handling_rate": round(ai_sent / handled, 3) if handled else 0.0,
+        }
+
+    def latest_lead_evidence_at_ms(self, account_ids: tuple[str, ...]) -> int | None:
+        bounded_ids = tuple(dict.fromkeys(account_ids))[:100]
+        if not bounded_ids:
+            return None
+        placeholders = ", ".join("?" for _ in bounded_ids)
+        with self._connect() as connection:
+            row = connection.execute(
+                f"""
+                SELECT MAX(occurred_at_ms) AS occurred_at_ms FROM (
+                    SELECT occurred_at_ms FROM lead_funnel_events
+                    WHERE account_id IN ({placeholders})
+                    UNION ALL
+                    SELECT occurred_at_ms FROM lead_sales
+                    WHERE account_id IN ({placeholders}) AND status='confirmed'
+                )
+                """,
+                (*bounded_ids, *bounded_ids),
+            ).fetchone()
+        if row is None or row["occurred_at_ms"] is None:
+            return None
+        return int(row["occurred_at_ms"])
 
     def recent_leads(self, *, limit: int = 20) -> list[dict[str, object]]:
         bounded_limit = max(1, min(int(limit), 100))

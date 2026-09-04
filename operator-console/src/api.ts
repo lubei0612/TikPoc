@@ -200,6 +200,30 @@ export interface SalesSnapshot {
   sales: number;
 }
 
+export interface LeadTimelineDay {
+  date: string;
+  dm_inbound: number;
+  qualified: number;
+  invited: number;
+  contact_captured: number;
+  sales: number;
+}
+
+export interface LeadAutomationSnapshot {
+  ai_plans: number;
+  ai_sent: number;
+  ai_uncertain: number;
+  ai_superseded: number;
+  manual_handled: number;
+  human_required: number;
+  pending_inbound: number;
+  automatic_handling_rate: number;
+}
+
+export type LeadDemoMetadata =
+  | { active: false }
+  | { active: true; namespace: string; label: string };
+
 export interface LeadInboxSnapshot {
   configured: boolean;
   accounts: LeadAccount[];
@@ -207,6 +231,9 @@ export interface LeadInboxSnapshot {
   selected: SelectedLead | null;
   funnel: FunnelSnapshot;
   sales: SalesSnapshot;
+  automation: LeadAutomationSnapshot;
+  timeline: LeadTimelineDay[];
+  demo: LeadDemoMetadata;
   browser_health: BrowserHealth[];
 }
 

@@ -1,7 +1,10 @@
 import inspect
+import sqlite3
+from datetime import UTC, datetime
 
 import pytest
 
+from tikpoc.db import Database
 from tikpoc.lead_conversion import (
     ConversationStage,
     assess_inbound,
@@ -13,8 +16,188 @@ from tikpoc.lead_conversion import (
     shows_buying_intent,
 )
 
-
 DAY_MS = 24 * 60 * 60 * 1000
+
+
+def test_lead_funnel_timeline_is_account_scoped_zero_filled_and_utc(
+    tmp_path,
+) -> None:
+    database = Database(tmp_path / "timeline.db")
+    database.migrate()
+    start_ms = int(datetime(2026, 8, 22, tzinfo=UTC).timestamp() * 1_000)
+    for account_id, stage, day, suffix in (
+        ("account-01", "dm_inbound", 0, "inbound-1"),
+        ("account-01", "qualified", 0, "qualified-1"),
+        ("account-02", "invited", 13, "invited-1"),
+        ("excluded", "contact_captured", 7, "excluded-contact"),
+    ):
+        database.record_lead_funnel_event(
+            account_id,
+            f"buyer-{suffix}",
+            stage,
+            suffix,
+            occurred_at_ms=start_ms + day * DAY_MS + 1_000,
+        )
+    database.record_lead_sale(
+        "account-02",
+        "buyer-sale",
+        amount_minor=12_500,
+        currency="USD",
+        status="confirmed",
+        occurred_at_ms=start_ms + 13 * DAY_MS + 2_000,
+    )
+    database.record_lead_sale(
+        "excluded",
+        "buyer-excluded-sale",
+        amount_minor=99_999,
+        currency="USD",
+        status="confirmed",
+        occurred_at_ms=start_ms + 3 * DAY_MS,
+    )
+
+    timeline = database.lead_funnel_timeline(
+        ("account-01", "account-02"), start_ms=start_ms, days=14
+    )
+
+    assert len(timeline) == 14
+    assert [row["date"] for row in timeline] == [
+        datetime.fromtimestamp((start_ms + day * DAY_MS) / 1_000, tz=UTC)
+        .date()
+        .isoformat()
+        for day in range(14)
+    ]
+    assert timeline[0] == {
+        "date": "2026-08-22",
+        "dm_inbound": 1,
+        "qualified": 1,
+        "invited": 0,
+        "contact_captured": 0,
+        "sales": 0,
+    }
+    assert timeline[7] == {
+        "date": "2026-08-29",
+        "dm_inbound": 0,
+        "qualified": 0,
+        "invited": 0,
+        "contact_captured": 0,
+        "sales": 0,
+    }
+    assert timeline[-1]["invited"] == 1
+    assert timeline[-1]["sales"] == 1
+
+
+def test_lead_automation_snapshot_is_account_scoped_and_derived_from_rows(
+    tmp_path,
+) -> None:
+    database = Database(tmp_path / "automation.db")
+    database.migrate()
+    with sqlite3.connect(database.path) as connection:
+        inbound_rows = []
+        plan_rows = []
+        for index in range(486):
+            account_id = "account-01" if index % 2 == 0 else "account-02"
+            message_id = f"inbound-{index:03d}"
+            inbound_rows.append(
+                (account_id, f"conversation-{index:03d}", message_id, index + 1)
+            )
+            if index < 348:
+                state = (
+                    "sent"
+                    if index < 331
+                    else "uncertain"
+                    if index < 336
+                    else "superseded"
+                )
+                plan_rows.append(
+                    (
+                        account_id,
+                        f"conversation-{index:03d}",
+                        message_id,
+                        f"buyer-{index:03d}",
+                        index + 1,
+                        state,
+                        "ai",
+                        message_id,
+                    )
+                )
+            elif index < 446:
+                plan_rows.append(
+                    (
+                        account_id,
+                        f"conversation-{index:03d}",
+                        f"manual-{index:03d}",
+                        f"buyer-{index:03d}",
+                        index + 1,
+                        "sent",
+                        "manual",
+                        message_id,
+                    )
+                )
+        connection.executemany(
+            """
+            INSERT INTO web_messages(
+                account_id, conversation_id, message_id, direction,
+                message_type, timestamp_ms
+            ) VALUES (?, ?, ?, 'inbound', 'TEXT', ?)
+            """,
+            inbound_rows,
+        )
+        connection.executemany(
+            """
+            INSERT INTO browser_reply_plans(
+                account_id, conversation_id, inbound_fingerprint,
+                participant_username, inbound_timestamp_ms, reply_text,
+                state, plan_origin, source_inbound_fingerprint
+            ) VALUES (?, ?, ?, ?, ?, 'reply', ?, ?, ?)
+            """,
+            plan_rows,
+        )
+        connection.executemany(
+            """
+            INSERT INTO lead_funnel_events(
+                account_id, participant_username, stage, source_key, occurred_at_ms
+            ) VALUES (?, ?, 'human_required', ?, ?)
+            """,
+            (
+                (
+                    "account-01" if index % 2 == 0 else "account-02",
+                    f"buyer-{index:03d}",
+                    f"human-{index:03d}",
+                    index + 1,
+                )
+                for index in range(446, 474)
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO web_messages(
+                account_id, conversation_id, message_id, direction,
+                message_type, timestamp_ms
+            ) VALUES ('excluded', 'excluded-conversation', 'excluded-inbound',
+                      'inbound', 'TEXT', 1)
+            """
+        )
+
+    assert database.lead_automation_snapshot(("account-01", "account-02")) == {
+        "ai_plans": 348,
+        "ai_sent": 331,
+        "ai_uncertain": 5,
+        "ai_superseded": 12,
+        "manual_handled": 98,
+        "human_required": 28,
+        "pending_inbound": 29,
+        "automatic_handling_rate": 0.724,
+    }
+    assert database.lead_automation_snapshot(()) == {
+        "ai_plans": 0,
+        "ai_sent": 0,
+        "ai_uncertain": 0,
+        "ai_superseded": 0,
+        "manual_handled": 0,
+        "human_required": 0,
+        "pending_inbound": 0,
+        "automatic_handling_rate": 0.0,
+    }
 
 
 @pytest.mark.parametrize(

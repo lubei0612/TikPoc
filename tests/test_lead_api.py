@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from tikpoc.api import create_app
 from tikpoc.browser_dm import BrowserDmService
 from tikpoc.db import Database
+from tikpoc.demo_data import build_demo_blueprint, seed_demo_database
 from tikpoc.web_accounts import WebAccount, WebAccountRegistry
 
 
@@ -941,6 +942,78 @@ def test_lead_analytics_only_include_registry_accounts(tmp_path: Path) -> None:
         "confirmed_revenue_minor": {},
         "sales": 0,
     }
+
+
+def test_demo_lead_api_returns_stable_timeline_and_derived_automation(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "portfolio.db"
+    blueprint = build_demo_blueprint(now_ms=1_788_489_600_000)
+    seed_demo_database(path, blueprint)
+    registry = WebAccountRegistry(
+        tuple(
+            WebAccount(
+                account_id=account.account_id,
+                device_id=account.device_id,
+                enabled=False,
+                browser_dm_enabled=False,
+                browser_followback_enabled=False,
+                expected_tiktok_username=account.username,
+            )
+            for account in blueprint.accounts
+        )
+    )
+
+    payload = (
+        TestClient(create_app(path, registry=registry, clock=lambda: 1_900_000_000))
+        .get("/api/leads")
+        .json()
+    )
+
+    assert payload["demo"] == {
+        "active": True,
+        "namespace": "demo-ai-growth-v1",
+        "label": "DEMO · AI 多账号获客转化试点",
+    }
+    assert len(payload["timeline"]) == 14
+    assert payload["automation"] == {
+        "ai_plans": 348,
+        "ai_sent": 331,
+        "ai_uncertain": 5,
+        "ai_superseded": 12,
+        "manual_handled": 98,
+        "human_required": 28,
+        "pending_inbound": 29,
+        "automatic_handling_rate": 0.724,
+    }
+    assert set(payload["timeline"][0]) == {
+        "date",
+        "dm_inbound",
+        "qualified",
+        "invited",
+        "contact_captured",
+        "sales",
+    }
+    assert sum(day["dm_inbound"] > 0 for day in payload["timeline"]) == 14
+    assert sum(day["qualified"] > 0 for day in payload["timeline"]) == 14
+    assert payload["timeline"][-1]["date"] == "2026-09-04"
+    later_payload = (
+        TestClient(create_app(path, registry=registry, clock=lambda: 2_000_000_000))
+        .get("/api/leads")
+        .json()
+    )
+    assert later_payload["timeline"] == payload["timeline"]
+
+
+def test_normal_lead_api_returns_inactive_demo_and_empty_timeline(
+    tmp_path: Path,
+) -> None:
+    app, _database = _seeded_app(tmp_path)
+
+    payload = TestClient(app).get("/api/leads").json()
+
+    assert payload["demo"] == {"active": False}
+    assert payload["timeline"] == []
 
 
 def test_lead_summaries_include_persistent_flags_and_reply_timing(

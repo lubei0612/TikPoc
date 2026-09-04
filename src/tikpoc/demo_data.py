@@ -1416,7 +1416,7 @@ def _seed_conversion(
                     _conversation_key(blueprint, index),
                     stage,
                     f"demo:funnel:{stage}:{index:04d}",
-                    _conversion_timestamp(blueprint, index),
+                    _conversion_timestamp(blueprint, index, total=total),
                 )
                 for index in range(1, total + 1)
             ),
@@ -1441,10 +1441,12 @@ def _seed_conversion(
                 _conversion_account(blueprint, index).account_id,
                 _lead_id(blueprint, index),
                 12_900 + index * 100,
-                _conversion_timestamp(blueprint, index) + 900,
+                _conversion_timestamp(blueprint, index, total=blueprint.metrics.sales)
+                + 900,
                 _conversion_account(blueprint, index).account_id,
                 _lead_id(blueprint, index),
-                _conversion_timestamp(blueprint, index) + 900,
+                _conversion_timestamp(blueprint, index, total=blueprint.metrics.sales)
+                + 900,
             )
             for index in range(1, blueprint.metrics.sales + 1)
         ),
@@ -2151,9 +2153,19 @@ def _inbound_fingerprint(index: int) -> str:
     return f"demo:inbound:{index:04d}"
 
 
-def _conversion_timestamp(blueprint: DemoBlueprint, index: int) -> int:
-    window_ms = 14 * _DAY_MS
-    return max(1, blueprint.now_ms - window_ms + (index * 7_919) % window_ms)
+def _conversion_timestamp(
+    blueprint: DemoBlueprint,
+    index: int,
+    *,
+    total: int | None = None,
+) -> int:
+    selected_total = blueprint.metrics.inbound if total is None else int(total)
+    if selected_total < 1 or index < 1 or index > selected_total:
+        raise ValueError("demo conversion position is outside its timeline")
+    end_day_ms = blueprint.now_ms // _DAY_MS * _DAY_MS
+    start_ms = max(1, end_day_ms - 13 * _DAY_MS)
+    window_ms = blueprint.now_ms - start_ms + 1
+    return start_ms + ((index - 1) * window_ms) // selected_total
 
 
 def _aggregate_inbound_text(index: int) -> str:

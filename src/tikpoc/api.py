@@ -56,6 +56,7 @@ from .browser_dm import BrowserConversationBusy, BrowserDmService, BrowserInboun
 from .browser_welcome import BrowserWelcomeService
 from .comment_sessions import CommentSessionService
 from .db import Database, OperatorCommandConflict
+from .demo_data import DEMO_NAMESPACE, DEMO_POOL_ID, DEMO_ROUND_LABEL
 from .device_api import MobileTaskResult
 from .hot_comment_planner import CommentCandidate, CommentEvidence
 from .live_batch_service import LiveBatchService, LiveTargetInput
@@ -1501,6 +1502,29 @@ def create_app(
             if registry is None
             else tuple(account.account_id for account in registry.accounts)
         )
+        demo_account_ids = tuple(
+            candidate
+            for candidate in account_ids
+            if candidate.startswith("demo-account-")
+        )
+        demo_active = bool(demo_account_ids) and acquisition.pool_exists(DEMO_POOL_ID)
+        demo: dict[str, object] = {"active": False}
+        timeline: list[dict[str, object]] = []
+        if demo_active:
+            demo = {
+                "active": True,
+                "namespace": DEMO_NAMESPACE,
+                "label": DEMO_ROUND_LABEL,
+            }
+            latest_at_ms = database.latest_lead_evidence_at_ms(demo_account_ids)
+            if latest_at_ms is not None:
+                day_ms = 86_400_000
+                end_day_ms = latest_at_ms // day_ms * day_ms
+                timeline = database.lead_funnel_timeline(
+                    demo_account_ids,
+                    start_ms=end_day_ms - 13 * day_ms,
+                    days=14,
+                )
         conversations = database.lead_conversations(
             account_ids=account_ids,
             limit=limit,
@@ -1519,6 +1543,9 @@ def create_app(
                 "selected": selected,
                 "funnel": database.lead_funnel_snapshot(account_ids=account_ids),
                 "sales": database.lead_sales_snapshot(account_ids=account_ids),
+                "automation": database.lead_automation_snapshot(account_ids),
+                "timeline": timeline,
+                "demo": demo,
                 "browser_health": browser_health,
             }
         )

@@ -55,10 +55,15 @@ export function AnalyticsView({ roundId }: { roundId: string }) {
     ? revenue.map(([currency, minor]) => formatMoney(currency, minor * 1_000 / covered)).join(" · ")
     : "暂无记录";
   const saleOutcomes = Object.entries(leads.sales.by_status).map(([status, count]) => `${localizeValue(status)} ${count}`).join(" · ") || "暂无成交结果";
+  const timelineMax = Math.max(
+    1,
+    ...leads.timeline.flatMap((day) => [day.dm_inbound, day.qualified, day.contact_captured]),
+  );
+  const automationRate = (leads.automation.automatic_handling_rate * 100).toFixed(1);
 
   return (
     <main className="analytics-workspace">
-      <header className="workspace-title"><div><span className="section-index">分析</span><h1>获客经营分析</h1><p>实测证据与容量预测分开展示。</p></div><span className={`promotion-label ${metrics.promoted ? "promoted" : "not-promoted"}`} title={metrics.reason}><Gauge size={14} /><span>{metrics.promoted ? "已达推广门槛" : "未达推广门槛"}<small>{metrics.reason}</small></span></span></header>
+      <header className="workspace-title"><div><span className="section-index">分析</span><span className="analytics-title-line"><h1>获客经营分析</h1>{leads.demo.active ? <span className="demo-badge">DEMO · 合成演示数据</span> : null}</span><p>实测证据与容量预测分开展示。</p></div><span className={`promotion-label ${metrics.promoted ? "promoted" : "not-promoted"}`} title={metrics.reason}><Gauge size={14} /><span>{metrics.promoted ? "已达推广门槛" : "未达推广门槛"}<small>{metrics.reason}</small></span></span></header>
       <div className="table-frame evidence-summary-frame">
         <table className="operations-table evidence-summary-table" aria-label="获客证据">
           <thead><tr><th>指标</th><th>证据类型</th><th className="align-right">数值</th><th>说明</th></tr></thead>
@@ -73,6 +78,34 @@ export function AnalyticsView({ roundId }: { roundId: string }) {
           </tbody>
         </table>
       </div>
+
+      {leads.timeline.length ? (
+        <figure className="timeline-figure" aria-label="14天 AI 转化趋势">
+          <figcaption>
+            <span><TrendingUp size={15} /><span><strong>14天 AI 转化趋势</strong><small>每日收到私信、合格线索与联系方式捕获</small></span></span>
+            <strong className="automation-rate">AI 自动处理率 {automationRate}%</strong>
+          </figcaption>
+          <div className="timeline-plot">
+            {leads.timeline.map((day) => (
+              <div
+                className="timeline-day"
+                data-testid="timeline-day"
+                key={day.date}
+                role="group"
+                aria-label={`${day.date}：收到私信 ${day.dm_inbound}，合格线索 ${day.qualified}，私域邀请 ${day.invited}，已留联系方式 ${day.contact_captured}，成交 ${day.sales}`}
+              >
+                <span className="timeline-bars" aria-hidden="true">
+                  <span className="timeline-bar inbound" style={{ height: `${(day.dm_inbound / timelineMax) * 100}%` }} />
+                  <span className="timeline-bar qualified" style={{ height: `${(day.qualified / timelineMax) * 100}%` }} />
+                  <span className="timeline-bar captured" style={{ height: `${(day.contact_captured / timelineMax) * 100}%` }} />
+                </span>
+                <time dateTime={day.date}>{day.date.slice(5)}</time>
+              </div>
+            ))}
+          </div>
+          <div className="timeline-legend" aria-hidden="true"><span className="inbound">收到私信</span><span className="qualified">合格线索</span><span className="captured">已留联系方式</span></div>
+        </figure>
+      ) : null}
 
       <section className="analytics-grid">
         <div className="analytics-pane"><header><TrendingUp size={15} /><div><h2>线索漏斗</h2><p>来自已配置账号的持久化事件。</p></div></header><FunnelTable funnel={leads.funnel} /></div>

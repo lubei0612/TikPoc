@@ -51,6 +51,29 @@ const leadPayload = (selected: object | null = null) => ({
     confirmed_revenue_minor: { USD: 12_500 },
     sales: 1,
   },
+  demo: {
+    active: true,
+    namespace: "demo-ai-growth-v1",
+    label: "DEMO · AI 多账号获客转化试点",
+  },
+  automation: {
+    ai_plans: 348,
+    ai_sent: 331,
+    ai_uncertain: 5,
+    ai_superseded: 12,
+    manual_handled: 98,
+    human_required: 28,
+    pending_inbound: 29,
+    automatic_handling_rate: 0.724,
+  },
+  timeline: Array.from({ length: 14 }, (_, index) => ({
+    date: `2026-08-${String(index + 8).padStart(2, "0")}`,
+    dm_inbound: 12 + index,
+    qualified: 3 + index,
+    invited: 2 + index,
+    contact_captured: 1 + index,
+    sales: index % 3,
+  })),
   browser_health: [
     { account_id: "account-01", device_id: "phone-01", browser_profile_label: "客服一号", expected_tiktok_username: "shop_one", observed_username: "shop_one", page_role: "activity", binding_state: "ready", status: "ready", observed_at_ms: 8_000, detail: "" },
     { account_id: "account-01", device_id: "phone-01", browser_profile_label: "客服一号", expected_tiktok_username: "shop_one", observed_username: "shop_one", page_role: "messages", binding_state: "ready", status: "ready", observed_at_ms: 8_000, detail: "" },
@@ -227,6 +250,23 @@ it("labels measured capacity separately from projection and uses dynamic coverag
   expect(within(evidence).getByText("USD 125.00")).toBeVisible();
   expect(within(evidence).getByText("USD 191.72")).toBeVisible();
   expect(screen.getByRole("table", { name: "设备容量" })).toBeVisible();
+});
+
+it("shows explicit demo context and an accessible fourteen-day AI conversion trend", async () => {
+  vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+    if (String(input).startsWith("/api/operations")) return jsonResponse(operationsPayload);
+    return jsonResponse(leadPayload());
+  });
+
+  render(<AnalyticsView roundId="round-1" />);
+
+  expect(await screen.findByText("DEMO · 合成演示数据")).toBeVisible();
+  expect(screen.getByRole("figure", { name: "14天 AI 转化趋势" })).toBeVisible();
+  expect(screen.getAllByTestId("timeline-day")).toHaveLength(14);
+  expect(screen.getByText("AI 自动处理率 72.4%", { exact: false })).toBeVisible();
+  expect(screen.getAllByTestId("timeline-day")[0]).toHaveAccessibleName(
+    "2026-08-08：收到私信 12，合格线索 3，私域邀请 2，已留联系方式 1，成交 0",
+  );
 });
 
 it("keeps invitation and contact evidence visible in a later human stage with labeled timing", async () => {
