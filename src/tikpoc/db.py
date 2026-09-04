@@ -2,7 +2,7 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -298,11 +298,19 @@ class Database:
         finally:
             connection.close()
 
-    def migrate(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as connection:
-            connection.execute("PRAGMA journal_mode=WAL")
-            connection.execute("PRAGMA synchronous=NORMAL")
+    def migrate(self, connection: sqlite3.Connection | None = None) -> None:
+        """Apply migrations, leaving transaction ownership to a supplied connection."""
+        owns_connection = connection is None
+        if owns_connection:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+        migration_connection = (
+            self._connect() if connection is None else nullcontext(connection)
+        )
+        with migration_connection as connection:  # noqa: PLR1704
+            connection.row_factory = sqlite3.Row
+            if owns_connection:
+                connection.execute("PRAGMA journal_mode=WAL")
+                connection.execute("PRAGMA synchronous=NORMAL")
             existing = connection.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='tasks'"
             ).fetchone()

@@ -438,25 +438,9 @@ def test_seed_acquisition_rolls_back_when_later_seed_phase_fails(
     with sqlite3.connect(path) as connection:
         assert (
             connection.execute(
-                "SELECT COUNT(*) FROM pool_targets WHERE identity_key LIKE 'demo:%'"
-            ).fetchone()[0]
-            == 0
-        )
-        assert (
-            connection.execute(
-                "SELECT COUNT(*) FROM exposure_rounds WHERE round_id LIKE 'demo-%'"
-            ).fetchone()[0]
-            == 0
-        )
-        assert (
-            connection.execute(
-                "SELECT COUNT(*) FROM round_assignments WHERE identity_key LIKE 'demo:%'"
-            ).fetchone()[0]
-            == 0
-        )
-        assert (
-            connection.execute(
-                "SELECT COUNT(*) FROM fleet_device_health WHERE device_id LIKE 'demo-%'"
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN "
+                "('pool_targets', 'exposure_rounds', 'round_assignments', "
+                "'fleet_device_health')"
             ).fetchone()[0]
             == 0
         )
@@ -991,7 +975,8 @@ def test_configuration_promotion_failure_restores_database_and_files(
         )
         assert (
             connection.execute(
-                "SELECT COUNT(*) FROM pool_targets WHERE identity_key LIKE 'demo:%'"
+                "SELECT COUNT(*) FROM sqlite_master "
+                "WHERE type='table' AND name='pool_targets'"
             ).fetchone()[0]
             == 0
         )
@@ -1010,6 +995,7 @@ def test_configuration_failure_preserves_concurrent_unrelated_database_write(
     accounts_path = tmp_path / "web-accounts.yaml"
     settings_path = tmp_path / "operator-settings.json"
     blueprint = build_demo_blueprint(now_ms=NOW_MS, scale=DemoScale.test_fixture())
+    Database(path).migrate()
     real_replace = demo_data.os.replace
     injected = False
     writer_started = threading.Event()
@@ -1065,7 +1051,8 @@ def test_configuration_failure_preserves_concurrent_unrelated_database_write(
         )
         assert (
             connection.execute(
-                "SELECT COUNT(*) FROM pool_targets WHERE identity_key LIKE 'demo:%'"
+                "SELECT COUNT(*) FROM sqlite_master "
+                "WHERE type='table' AND name='pool_targets'"
             ).fetchone()[0]
             == 0
         )
@@ -1271,6 +1258,80 @@ def test_seed_backs_up_existing_schema_before_running_migrations(
                 "WHERE type='table' AND name='target_pools'"
             ).fetchone()[0]
             == 0
+        )
+
+
+def test_repository_migrations_share_callers_transaction(tmp_path: Path) -> None:
+    path = tmp_path / "tikpoc.db"
+    with sqlite3.connect(path) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("CREATE TABLE legacy_marker(value TEXT NOT NULL)")
+        connection.commit()
+        connection.execute("BEGIN IMMEDIATE")
+
+        AcquisitionRepository(path).migrate(connection=connection)
+        Database(path).migrate(connection=connection)
+
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='target_pools'"
+        ).fetchone()
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tasks'"
+        ).fetchone()
+        connection.rollback()
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='legacy_marker'"
+        ).fetchone()
+        assert not connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='target_pools'"
+        ).fetchone()
+        assert not connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tasks'"
+        ).fetchone()
+
+
+def test_configuration_promotion_failure_rolls_back_legacy_schema_migrations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "tikpoc.db"
+    accounts = tmp_path / "web-accounts.yaml"
+    settings = tmp_path / "operator-settings.json"
+    accounts.write_bytes(b"accounts: []\n")
+    settings.write_bytes(b'{"accounts":{}}')
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE legacy_marker(value TEXT NOT NULL)")
+        connection.execute("INSERT INTO legacy_marker VALUES ('preserve')")
+        schema_before = connection.execute(
+            "SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name"
+        ).fetchall()
+    blueprint = build_demo_blueprint(now_ms=NOW_MS, scale=DemoScale.test_fixture())
+    real_replace = demo_data.os.replace
+
+    def fail_settings_promotion(source: object, destination: object) -> None:
+        if Path(destination) == settings:
+            raise OSError("settings promotion failed")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(demo_data.os, "replace", fail_settings_promotion)
+
+    with pytest.raises(OSError, match="settings promotion failed"):
+        seed_demo_database(
+            path,
+            blueprint,
+            web_accounts_path=accounts,
+            runtime_settings_path=settings,
+            backup_dir=tmp_path / "backups",
+        )
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT value FROM legacy_marker").fetchone() == (
+            "preserve",
+        )
+        assert (
+            connection.execute(
+                "SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name"
+            ).fetchall()
+            == schema_before
         )
 
 

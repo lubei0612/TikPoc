@@ -265,15 +265,17 @@ def seed_demo_database(
                 staged.unlink(missing_ok=True)
             raise
 
-    AcquisitionRepository(database_path).migrate()
-    Database(database_path).migrate()
-
+    database_path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(database_path, timeout=30)
     try:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA busy_timeout=30000")
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA synchronous=NORMAL")
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("BEGIN IMMEDIATE")
+        AcquisitionRepository(database_path).migrate(connection=connection)
+        Database(database_path).migrate(connection=connection)
         created = _seed_acquisition(connection, blueprint)
         conversion_created = _seed_conversion(connection, blueprint)
         for name, count in conversion_created.items():

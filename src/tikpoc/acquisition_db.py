@@ -8,7 +8,7 @@ import secrets
 import sqlite3
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 from .acquisition_models import (
@@ -167,11 +167,19 @@ class AcquisitionRepository:
             is not None
         )
 
-    def migrate(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as connection:
-            connection.execute("PRAGMA journal_mode=WAL")
-            connection.execute("PRAGMA synchronous=NORMAL")
+    def migrate(self, connection: sqlite3.Connection | None = None) -> None:
+        """Apply migrations, leaving transaction ownership to a supplied connection."""
+        owns_connection = connection is None
+        if owns_connection:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+        migration_connection = (
+            self._connect() if connection is None else nullcontext(connection)
+        )
+        with migration_connection as connection:  # noqa: PLR1704
+            connection.row_factory = sqlite3.Row
+            if owns_connection:
+                connection.execute("PRAGMA journal_mode=WAL")
+                connection.execute("PRAGMA synchronous=NORMAL")
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS target_pools (
