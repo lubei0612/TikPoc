@@ -1,7 +1,9 @@
+import math
 import sqlite3
 from collections import Counter
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 
@@ -127,9 +129,18 @@ def test_seed_acquisition_is_idempotent_and_matches_small_scale(
     assert first.created["assignments"] == 36
     assert first.created["confirmed_visits"] == 31
     assert first.created["action_plans"] == 31
-    assert first.created["interaction_plans"] == 6
-    assert first.created["uncertain_action_plans"] == 1
+    assert "interaction_plans" not in first.created
+    assert "uncertain_action_plans" not in first.created
+    assert first.summary["interaction_plans"] == 6
+    assert first.summary["uncertain_action_plans"] == 1
     assert first.created["device_health"] == 3
+    assert first.created_total == sum(first.created.values())
+    assert isinstance(first.created, MappingProxyType)
+    assert isinstance(first.summary, MappingProxyType)
+    with pytest.raises(TypeError):
+        first.created["targets"] = 0  # type: ignore[index]
+    with pytest.raises(TypeError):
+        first.summary["interaction_plans"] = 0  # type: ignore[index]
     assert second.created_total == 0
     assert repository.assignment_count(blueprint.round_id) == 36
     coverage = repository.round_coverage(blueprint.round_id)
@@ -176,7 +187,20 @@ def test_seed_acquisition_is_idempotent_and_matches_small_scale(
                 (blueprint.round_id,),
             )
         )
-        assert outcomes == {"favorite": 2, "like": 2, "repost": 1, "trace": 1}
+        assert outcomes == {"favorite": 2, "like": 2, "repost": 2}
+        persisted_counts = connection.execute(
+            """
+            SELECT SUM(effective_outcome <> 'trace'),
+                   SUM(effective_outcome = 'trace'),
+                   (SELECT COUNT(*) FROM action_attempts AS attempt
+                    JOIN device_action_plans AS attempted
+                      ON attempted.plan_id = attempt.plan_id
+                    WHERE attempted.round_id = ?)
+            FROM device_action_plans WHERE round_id = ?
+            """,
+            (blueprint.round_id, blueprint.round_id),
+        ).fetchone()
+        assert tuple(persisted_counts) == (6, 25, 6)
         assert (
             connection.execute(
                 """
@@ -208,7 +232,8 @@ def test_seed_acquisition_is_idempotent_and_matches_small_scale(
         ]
         assert durations and min(durations) > 0
         assert sum(durations) / len(durations) < 6_500
-        assert durations[int(len(durations) * 0.9)] < 8_640
+        nearest_rank_p90 = durations[max(0, math.ceil(len(durations) * 0.9) - 1)]
+        assert nearest_rank_p90 < 8_640
         health = connection.execute(
             """
             SELECT state, COUNT(*) FROM fleet_device_health
@@ -439,3 +464,32 @@ def test_portfolio_confirmed_projection_has_exact_coverage_distribution() -> Non
     assert len(keys) == 68_420
     assert sum(count == 7 for count in coverage.values()) == 9_770
     assert sum(count < 7 for count in coverage.values()) == 30
+
+
+def test_portfolio_seed_persists_exact_interaction_and_trace_counts(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "portfolio.db"
+    blueprint = build_demo_blueprint(now_ms=NOW_MS)
+
+    result = seed_demo_database(path, blueprint)
+
+    with sqlite3.connect(path) as connection:
+        counts = connection.execute(
+            """
+            SELECT SUM(effective_outcome <> 'trace'),
+                   SUM(effective_outcome = 'trace'),
+                   SUM(state = 'uncertain'),
+                   (SELECT COUNT(*) FROM action_attempts AS attempt
+                    JOIN device_action_plans AS attempted
+                      ON attempted.plan_id = attempt.plan_id
+                    WHERE attempted.round_id = ?)
+            FROM device_action_plans WHERE round_id = ?
+            """,
+            (blueprint.round_id, blueprint.round_id),
+        ).fetchone()
+
+    assert tuple(counts) == (4_410, 68_420 - 4_410, 5, 4_410)
+    assert result.summary["interaction_plans"] == 4_410
+    assert result.summary["uncertain_action_plans"] == 5
+    assert result.created_total == sum(result.created.values())

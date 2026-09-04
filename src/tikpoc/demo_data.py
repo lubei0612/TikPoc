@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from types import MappingProxyType
 
 from .acquisition_db import AcquisitionRepository
 from .db import Database
@@ -26,7 +27,7 @@ DEMO_HISTORY_POOL_IDS = (
 )
 _DAY_MS = 86_400_000
 _SQL_BATCH_SIZE = 1_000
-_ACTION_OUTCOMES = ("like", "favorite", "repost", "trace")
+_INTERACTION_OUTCOMES = ("like", "favorite", "repost")
 
 
 @dataclass(frozen=True)
@@ -189,6 +190,11 @@ class DemoBlueprint:
 @dataclass(frozen=True)
 class DemoSeedResult:
     created: Mapping[str, int]
+    summary: Mapping[str, int]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "created", MappingProxyType(dict(self.created)))
+        object.__setattr__(self, "summary", MappingProxyType(dict(self.summary)))
 
     @property
     def created_total(self) -> int:
@@ -222,13 +228,33 @@ def seed_demo_database(path: Path, blueprint: DemoBlueprint) -> DemoSeedResult:
         conversion_created = _seed_conversion(connection, blueprint)
         for name, count in conversion_created.items():
             created[name] = created.get(name, 0) + count
+        summary = _seed_summary(connection, blueprint)
         connection.commit()
     except BaseException:
         connection.rollback()
         raise
     finally:
         connection.close()
-    return DemoSeedResult(created=created)
+    return DemoSeedResult(created=created, summary=summary)
+
+
+def _seed_summary(
+    connection: sqlite3.Connection, blueprint: DemoBlueprint
+) -> dict[str, int]:
+    row = connection.execute(
+        """
+        SELECT SUM(effective_outcome <> 'trace') AS interactions,
+               SUM(effective_outcome = 'trace') AS traces,
+               SUM(state = 'uncertain') AS uncertain
+        FROM device_action_plans WHERE round_id = ?
+        """,
+        (blueprint.round_id,),
+    ).fetchone()
+    return {
+        "interaction_plans": int(row["interactions"] or 0),
+        "trace_plans": int(row["traces"] or 0),
+        "uncertain_action_plans": int(row["uncertain"] or 0),
+    }
 
 
 def _seed_acquisition(
@@ -561,7 +587,7 @@ def _insert_action_evidence(
             for eligible in (target_index <= blueprint.metrics.eligible,)
             for featured in ((identity_key, device_id) in featured_keys,)
             for requested_outcome in (
-                _ACTION_OUTCOMES[sequence % len(_ACTION_OUTCOMES)]
+                _INTERACTION_OUTCOMES[sequence % len(_INTERACTION_OUTCOMES)]
                 if featured
                 else "trace",
             )
@@ -618,7 +644,6 @@ def _insert_action_evidence(
             )
             for sequence, (identity_key, device_id) in enumerate(confirmed_keys)
             if sequence < blueprint.metrics.interactions
-            and _ACTION_OUTCOMES[sequence % len(_ACTION_OUTCOMES)] != "trace"
             for plan_timestamp in (
                 _assignment_base_timestamp(blueprint, identity_key) + 600,
             )
@@ -630,15 +655,9 @@ def _insert_action_evidence(
     quota_windows_created = _insert_quota_windows(connection, blueprint)
     return {
         "action_plans": plans_created,
-        "interaction_plans": (
-            min(blueprint.metrics.interactions, plans_created) if plans_created else 0
-        ),
         "action_attempts": attempts_created,
         "video_confirmations": video_history_created,
         "quota_windows": quota_windows_created,
-        "uncertain_action_plans": (
-            min(blueprint.metrics.ai_uncertain, plans_created) if plans_created else 0
-        ),
     }
 
 
@@ -913,9 +932,7 @@ def _uncertain_assignment_keys(
     confirmed_keys: Sequence[tuple[str, str]],
 ) -> frozenset[tuple[str, str]]:
     selected: list[tuple[str, str]] = []
-    for sequence, key in enumerate(confirmed_keys[: blueprint.metrics.interactions]):
-        if _ACTION_OUTCOMES[sequence % len(_ACTION_OUTCOMES)] == "trace":
-            continue
+    for key in confirmed_keys[: blueprint.metrics.interactions]:
         selected.append(key)
         if len(selected) == blueprint.metrics.ai_uncertain:
             break
