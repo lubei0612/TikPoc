@@ -296,13 +296,33 @@ def create_database_backup(path: Path, backup_dir: Path, now_ms: int) -> Path:
     """Create a consistent SQLite backup before compensated demo seeding."""
     source_path = Path(path)
     destination_dir = Path(backup_dir)
-    destination_dir.mkdir(parents=True, exist_ok=True)
+    destination_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(destination_dir, 0o700)
     destination = destination_dir / f"{source_path.name}.{int(now_ms)}.bak"
-    temporary = destination.with_name(f".{destination.name}.tmp")
-    temporary.unlink(missing_ok=True)
-    with sqlite3.connect(source_path) as source, sqlite3.connect(temporary) as target:
-        source.backup(target)
-    os.replace(temporary, destination)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+        dir=destination_dir,
+    )
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        os.close(descriptor)
+        descriptor = -1
+        with (
+            sqlite3.connect(source_path) as source,
+            sqlite3.connect(temporary) as target,
+        ):
+            source.backup(target)
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, destination)
+        os.chmod(destination, 0o600)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
+        for suffix in ("-journal", "-wal", "-shm"):
+            Path(f"{temporary}{suffix}").unlink(missing_ok=True)
     return destination
 
 

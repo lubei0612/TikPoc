@@ -1166,3 +1166,56 @@ def test_configuration_staging_uses_unique_private_temporary_files(
     assert predictable.read_text(encoding="utf-8") == "do not touch"
     assert stat.S_IMODE(settings_path.stat().st_mode) == 0o600
     assert stat.S_IMODE(accounts_path.stat().st_mode) == 0o600
+
+
+def test_database_backup_uses_private_directory_and_unique_temporary_file(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tikpoc.db"
+    Database(path).migrate()
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir(mode=0o777)
+    predictable = backup_dir / f".{path.name}.{NOW_MS}.bak.tmp"
+    predictable.write_text("do not touch", encoding="utf-8")
+    predictable.chmod(0o666)
+
+    backup = demo_data.create_database_backup(path, backup_dir, NOW_MS)
+
+    assert backup == backup_dir / f"{path.name}.{NOW_MS}.bak"
+    assert predictable.read_text(encoding="utf-8") == "do not touch"
+    assert stat.S_IMODE(backup_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE(backup.stat().st_mode) == 0o600
+    with sqlite3.connect(backup) as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+            ).fetchone()[0]
+            > 0
+        )
+
+
+def test_database_backup_cleans_unique_temporary_file_after_promotion_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "tikpoc.db"
+    Database(path).migrate()
+    backup_dir = tmp_path / "backups"
+    predictable = backup_dir / f".{path.name}.{NOW_MS}.bak.tmp"
+    backup_dir.mkdir()
+    predictable.write_text("keep", encoding="utf-8")
+    destination = backup_dir / f"{path.name}.{NOW_MS}.bak"
+    real_replace = demo_data.os.replace
+
+    def fail_backup_promotion(source: object, target: object) -> None:
+        if Path(target) == destination:
+            raise OSError("backup promotion failed")
+        real_replace(source, target)
+
+    monkeypatch.setattr(demo_data.os, "replace", fail_backup_promotion)
+
+    with pytest.raises(OSError, match="backup promotion failed"):
+        demo_data.create_database_backup(path, backup_dir, NOW_MS)
+
+    assert predictable.read_text(encoding="utf-8") == "keep"
+    assert not destination.exists()
+    assert list(backup_dir.iterdir()) == [predictable]
