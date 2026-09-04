@@ -252,7 +252,10 @@ def seed_demo_database(
             for destination in destinations
         }
         backup_path = create_database_backup(
-            database_path, Path(backup_dir), blueprint.now_ms
+            database_path,
+            Path(backup_dir),
+            blueprint.now_ms,
+            replay_blueprint=blueprint,
         )
         try:
             staged_files = _stage_configuration_files(
@@ -304,7 +307,13 @@ def seed_demo_database(
     )
 
 
-def create_database_backup(path: Path, backup_dir: Path, now_ms: int) -> Path:
+def create_database_backup(
+    path: Path,
+    backup_dir: Path,
+    now_ms: int,
+    *,
+    replay_blueprint: DemoBlueprint | None = None,
+) -> Path:
     """Create a consistent SQLite backup before compensated demo seeding."""
     source_path = Path(path)
     destination_dir = Path(backup_dir)
@@ -323,6 +332,12 @@ def create_database_backup(path: Path, backup_dir: Path, now_ms: int) -> Path:
         pass
     else:
         _validate_existing_database_backup(destination)
+        if replay_blueprint is None or not _is_complete_demo_replay(
+            source_path, replay_blueprint
+        ):
+            raise FileExistsError(
+                "existing demo backup is reusable only for a complete idempotent replay"
+            )
         return destination
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.name}.",
@@ -389,6 +404,73 @@ def _validate_existing_database_backup(path: Path) -> None:
         raise ValueError(
             "demo backup collision is not a valid SQLite database"
         ) from error
+
+
+def _is_complete_demo_replay(path: Path, blueprint: DemoBlueprint) -> bool:
+    try:
+        status = path.lstat()
+        if not stat.S_ISREG(status.st_mode):
+            return False
+        with _open_database_read_only(path) as connection:
+            required_tables = {
+                "target_pools",
+                "pool_targets",
+                "exposure_rounds",
+                "round_assignments",
+                "browser_reply_plans",
+            }
+            present_tables = {
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            if not required_tables <= present_tables:
+                return False
+            checksum = hashlib.sha256(
+                f"{blueprint.namespace}\0{len(blueprint.targets)}".encode()
+            ).hexdigest()
+            pool_matches = connection.execute(
+                """
+                SELECT COUNT(*) FROM target_pools
+                WHERE pool_id=? AND source_name=? AND source_checksum=?
+                  AND unique_targets=? AND source_rows=?
+                """,
+                (
+                    blueprint.pool_id,
+                    blueprint.label,
+                    checksum,
+                    blueprint.scale.targets,
+                    blueprint.scale.targets,
+                ),
+            ).fetchone()[0]
+            round_matches = connection.execute(
+                "SELECT COUNT(*) FROM exposure_rounds WHERE round_id=? AND pool_id=?",
+                (blueprint.round_id, blueprint.pool_id),
+            ).fetchone()[0]
+            target_count = connection.execute(
+                "SELECT COUNT(*) FROM pool_targets WHERE pool_id=?",
+                (blueprint.pool_id,),
+            ).fetchone()[0]
+            assignment_count = connection.execute(
+                "SELECT COUNT(*) FROM round_assignments WHERE round_id=?",
+                (blueprint.round_id,),
+            ).fetchone()[0]
+            placeholders = ",".join("?" for _ in blueprint.accounts)
+            ai_plan_count = connection.execute(
+                f"SELECT COUNT(*) FROM browser_reply_plans "
+                f"WHERE plan_origin='ai' AND account_id IN ({placeholders})",
+                tuple(account.account_id for account in blueprint.accounts),
+            ).fetchone()[0]
+            return (
+                int(pool_matches) == 1
+                and int(round_matches) == 1
+                and int(target_count) == blueprint.scale.targets
+                and int(assignment_count) == blueprint.scale.assignments
+                and int(ai_plan_count) == blueprint.metrics.ai_plans
+            )
+    except (FileNotFoundError, sqlite3.DatabaseError, OSError):
+        return False
 
 
 def clear_demo_database(

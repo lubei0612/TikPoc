@@ -1064,9 +1064,7 @@ def test_configuration_failure_preserves_concurrent_unrelated_database_write(
         )
 
 
-def test_failed_idempotent_reseed_preserves_preexisting_demo_rows(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_incomplete_reseed_aborts_before_repairing_demo_rows(tmp_path: Path) -> None:
     path = tmp_path / "tikpoc.db"
     accounts_path = tmp_path / "web-accounts.yaml"
     settings_path = tmp_path / "operator-settings.json"
@@ -1090,18 +1088,7 @@ def test_failed_idempotent_reseed_preserves_preexisting_demo_rows(
         connection.execute(
             "UPDATE worker_control SET requested_state='running' WHERE singleton=1"
         )
-    real_replace = demo_data.os.replace
-    failed = False
-
-    def fail_settings(source: object, destination: object) -> None:
-        nonlocal failed
-        if Path(destination) == settings_path and not failed:
-            failed = True
-            raise OSError("reseed settings promotion failed")
-        real_replace(source, destination)
-
-    monkeypatch.setattr(demo_data.os, "replace", fail_settings)
-    with pytest.raises(OSError, match="reseed settings"):
+    with pytest.raises(FileExistsError, match="complete idempotent replay"):
         seed_demo_database(
             path,
             blueprint,
@@ -1119,9 +1106,10 @@ def test_failed_idempotent_reseed_preserves_preexisting_demo_rows(
         )
         assert (
             connection.execute(
-                "SELECT COUNT(*) FROM browser_reply_plans WHERE account_id LIKE 'demo-account-%'"
+                "SELECT COUNT(*) FROM browser_reply_plans WHERE plan_origin='ai' "
+                "AND account_id LIKE 'demo-account-%'"
             ).fetchone()[0]
-            == 6
+            == 5
         )
         assert (
             connection.execute(
@@ -1226,6 +1214,87 @@ def test_database_backup_for_absent_source_is_valid_without_creating_source(
             ).fetchone()[0]
             == 0
         )
+
+
+def test_valid_unrelated_backup_collision_aborts_unseeded_source(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tikpoc.db"
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    destination = backup_dir / "tikpoc-before-demo-20260904T052000Z.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE legacy_marker(value TEXT NOT NULL)")
+    with sqlite3.connect(destination) as connection:
+        connection.execute("CREATE TABLE unrelated(value TEXT NOT NULL)")
+    destination.chmod(0o600)
+    blueprint = build_demo_blueprint(now_ms=NOW_MS, scale=DemoScale.test_fixture())
+
+    with pytest.raises(FileExistsError, match="idempotent replay"):
+        seed_demo_database(
+            path,
+            blueprint,
+            web_accounts_path=tmp_path / "web-accounts.yaml",
+            runtime_settings_path=tmp_path / "operator-settings.json",
+            backup_dir=backup_dir,
+        )
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='legacy_marker'"
+        ).fetchone()
+        assert not connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='target_pools'"
+        ).fetchone()
+
+
+def test_complete_idempotent_replay_preserves_backup_bytes(tmp_path: Path) -> None:
+    path = tmp_path / "tikpoc.db"
+    backup_dir = tmp_path / "backups"
+    blueprint = build_demo_blueprint(now_ms=NOW_MS, scale=DemoScale.test_fixture())
+    seed_arguments = {
+        "web_accounts_path": tmp_path / "web-accounts.yaml",
+        "runtime_settings_path": tmp_path / "operator-settings.json",
+        "backup_dir": backup_dir,
+    }
+
+    first = seed_demo_database(path, blueprint, **seed_arguments)
+    assert first.backup_path is not None
+    backup_bytes = first.backup_path.read_bytes()
+    backup_status = first.backup_path.stat()
+
+    replay = seed_demo_database(path, blueprint, **seed_arguments)
+
+    assert replay.created_total == 0
+    assert replay.backup_path == first.backup_path
+    assert replay.backup_path.read_bytes() == backup_bytes
+    assert replay.backup_path.stat().st_ino == backup_status.st_ino
+    assert replay.backup_path.stat().st_mtime_ns == backup_status.st_mtime_ns
+
+
+def test_existing_backup_rejects_incomplete_demo_source(tmp_path: Path) -> None:
+    path = tmp_path / "tikpoc.db"
+    backup_dir = tmp_path / "backups"
+    blueprint = build_demo_blueprint(now_ms=NOW_MS, scale=DemoScale.test_fixture())
+    seed_arguments = {
+        "web_accounts_path": tmp_path / "web-accounts.yaml",
+        "runtime_settings_path": tmp_path / "operator-settings.json",
+        "backup_dir": backup_dir,
+    }
+    first = seed_demo_database(path, blueprint, **seed_arguments)
+    assert first.backup_path is not None
+    backup_bytes = first.backup_path.read_bytes()
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "DELETE FROM browser_reply_plans WHERE id=("
+            "SELECT MIN(id) FROM browser_reply_plans WHERE plan_origin='ai' "
+            "AND account_id LIKE 'demo-account-%')"
+        )
+
+    with pytest.raises(FileExistsError, match="complete idempotent replay"):
+        seed_demo_database(path, blueprint, **seed_arguments)
+
+    assert first.backup_path.read_bytes() == backup_bytes
 
 
 def test_seed_backs_up_existing_schema_before_running_migrations(
