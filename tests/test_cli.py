@@ -12,6 +12,7 @@ from tikpoc import cli, runner, web_worker
 from tikpoc.acquisition_db import AcquisitionRepository
 from tikpoc.cli import main
 from tikpoc.db import Database
+from tikpoc.demo_data import DemoScale, build_demo_blueprint
 
 
 def _write_acquisition_csv(path: Path, *, count: int = 2) -> None:
@@ -23,6 +24,125 @@ def _write_acquisition_csv(path: Path, *, count: int = 2) -> None:
         for index in range(1, count + 1)
     ]
     path.write_text(HEADER + "".join(rows), encoding="utf-8")
+
+
+def test_demo_data_preview_is_redacted_and_does_not_create_database(
+    tmp_path: Path, capsys
+) -> None:
+    database = tmp_path / "tikpoc.db"
+
+    assert (
+        main(
+            [
+                "demo-data",
+                "preview",
+                "--db",
+                str(database),
+                "--now-ms",
+                "1788499200000",
+                "--json",
+            ]
+        )
+        == 0
+    )
+
+    raw = capsys.readouterr().out
+    payload = json.loads(raw)
+    assert payload["action"] == "preview"
+    assert payload["namespace"] == "demo-ai-growth-v1"
+    assert payload["metrics"]["assignments"] == 70_000
+    assert payload["account_ids"] == [
+        f"demo-account-{index:02d}" for index in range(1, 8)
+    ]
+    assert not database.exists()
+    assert "example.invalid" not in raw
+    assert "inbound_text" not in raw
+    assert "outbound_text" not in raw
+    assert "api_key" not in raw
+
+
+def test_demo_data_seed_replays_and_clear_preserves_backup(
+    tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "tikpoc.db"
+    accounts = tmp_path / "web-accounts.yaml"
+    settings = tmp_path / "operator-settings.json"
+    backup_dir = tmp_path / "backups"
+    fixture = build_demo_blueprint(
+        now_ms=1_788_499_200_000,
+        scale=DemoScale.test_fixture(),
+    )
+    monkeypatch.setattr(cli, "build_demo_blueprint", lambda **_kwargs: fixture)
+    args = [
+        "demo-data",
+        "seed",
+        "--db",
+        str(database),
+        "--web-accounts",
+        str(accounts),
+        "--settings",
+        str(settings),
+        "--backup-dir",
+        str(backup_dir),
+        "--now-ms",
+        "1788499200000",
+        "--json",
+    ]
+
+    assert main(args) == 0
+    first_raw = capsys.readouterr().out
+    first = json.loads(first_raw)
+    backup = Path(first["backup_path"])
+    assert first["action"] == "seed"
+    assert first["namespace"] == "demo-ai-growth-v1"
+    assert first["created_total"] > 0
+    assert backup.exists()
+    with sqlite3.connect(backup) as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM pool_targets WHERE identity_key LIKE 'demo:%'"
+            ).fetchone()[0]
+            == 0
+        )
+    assert "inbound_text" not in first_raw
+    assert "example.invalid" not in first_raw
+    assert "api_key" not in first_raw
+
+    assert main(args) == 0
+    replay = json.loads(capsys.readouterr().out)
+    assert replay["created_total"] == 0
+    assert replay["backup_path"] == str(backup)
+    with sqlite3.connect(backup) as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM pool_targets WHERE identity_key LIKE 'demo:%'"
+            ).fetchone()[0]
+            == 0
+        )
+
+    assert (
+        main(
+            [
+                "demo-data",
+                "clear",
+                "--db",
+                str(database),
+                "--web-accounts",
+                str(accounts),
+                "--settings",
+                str(settings),
+                "--json",
+            ]
+        )
+        == 0
+    )
+    cleared = json.loads(capsys.readouterr().out)
+    assert cleared["action"] == "clear"
+    assert cleared["deleted_total"] > 0
+    assert cleared["deleted"]["target_pools"] > 0
+    assert backup.exists()
+    assert not accounts.exists()
+    assert json.loads(settings.read_text(encoding="utf-8")).get("accounts") == {}
 
 
 def _write_fleet_config(path: Path) -> None:

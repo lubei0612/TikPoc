@@ -201,6 +201,7 @@ class DemoBlueprint:
 class DemoSeedResult:
     created: Mapping[str, int]
     summary: Mapping[str, int]
+    backup_path: Path | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "created", MappingProxyType(dict(self.created)))
@@ -241,6 +242,7 @@ def seed_demo_database(
 
     staged_files: dict[Path, Path] = {}
     prior_files: dict[Path, bytes | None] = {}
+    backup_path: Path | None = None
     AcquisitionRepository(database_path).migrate()
     Database(database_path).migrate()
 
@@ -256,7 +258,9 @@ def seed_demo_database(
             runtime_settings_path=destinations[1],
         )
         try:
-            create_database_backup(database_path, Path(backup_dir), blueprint.now_ms)
+            backup_path = create_database_backup(
+                database_path, Path(backup_dir), blueprint.now_ms
+            )
         except BaseException:
             for staged in staged_files.values():
                 staged.unlink(missing_ok=True)
@@ -289,7 +293,11 @@ def seed_demo_database(
         finally:
             for staged in staged_files.values():
                 staged.unlink(missing_ok=True)
-    return DemoSeedResult(created=created, summary=summary)
+    return DemoSeedResult(
+        created=created,
+        summary=summary,
+        backup_path=backup_path,
+    )
 
 
 def create_database_backup(path: Path, backup_dir: Path, now_ms: int) -> Path:
@@ -299,6 +307,8 @@ def create_database_backup(path: Path, backup_dir: Path, now_ms: int) -> Path:
     destination_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(destination_dir, 0o700)
     destination = destination_dir / f"{source_path.name}.{int(now_ms)}.bak"
+    if destination.exists():
+        return destination
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.name}.",
         suffix=".tmp",

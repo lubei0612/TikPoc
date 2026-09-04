@@ -14,6 +14,11 @@ from pathlib import Path
 from .acquisition_db import AcquisitionRepository
 from .capacity import evaluate_round_capacity
 from .db import Database
+from .demo_data import (
+    build_demo_blueprint,
+    clear_demo_database,
+    seed_demo_database,
+)
 from .fleet import FleetConfig
 from .importer import read_targets
 from .interactions import ActionPolicy, InteractionPolicy
@@ -92,6 +97,24 @@ def _parser() -> argparse.ArgumentParser:
     capacity.add_argument("--json", action="store_true", dest="json_output")
     status = commands.add_parser("status")
     status.add_argument("--db", type=Path, required=True)
+    demo_data = commands.add_parser("demo-data")
+    demo_commands = demo_data.add_subparsers(dest="demo_command", required=True)
+    demo_preview = demo_commands.add_parser("preview")
+    demo_preview.add_argument("--db", type=Path, required=True)
+    demo_preview.add_argument("--now-ms", type=int)
+    demo_preview.add_argument("--json", action="store_true", dest="json_output")
+    demo_seed = demo_commands.add_parser("seed")
+    demo_seed.add_argument("--db", type=Path, required=True)
+    demo_seed.add_argument("--web-accounts", type=Path, required=True)
+    demo_seed.add_argument("--settings", type=Path, required=True)
+    demo_seed.add_argument("--backup-dir", type=Path, required=True)
+    demo_seed.add_argument("--now-ms", type=int)
+    demo_seed.add_argument("--json", action="store_true", dest="json_output")
+    demo_clear = demo_commands.add_parser("clear")
+    demo_clear.add_argument("--db", type=Path, required=True)
+    demo_clear.add_argument("--web-accounts", type=Path, required=True)
+    demo_clear.add_argument("--settings", type=Path, required=True)
+    demo_clear.add_argument("--json", action="store_true", dest="json_output")
     browser = commands.add_parser("browser")
     browser_commands = browser.add_subparsers(dest="browser_command", required=True)
     browser_status = browser_commands.add_parser("status")
@@ -232,6 +255,52 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "demo-data":
+        if args.demo_command == "clear":
+            result = clear_demo_database(
+                args.db,
+                web_accounts_path=args.web_accounts,
+                runtime_settings_path=args.settings,
+            )
+            payload = {
+                "action": "clear",
+                "namespace": "demo-ai-growth-v1",
+                "deleted": dict(result.created),
+                "deleted_total": result.created_total,
+            }
+        else:
+            now_ms = args.now_ms or int(time.time() * 1_000)
+            blueprint = build_demo_blueprint(now_ms=now_ms)
+            payload = {
+                "action": args.demo_command,
+                "namespace": blueprint.namespace,
+                "pool_id": blueprint.pool_id,
+                "round_id": blueprint.round_id,
+                "metrics": asdict(blueprint.metrics),
+                "account_ids": [item.account_id for item in blueprint.accounts],
+            }
+            if args.demo_command == "preview":
+                payload["database_exists"] = args.db.is_file()
+            else:
+                result = seed_demo_database(
+                    args.db,
+                    blueprint,
+                    web_accounts_path=args.web_accounts,
+                    runtime_settings_path=args.settings,
+                    backup_dir=args.backup_dir,
+                )
+                payload.update(
+                    created=dict(result.created),
+                    created_total=result.created_total,
+                    summary=dict(result.summary),
+                    backup_path=(
+                        str(result.backup_path)
+                        if result.backup_path is not None
+                        else None
+                    ),
+                )
+        _print_demo_data_result(payload, json_output=args.json_output)
+        return 0
     if args.command.startswith("comment-"):
         from .comment_sessions import CommentSessionService
         from .hot_comment_planner import CommentCandidate, CommentEvidence
@@ -909,6 +978,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     counts = database.count_by_state()
     print(" ".join(f"{state}={count}" for state, count in counts.items()) or "empty")
     return 0
+
+
+def _print_demo_data_result(payload: dict[str, object], *, json_output: bool) -> None:
+    if json_output:
+        print(json.dumps(payload, ensure_ascii=True, sort_keys=True))
+        return
+    total_key = "deleted_total" if payload["action"] == "clear" else "created_total"
+    total = payload.get(total_key)
+    suffix = f" {total_key}={total}" if total is not None else ""
+    print(f"demo-data {payload['action']} namespace={payload['namespace']}{suffix}")
 
 
 def _path_from_environment(name: str) -> Path | None:
