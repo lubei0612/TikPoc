@@ -100,7 +100,8 @@ def test_demo_data_seed_replays_and_clear_preserves_backup(
     with sqlite3.connect(backup) as connection:
         assert (
             connection.execute(
-                "SELECT COUNT(*) FROM pool_targets WHERE identity_key LIKE 'demo:%'"
+                "SELECT COUNT(*) FROM sqlite_master "
+                "WHERE type='table' AND name='target_pools'"
             ).fetchone()[0]
             == 0
         )
@@ -115,7 +116,8 @@ def test_demo_data_seed_replays_and_clear_preserves_backup(
     with sqlite3.connect(backup) as connection:
         assert (
             connection.execute(
-                "SELECT COUNT(*) FROM pool_targets WHERE identity_key LIKE 'demo:%'"
+                "SELECT COUNT(*) FROM sqlite_master "
+                "WHERE type='table' AND name='target_pools'"
             ).fetchone()[0]
             == 0
         )

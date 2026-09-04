@@ -3,6 +3,7 @@ import json
 import os
 import random
 import sqlite3
+import stat
 import tempfile
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -243,8 +244,6 @@ def seed_demo_database(
     staged_files: dict[Path, Path] = {}
     prior_files: dict[Path, bytes | None] = {}
     backup_path: Path | None = None
-    AcquisitionRepository(database_path).migrate()
-    Database(database_path).migrate()
 
     if web_accounts_path is not None and runtime_settings_path is not None:
         destinations = (Path(web_accounts_path), Path(runtime_settings_path))
@@ -252,19 +251,22 @@ def seed_demo_database(
             destination: destination.read_bytes() if destination.exists() else None
             for destination in destinations
         }
-        staged_files = _stage_configuration_files(
-            blueprint,
-            web_accounts_path=destinations[0],
-            runtime_settings_path=destinations[1],
+        backup_path = create_database_backup(
+            database_path, Path(backup_dir), blueprint.now_ms
         )
         try:
-            backup_path = create_database_backup(
-                database_path, Path(backup_dir), blueprint.now_ms
+            staged_files = _stage_configuration_files(
+                blueprint,
+                web_accounts_path=destinations[0],
+                runtime_settings_path=destinations[1],
             )
         except BaseException:
             for staged in staged_files.values():
                 staged.unlink(missing_ok=True)
             raise
+
+    AcquisitionRepository(database_path).migrate()
+    Database(database_path).migrate()
 
     connection = sqlite3.connect(database_path, timeout=30)
     try:
@@ -305,9 +307,20 @@ def create_database_backup(path: Path, backup_dir: Path, now_ms: int) -> Path:
     source_path = Path(path)
     destination_dir = Path(backup_dir)
     destination_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    directory_status = destination_dir.lstat()
+    if not stat.S_ISDIR(directory_status.st_mode):
+        raise ValueError("demo backup destination must be a directory")
     os.chmod(destination_dir, 0o700)
-    destination = destination_dir / f"{source_path.name}.{int(now_ms)}.bak"
-    if destination.exists():
+    timestamp = datetime.fromtimestamp(int(now_ms) / 1_000, UTC).strftime(
+        "%Y%m%dT%H%M%SZ"
+    )
+    destination = destination_dir / f"tikpoc-before-demo-{timestamp}.db"
+    try:
+        destination.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        _validate_existing_database_backup(destination)
         return destination
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.name}.",
@@ -319,14 +332,22 @@ def create_database_backup(path: Path, backup_dir: Path, now_ms: int) -> Path:
         os.fchmod(descriptor, 0o600)
         os.close(descriptor)
         descriptor = -1
-        with (
-            sqlite3.connect(source_path) as source,
-            sqlite3.connect(temporary) as target,
-        ):
-            source.backup(target)
+        if source_path.exists():
+            source_status = source_path.lstat()
+            if not stat.S_ISREG(source_status.st_mode):
+                raise ValueError("demo database source must be a regular file")
+            with (
+                _open_database_read_only(source_path) as source,
+                sqlite3.connect(temporary) as target,
+            ):
+                source.backup(target)
+        else:
+            with sqlite3.connect(temporary) as target:
+                target.execute("CREATE TABLE demo_empty_backup_marker(value INTEGER)")
+                target.execute("DROP TABLE demo_empty_backup_marker")
         os.chmod(temporary, 0o600)
-        os.replace(temporary, destination)
-        os.chmod(destination, 0o600)
+        _validate_existing_database_backup(temporary)
+        os.link(temporary, destination)
     finally:
         if descriptor >= 0:
             os.close(descriptor)
@@ -334,6 +355,38 @@ def create_database_backup(path: Path, backup_dir: Path, now_ms: int) -> Path:
         for suffix in ("-journal", "-wal", "-shm"):
             Path(f"{temporary}{suffix}").unlink(missing_ok=True)
     return destination
+
+
+def _open_database_read_only(path: Path) -> sqlite3.Connection:
+    return sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+
+
+def _validate_existing_database_backup(path: Path) -> None:
+    status = path.lstat()
+    if not stat.S_ISREG(status.st_mode):
+        raise FileExistsError("demo backup collision is not a regular file")
+    if stat.S_IMODE(status.st_mode) != 0o600:
+        raise PermissionError("demo backup collision has insecure permissions")
+    try:
+        with _open_database_read_only(path) as connection:
+            if connection.execute("PRAGMA quick_check").fetchone() != ("ok",):
+                raise ValueError("demo backup collision failed SQLite quick_check")
+            has_rounds = connection.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='exposure_rounds'"
+            ).fetchone()
+            if (
+                has_rounds
+                and connection.execute(
+                    "SELECT 1 FROM exposure_rounds WHERE round_id=? LIMIT 1",
+                    (DEMO_ROUND_ID,),
+                ).fetchone()
+            ):
+                raise ValueError("demo backup collision contains seeded demo data")
+    except sqlite3.DatabaseError as error:
+        raise ValueError(
+            "demo backup collision is not a valid SQLite database"
+        ) from error
 
 
 def clear_demo_database(

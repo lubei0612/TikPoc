@@ -1181,7 +1181,7 @@ def test_database_backup_uses_private_directory_and_unique_temporary_file(
 
     backup = demo_data.create_database_backup(path, backup_dir, NOW_MS)
 
-    assert backup == backup_dir / f"{path.name}.{NOW_MS}.bak"
+    assert backup == backup_dir / "tikpoc-before-demo-20260904T052000Z.db"
     assert predictable.read_text(encoding="utf-8") == "do not touch"
     assert stat.S_IMODE(backup_dir.stat().st_mode) == 0o700
     assert stat.S_IMODE(backup.stat().st_mode) == 0o600
@@ -1203,15 +1203,15 @@ def test_database_backup_cleans_unique_temporary_file_after_promotion_failure(
     predictable = backup_dir / f".{path.name}.{NOW_MS}.bak.tmp"
     backup_dir.mkdir()
     predictable.write_text("keep", encoding="utf-8")
-    destination = backup_dir / f"{path.name}.{NOW_MS}.bak"
-    real_replace = demo_data.os.replace
+    destination = backup_dir / "tikpoc-before-demo-20260904T052000Z.db"
+    real_link = demo_data.os.link
 
     def fail_backup_promotion(source: object, target: object) -> None:
         if Path(target) == destination:
             raise OSError("backup promotion failed")
-        real_replace(source, target)
+        real_link(source, target)
 
-    monkeypatch.setattr(demo_data.os, "replace", fail_backup_promotion)
+    monkeypatch.setattr(demo_data.os, "link", fail_backup_promotion)
 
     with pytest.raises(OSError, match="backup promotion failed"):
         demo_data.create_database_backup(path, backup_dir, NOW_MS)
@@ -1219,3 +1219,101 @@ def test_database_backup_cleans_unique_temporary_file_after_promotion_failure(
     assert predictable.read_text(encoding="utf-8") == "keep"
     assert not destination.exists()
     assert list(backup_dir.iterdir()) == [predictable]
+
+
+def test_database_backup_for_absent_source_is_valid_without_creating_source(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tikpoc.db"
+
+    backup = demo_data.create_database_backup(path, tmp_path / "backups", NOW_MS)
+
+    assert not path.exists()
+    with sqlite3.connect(
+        f"{backup.resolve().as_uri()}?mode=ro", uri=True
+    ) as connection:
+        assert connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+            ).fetchone()[0]
+            == 0
+        )
+
+
+def test_seed_backs_up_existing_schema_before_running_migrations(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tikpoc.db"
+    accounts = tmp_path / "web-accounts.yaml"
+    settings = tmp_path / "operator-settings.json"
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE legacy_marker(value TEXT NOT NULL)")
+        connection.execute("INSERT INTO legacy_marker VALUES ('before-migration')")
+    blueprint = build_demo_blueprint(now_ms=NOW_MS, scale=DemoScale.test_fixture())
+
+    result = seed_demo_database(
+        path,
+        blueprint,
+        web_accounts_path=accounts,
+        runtime_settings_path=settings,
+        backup_dir=tmp_path / "backups",
+    )
+
+    assert result.backup_path is not None
+    with sqlite3.connect(result.backup_path) as connection:
+        assert connection.execute("SELECT value FROM legacy_marker").fetchone()[0] == (
+            "before-migration"
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM sqlite_master "
+                "WHERE type='table' AND name='target_pools'"
+            ).fetchone()[0]
+            == 0
+        )
+
+
+@pytest.mark.parametrize("collision", ["symlink", "directory", "insecure", "seeded"])
+def test_invalid_backup_collision_aborts_seed_before_database_migration(
+    tmp_path: Path, collision: str
+) -> None:
+    path = tmp_path / "tikpoc.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE legacy_marker(value TEXT NOT NULL)")
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    destination = backup_dir / "tikpoc-before-demo-20260904T052000Z.db"
+    if collision == "symlink":
+        target = tmp_path / "collision-target.db"
+        sqlite3.connect(target).close()
+        destination.symlink_to(target)
+    elif collision == "directory":
+        destination.mkdir()
+    else:
+        with sqlite3.connect(destination) as connection:
+            if collision == "seeded":
+                connection.execute("CREATE TABLE exposure_rounds(round_id TEXT)")
+                connection.execute(
+                    "INSERT INTO exposure_rounds VALUES ('demo-round-ai-growth-v1')"
+                )
+        destination.chmod(0o644 if collision == "insecure" else 0o600)
+    blueprint = build_demo_blueprint(now_ms=NOW_MS, scale=DemoScale.test_fixture())
+
+    with pytest.raises((FileExistsError, PermissionError, ValueError)):
+        seed_demo_database(
+            path,
+            blueprint,
+            web_accounts_path=tmp_path / "web-accounts.yaml",
+            runtime_settings_path=tmp_path / "operator-settings.json",
+            backup_dir=backup_dir,
+        )
+
+    with sqlite3.connect(path) as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM sqlite_master "
+                "WHERE type='table' AND name='target_pools'"
+            ).fetchone()[0]
+            == 0
+        )
