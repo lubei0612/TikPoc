@@ -16,6 +16,10 @@ DEMO_ROUND_ID = "demo-round-ai-growth-v1"
 DEMO_POOL_IDENTITY_PREFIX = "demo:target:"
 DEMO_ROUND_LABEL = "DEMO · AI 多账号获客转化试点"
 DEMO_SEED = 20260904
+DEMO_HISTORY_ROUND_IDS = (
+    "demo-round-ai-growth-history-01",
+    "demo-round-ai-growth-history-02",
+)
 _DAY_MS = 86_400_000
 _SQL_BATCH_SIZE = 1_000
 _ACTION_OUTCOMES = ("like", "favorite", "repost", "trace")
@@ -280,20 +284,18 @@ def _seed_acquisition(
         """,
         target_rows,
     )
-    created["rounds"] = _execute_counted(
+    created["rounds"] = _executemany_bounded(
         connection,
         """
         INSERT OR IGNORE INTO exposure_rounds(
             round_id, pool_id, state, starts_at_ms,
             min_inter_device_gap_ms, min_repeat_gap_ms, created_at_ms,
             navigation_mode
-        ) VALUES (?, ?, 'stopped', ?, 0, 0, ?, 'deeplink')
+        ) VALUES (?, ?, ?, ?, 0, 0, ?, 'deeplink')
         """,
         (
-            blueprint.round_id,
-            blueprint.pool_id,
-            _demo_started_at_ms(blueprint),
-            _demo_started_at_ms(blueprint),
+            (round_id, blueprint.pool_id, state, starts_at_ms, starts_at_ms)
+            for round_id, state, starts_at_ms in _demo_round_rows(blueprint)
         ),
     )
     created["device_seeds"] = _executemany_bounded(
@@ -304,10 +306,11 @@ def _seed_acquisition(
         """,
         (
             (
-                blueprint.round_id,
+                round_id,
                 account.device_id,
-                f"{blueprint.namespace}:order:{account.device_id}",
+                f"{blueprint.namespace}:order:{round_id}:{account.device_id}",
             )
+            for round_id, _state, _started_at_ms in _demo_round_rows(blueprint)
             for account in blueprint.accounts
         ),
     )
@@ -335,18 +338,24 @@ def _seed_acquisition(
     )
 
     confirmed_keys = _confirmed_assignment_keys(blueprint)
+    uncertain_keys = frozenset(
+        confirmed_keys[: min(blueprint.metrics.ai_uncertain, len(confirmed_keys))]
+    )
     assignment_updates = (
         (
-            "completed",
+            "deferred" if (identity_key, device_id) in uncertain_keys else "completed",
             1,
-            completed_at_ms - 400,
-            completed_at_ms,
+            _assignment_base_timestamp(blueprint, identity_key) + 400,
+            (
+                None
+                if (identity_key, device_id) in uncertain_keys
+                else _assignment_completed_timestamp(blueprint, identity_key, sequence)
+            ),
             blueprint.round_id,
             identity_key,
             device_id,
         )
         for sequence, (identity_key, device_id) in enumerate(confirmed_keys)
-        for completed_at_ms in (_completion_timestamp(blueprint, sequence),)
     )
     created["confirmed_visits"] = _executemany_bounded(
         connection,
@@ -362,8 +371,12 @@ def _seed_acquisition(
     created["phase_history"] = _insert_phase_history(
         connection, blueprint, confirmed_keys
     )
-    created["profile_snapshots"] = _insert_profile_snapshots(connection, blueprint)
-    action_counts = _insert_action_evidence(connection, blueprint, confirmed_keys)
+    created["profile_snapshots"] = _insert_profile_snapshots(
+        connection, blueprint, confirmed_keys
+    )
+    action_counts = _insert_action_evidence(
+        connection, blueprint, confirmed_keys, uncertain_keys
+    )
     created.update(action_counts)
     created["device_health"] = _insert_device_health(connection, blueprint)
     created["operator_controls"] = _insert_operator_controls(connection, blueprint)
@@ -388,13 +401,12 @@ def _insert_phase_history(
             "pending",
             "profile_opening",
             json.dumps({"source": blueprint.namespace}, separators=(",", ":")),
-            _completion_timestamp(blueprint, sequence)
-            - _assignment_duration_ms(sequence),
+            _assignment_base_timestamp(blueprint, identity_key),
             blueprint.round_id,
             identity_key,
             device_id,
         )
-        for sequence, (identity_key, device_id) in enumerate(confirmed_keys)
+        for identity_key, device_id in confirmed_keys
     )
     return _executemany_bounded(
         connection,
@@ -418,26 +430,30 @@ def _insert_phase_history(
 
 
 def _insert_profile_snapshots(
-    connection: sqlite3.Connection, blueprint: DemoBlueprint
+    connection: sqlite3.Connection,
+    blueprint: DemoBlueprint,
+    confirmed_keys: Sequence[tuple[str, str]],
 ) -> int:
     if not blueprint.accounts:
         return 0
+    confirmed_identities = tuple(dict.fromkeys(key[0] for key in confirmed_keys))
     rows = (
         (
             blueprint.round_id,
-            _target_identity(index),
-            blueprint.accounts[(index - 1) % len(blueprint.accounts)].device_id,
-            target_id,
+            identity_key,
+            blueprint.accounts[0].device_id,
+            blueprint.targets[target_index - 1],
             420 + index % 180,
             1_300 + index % 700,
-            3 + index % 9,
-            1,
-            "demo_eligible",
-            _demo_started_at_ms(blueprint) + index,
+            3 + index % 9 if target_index <= blueprint.metrics.eligible else 0,
+            int(target_index <= blueprint.metrics.eligible),
+            "eligible"
+            if target_index <= blueprint.metrics.eligible
+            else "insufficient_posts",
+            _assignment_base_timestamp(blueprint, identity_key) + 500,
         )
-        for index, target_id in enumerate(
-            blueprint.targets[: blueprint.metrics.eligible], start=1
-        )
+        for index, identity_key in enumerate(confirmed_identities, start=1)
+        for target_index in (_target_index(identity_key),)
     )
     return _executemany_bounded(
         connection,
@@ -456,17 +472,17 @@ def _insert_action_evidence(
     connection: sqlite3.Connection,
     blueprint: DemoBlueprint,
     confirmed_keys: Sequence[tuple[str, str]],
+    uncertain_keys: frozenset[tuple[str, str]],
 ) -> dict[str, int]:
-    action_keys = confirmed_keys[: blueprint.metrics.interactions]
-    uncertain_count = min(blueprint.metrics.ai_uncertain, len(action_keys))
-    created = _executemany_bounded(
+    featured_keys = frozenset(confirmed_keys[: blueprint.metrics.interactions])
+    plans_created = _executemany_bounded(
         connection,
         """
         INSERT OR IGNORE INTO device_action_plans(
             round_id, identity_key, device_id, seed, requested_outcome,
             effective_outcome, quota_window_start_ms, quota_reason, video_key,
             state, created_at_ms, policy_version
-        ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             (
@@ -474,16 +490,51 @@ def _insert_action_evidence(
                 identity_key,
                 device_id,
                 f"{blueprint.namespace}:action:{sequence:05d}",
-                outcome,
-                outcome,
-                "demo_capacity_evidence",
-                f"demo-video-action-{sequence + 1:05d}",
-                "uncertain" if sequence < uncertain_count else "confirmed",
-                _completion_timestamp(blueprint, sequence) - 200,
+                requested_outcome,
+                effective_outcome,
+                quota_window_start_ms,
+                quota_reason,
+                video_key,
+                (
+                    "uncertain"
+                    if (identity_key, device_id) in uncertain_keys
+                    else "confirmed"
+                ),
+                plan_timestamp,
                 "demo-portfolio-v1",
             )
-            for sequence, (identity_key, device_id) in enumerate(action_keys)
-            for outcome in (_ACTION_OUTCOMES[sequence % len(_ACTION_OUTCOMES)],)
+            for sequence, (identity_key, device_id) in enumerate(confirmed_keys)
+            for target_index in (_target_index(identity_key),)
+            for eligible in (target_index <= blueprint.metrics.eligible,)
+            for featured in ((identity_key, device_id) in featured_keys,)
+            for requested_outcome in (
+                _ACTION_OUTCOMES[sequence % len(_ACTION_OUTCOMES)]
+                if featured
+                else "trace",
+            )
+            for effective_outcome in (requested_outcome,)
+            for plan_timestamp in (
+                _assignment_base_timestamp(blueprint, identity_key) + 600,
+            )
+            for quota_window_start_ms in (
+                (
+                    plan_timestamp - plan_timestamp % 3_600_000
+                    if effective_outcome != "trace"
+                    else None
+                ),
+            )
+            for quota_reason in (
+                (
+                    None
+                    if effective_outcome != "trace"
+                    else "pacing_not_due"
+                    if eligible
+                    else "profile_ineligible"
+                ),
+            )
+            for video_key in (
+                f"demo-video-action-{sequence + 1:05d}" if eligible else None,
+            )
         ),
     )
     attempts_created = _executemany_bounded(
@@ -498,24 +549,101 @@ def _insert_action_evidence(
         """,
         (
             (
-                "uncertain" if sequence < uncertain_count else "confirmed",
+                (
+                    "uncertain"
+                    if (identity_key, device_id) in uncertain_keys
+                    else "confirmed"
+                ),
                 json.dumps(
                     {"ui_summary": "DEMO synthetic visible-state evidence"},
                     separators=(",", ":"),
                 ),
-                _completion_timestamp(blueprint, sequence) - 100,
+                plan_timestamp + 200,
                 blueprint.round_id,
                 identity_key,
                 device_id,
             )
-            for sequence, (identity_key, device_id) in enumerate(action_keys)
+            for sequence, (identity_key, device_id) in enumerate(confirmed_keys)
+            if sequence < blueprint.metrics.interactions
+            and _ACTION_OUTCOMES[sequence % len(_ACTION_OUTCOMES)] != "trace"
+            for plan_timestamp in (
+                _assignment_base_timestamp(blueprint, identity_key) + 600,
+            )
         ),
     )
+    video_history_created = _insert_video_confirmations(
+        connection, blueprint, confirmed_keys
+    )
+    quota_windows_created = _insert_quota_windows(connection, blueprint)
     return {
-        "action_plans": created,
+        "action_plans": plans_created,
+        "interaction_plans": (
+            min(blueprint.metrics.interactions, plans_created) if plans_created else 0
+        ),
         "action_attempts": attempts_created,
-        "uncertain_action_plans": (uncertain_count if created else 0),
+        "video_confirmations": video_history_created,
+        "quota_windows": quota_windows_created,
+        "uncertain_action_plans": (
+            min(blueprint.metrics.ai_uncertain, plans_created) if plans_created else 0
+        ),
     }
+
+
+def _insert_video_confirmations(
+    connection: sqlite3.Connection,
+    blueprint: DemoBlueprint,
+    confirmed_keys: Sequence[tuple[str, str]],
+) -> int:
+    return _executemany_bounded(
+        connection,
+        """
+        INSERT INTO assignment_phase_history(
+            assignment_id, from_phase, to_phase, details_json, changed_at_ms
+        )
+        SELECT assignment.assignment_id, 'video_opening', 'video_confirmed', ?, ?
+        FROM round_assignments AS assignment
+        JOIN profile_snapshots AS snapshot
+          ON snapshot.round_id = assignment.round_id
+         AND snapshot.identity_key = assignment.identity_key
+        WHERE assignment.round_id = ? AND assignment.identity_key = ?
+          AND assignment.device_id = ? AND snapshot.eligible = 1
+          AND NOT EXISTS (
+              SELECT 1 FROM assignment_phase_history AS history
+              WHERE history.assignment_id = assignment.assignment_id
+                AND history.to_phase = 'video_confirmed'
+          )
+        """,
+        (
+            (
+                json.dumps({"source": blueprint.namespace}, separators=(",", ":")),
+                _assignment_base_timestamp(blueprint, identity_key) + 700,
+                blueprint.round_id,
+                identity_key,
+                device_id,
+            )
+            for identity_key, device_id in confirmed_keys
+        ),
+    )
+
+
+def _insert_quota_windows(
+    connection: sqlite3.Connection, blueprint: DemoBlueprint
+) -> int:
+    return _execute_counted(
+        connection,
+        """
+        INSERT OR IGNORE INTO acquisition_quota_windows(
+            device_id, outcome, window_start_ms,
+            reserved_count, confirmed_count, uncertain_count
+        )
+        SELECT device_id, effective_outcome, quota_window_start_ms,
+               COUNT(*), SUM(state = 'confirmed'), SUM(state = 'uncertain')
+        FROM device_action_plans
+        WHERE round_id = ? AND effective_outcome <> 'trace'
+        GROUP BY device_id, effective_outcome, quota_window_start_ms
+        """,
+        (blueprint.round_id,),
+    )
 
 
 def _insert_device_health(
@@ -602,9 +730,40 @@ def _demo_started_at_ms(blueprint: DemoBlueprint) -> int:
     return max(1, blueprint.now_ms - 13 * _DAY_MS)
 
 
-def _completion_timestamp(blueprint: DemoBlueprint, sequence: int) -> int:
-    span = 14 * _DAY_MS
-    return max(1, blueprint.now_ms - span + (sequence * 7_919) % span)
+def _demo_round_rows(
+    blueprint: DemoBlueprint,
+) -> tuple[tuple[str, str, int], ...]:
+    main_started_at_ms = _demo_started_at_ms(blueprint)
+    return (
+        (blueprint.round_id, "stopped", main_started_at_ms),
+        (
+            DEMO_HISTORY_ROUND_IDS[0],
+            "completed",
+            max(1, main_started_at_ms - 14 * _DAY_MS),
+        ),
+        (
+            DEMO_HISTORY_ROUND_IDS[1],
+            "completed",
+            max(1, main_started_at_ms - 28 * _DAY_MS),
+        ),
+    )
+
+
+def _assignment_base_timestamp(blueprint: DemoBlueprint, identity_key: str) -> int:
+    started_at_ms = _demo_started_at_ms(blueprint)
+    usable_span_ms = max(0, blueprint.now_ms - started_at_ms - 7_000)
+    target_index = _target_index(identity_key)
+    return started_at_ms + (target_index - 1) * usable_span_ms // max(
+        1, len(blueprint.targets)
+    )
+
+
+def _assignment_completed_timestamp(
+    blueprint: DemoBlueprint, identity_key: str, sequence: int
+) -> int:
+    return _assignment_base_timestamp(
+        blueprint, identity_key
+    ) + _assignment_duration_ms(sequence)
 
 
 def _assignment_duration_ms(sequence: int) -> int:
@@ -613,6 +772,10 @@ def _assignment_duration_ms(sequence: int) -> int:
 
 def _target_identity(index: int) -> str:
     return f"{DEMO_POOL_IDENTITY_PREFIX}{index:05d}"
+
+
+def _target_index(identity_key: str) -> int:
+    return int(identity_key.removeprefix(DEMO_POOL_IDENTITY_PREFIX))
 
 
 def _order_key(namespace: str, *, target_index: int, device_id: str) -> str:

@@ -122,11 +122,12 @@ def test_seed_acquisition_is_idempotent_and_matches_small_scale(
 
     assert first.created["pools"] == 1
     assert first.created["targets"] == 12
-    assert first.created["rounds"] == 1
-    assert first.created["device_seeds"] == 3
+    assert first.created["rounds"] == 3
+    assert first.created["device_seeds"] == 9
     assert first.created["assignments"] == 36
     assert first.created["confirmed_visits"] == 31
-    assert first.created["action_plans"] == 6
+    assert first.created["action_plans"] == 31
+    assert first.created["interaction_plans"] == 6
     assert first.created["uncertain_action_plans"] == 1
     assert first.created["device_health"] == 3
     assert second.created_total == 0
@@ -143,12 +144,33 @@ def test_seed_acquisition_is_idempotent_and_matches_small_scale(
 
     with sqlite3.connect(path) as connection:
         connection.row_factory = sqlite3.Row
+        historical_rounds = connection.execute(
+            """
+            SELECT round_id, state FROM exposure_rounds
+            WHERE round_id LIKE 'demo-round-ai-growth-history-%'
+            ORDER BY round_id
+            """
+        ).fetchall()
+        assert [tuple(row) for row in historical_rounds] == [
+            ("demo-round-ai-growth-history-01", "completed"),
+            ("demo-round-ai-growth-history-02", "completed"),
+        ]
+        assert (
+            connection.execute(
+                """
+            SELECT COUNT(*) FROM round_device_seeds
+            WHERE round_id LIKE 'demo-round-ai-growth-history-%'
+            """
+            ).fetchone()[0]
+            == 6
+        )
         outcomes = dict(
             connection.execute(
                 """
-                SELECT effective_outcome, COUNT(*) AS count
-                FROM device_action_plans
-                WHERE round_id = ?
+                SELECT effective_outcome, COUNT(*) AS count FROM (
+                    SELECT effective_outcome FROM device_action_plans
+                    WHERE round_id = ? ORDER BY plan_id LIMIT 6
+                )
                 GROUP BY effective_outcome
                 """,
                 (blueprint.round_id,),
@@ -157,7 +179,10 @@ def test_seed_acquisition_is_idempotent_and_matches_small_scale(
         assert outcomes == {"favorite": 2, "like": 2, "repost": 1, "trace": 1}
         assert (
             connection.execute(
-                "SELECT COUNT(*) FROM assignment_phase_history"
+                """
+                SELECT COUNT(*) FROM assignment_phase_history
+                WHERE to_phase = 'profile_opening'
+                """
             ).fetchone()[0]
             == 31
         )
@@ -171,6 +196,7 @@ def test_seed_acquisition_is_idempotent_and_matches_small_scale(
                   ON history.assignment_id = assignment.assignment_id
                 WHERE assignment.round_id = ?
                   AND history.to_phase = 'profile_opening'
+                  AND assignment.completed_at_ms IS NOT NULL
                 ORDER BY duration_ms
                 """,
                 (blueprint.round_id,),
@@ -206,6 +232,77 @@ def test_seed_acquisition_is_idempotent_and_matches_small_scale(
             ).fetchone()[0]
             == "stopped"
         )
+
+
+def test_seed_acquisition_keeps_main_round_evidence_chronological(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tikpoc.db"
+    blueprint = build_demo_blueprint(
+        now_ms=NOW_MS,
+        scale=DemoScale.test_fixture(),
+    )
+    seed_demo_database(path, blueprint)
+
+    with sqlite3.connect(path) as connection:
+        starts_at_ms = connection.execute(
+            "SELECT starts_at_ms FROM exposure_rounds WHERE round_id = ?",
+            (blueprint.round_id,),
+        ).fetchone()[0]
+        bounds = connection.execute(
+            """
+            SELECT MIN(history.changed_at_ms), MAX(history.changed_at_ms),
+                   MIN(assignment.visit_confirmed_at_ms),
+                   MAX(assignment.completed_at_ms)
+            FROM round_assignments AS assignment
+            JOIN assignment_phase_history AS history
+              ON history.assignment_id = assignment.assignment_id
+            WHERE assignment.round_id = ?
+            """,
+            (blueprint.round_id,),
+        ).fetchone()
+        assert all(starts_at_ms <= value <= blueprint.now_ms for value in bounds)
+        assert (
+            connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM device_action_plans AS plan
+                JOIN profile_snapshots AS snapshot
+                  ON snapshot.round_id = plan.round_id
+                 AND snapshot.identity_key = plan.identity_key
+                LEFT JOIN action_attempts AS attempt ON attempt.plan_id = plan.plan_id
+                WHERE plan.round_id = ? AND (
+                    snapshot.observed_at_ms > plan.created_at_ms
+                    OR attempt.attempted_at_ms < plan.created_at_ms
+                    OR plan.created_at_ms NOT BETWEEN ? AND ?
+                )
+                """,
+                (blueprint.round_id, starts_at_ms, blueprint.now_ms),
+            ).fetchone()[0]
+            == 0
+        )
+
+
+def test_seed_acquisition_provides_valid_capacity_domain_evidence(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tikpoc.db"
+    blueprint = build_demo_blueprint(
+        now_ms=NOW_MS,
+        scale=DemoScale.test_fixture(),
+    )
+    seed_demo_database(path, blueprint)
+
+    audit = AcquisitionRepository(path).capacity_audit(
+        blueprint.round_id,
+        expected_devices=blueprint.scale.devices,
+    )
+
+    assert len(audit.timings) == blueprint.metrics.confirmed_visits - 1
+    assert audit.false_success_count == 0
+    assert audit.quota_overrun_count == 0
+    assert audit.uncertain_count == 1
+    assert audit.deferred_count == 1
 
 
 def test_seed_acquisition_rolls_back_when_later_seed_phase_fails(
