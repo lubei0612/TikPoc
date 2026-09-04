@@ -960,6 +960,32 @@ def _seed_conversion(
             for index in range(1, inbound_count + 1)
         ),
     )
+    representative_sent = tuple(
+        index for index in (1, 4) if index in ai_states and ai_states[index] == "sent"
+    )
+    created["history_messages"] = _executemany_bounded(
+        connection,
+        """
+        INSERT OR IGNORE INTO web_messages(
+            account_id, conversation_id, message_id, direction,
+            message_type, text, timestamp_ms
+        ) VALUES (?, ?, ?, 'outbound', 'TEXT', ?, ?)
+        """,
+        (
+            (
+                _conversion_account(blueprint, index).account_id,
+                _conversation_key(blueprint, index),
+                f"demo:welcome:{index:04d}",
+                (
+                    "您好，欢迎了解演示商品。"
+                    if detailed[index].language == "zh"
+                    else "Welcome—happy to help with the DEMO catalog."
+                ),
+                max(1, _conversion_timestamp(blueprint, index) - 15_000),
+            )
+            for index in representative_sent
+        ),
+    )
 
     created["ai_reply_plans"] = _executemany_bounded(
         connection,
@@ -1787,6 +1813,7 @@ def _build_blueprint(scale: DemoScale, *, now_ms: int, seed: int) -> DemoBluepri
         accounts=accounts,
         now_ms=now_ms,
         rng=rng,
+        human_required=scale.human_required,
     )
     return DemoBlueprint(
         namespace=DEMO_NAMESPACE,
@@ -1900,21 +1927,27 @@ def _conversion_decisions(
         if index not in human_indexes
         and not (index in detailed and detailed[index].stage == "new")
     ]
+    preferred_sent = [index for index in (1, 4) if index in available]
+    reserved_detailed = {2, 3, *preferred_sent}
     uncertain = ([2] if blueprint.metrics.ai_uncertain and 2 in available else []) + [
-        index for index in available if index not in {2, 3}
+        index for index in available if index not in reserved_detailed
     ][: max(0, blueprint.metrics.ai_uncertain - 1)]
     preferred_superseded = bool(
         blueprint.metrics.ai_superseded and 3 in available and 3 not in uncertain
     )
     superseded = ([3] if preferred_superseded else []) + [
-        index for index in available if index not in uncertain and index != 3
+        index
+        for index in available
+        if index not in uncertain and index not in reserved_detailed
     ][: max(0, blueprint.metrics.ai_superseded - int(preferred_superseded))]
     remaining = [
         index
         for index in available
-        if index not in uncertain and index not in superseded
+        if index not in uncertain
+        and index not in superseded
+        and index not in preferred_sent
     ]
-    sent = remaining[: blueprint.metrics.ai_sent]
+    sent = (preferred_sent + remaining)[: blueprint.metrics.ai_sent]
     ai_states = {
         **dict.fromkeys(sent, "sent"),
         **dict.fromkeys(uncertain, "uncertain"),
@@ -1981,6 +2014,7 @@ def _build_conversations(
     accounts: tuple[DemoAccount, ...],
     now_ms: int,
     rng: random.Random,
+    human_required: int,
 ) -> tuple[DemoConversation, ...]:
     templates = (
         ("zh", "qualified", "请问这个演示商品还有吗？", "有的，您更关心哪个规格？"),
@@ -2025,10 +2059,25 @@ def _build_conversations(
         ),
     )
     conversations: list[DemoConversation] = []
+    human_count = 0
     for index in range(1, count + 1):
         language, stage, inbound_text, outbound_text = templates[
             (index - 1) % len(templates)
         ]
+        if stage == "human_required":
+            human_count += 1
+            if human_count > human_required:
+                stage = "engaged"
+                inbound_text = (
+                    "请介绍一下演示商品。"
+                    if language == "zh"
+                    else "Could you tell me more about the demo product?"
+                )
+                outbound_text = (
+                    "可以，您最关注哪个特点？"
+                    if language == "zh"
+                    else "Sure. Which feature matters most?"
+                )
         account = accounts[rng.randrange(len(accounts))]
         offset_ms = rng.randrange(0, 14 * _DAY_MS)
         conversations.append(

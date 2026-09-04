@@ -690,14 +690,26 @@ def test_seed_conversion_populates_inbox_settings_and_sales(tmp_path: Path) -> N
             WHERE account_id LIKE 'demo-account-%' GROUP BY page_role
             """
         ).fetchall()
+        inconsistent_terminal_rows = connection.execute(
+            """
+            SELECT COUNT(*) FROM web_conversations
+            WHERE account_id LIKE 'demo-account-%' AND (
+                (stage='human_required' AND human_required <> 1)
+                OR (human_required=1 AND stage <> 'human_required')
+                OR (contact_captured_at_ms > 0
+                    AND stage NOT IN ('contact_captured', 'closed'))
+            )
+            """
+        ).fetchone()[0]
 
-    assert message_counts == {"inbound": 8, "outbound": 6}
+    assert message_counts == {"inbound": 8, "outbound": 8}
     assert ai_states == {"sent": 5, "uncertain": 1}
     assert manual_outcomes == 1
     assert human_outcomes == 1
     assert 5 / (5 + manual_outcomes + human_outcomes) == pytest.approx(5 / 7)
     assert leases == 0
     assert dict(health) == {"activity": 3, "messages": 3}
+    assert inconsistent_terminal_rows == 0
     assert first.created["ai_reply_plans"] == 6
     assert first.created["manual_reply_plans"] == 1
     assert second.created_total == 0
@@ -873,6 +885,33 @@ def test_seed_uses_detailed_blueprint_identities_and_plan_semantics(
             WHERE participant_username='demo_lead_010'
             """
         ).fetchone()[0]
+        detailed_depths = dict(
+            connection.execute(
+                """
+                SELECT conversation_id, COUNT(*) FROM web_messages
+                WHERE conversation_id IN (?, ?)
+                GROUP BY conversation_id
+                """,
+                (
+                    blueprint.conversations[0].conversation_key,
+                    blueprint.conversations[3].conversation_key,
+                ),
+            )
+        )
+        sent_examples = connection.execute(
+            """
+            SELECT COUNT(*) FROM browser_reply_plans AS plan
+            WHERE plan.participant_username IN ('demo_lead_001', 'demo_lead_004')
+              AND plan.plan_origin='ai' AND plan.state='sent'
+              AND EXISTS (
+                  SELECT 1 FROM web_messages AS message
+                  WHERE message.account_id=plan.account_id
+                    AND message.conversation_id=plan.conversation_id
+                    AND message.direction='outbound'
+                    AND message.in_reply_to_message_id=plan.inbound_fingerprint
+              )
+            """
+        ).fetchone()[0]
 
     assert plan_states == {
         "demo_lead_002": "uncertain",
@@ -880,6 +919,18 @@ def test_seed_uses_detailed_blueprint_identities_and_plan_semantics(
     }
     assert blueprint.conversations[9].stage == "new"
     assert new_plan_count == 0
+    assert {
+        blueprint.conversations[0].language,
+        blueprint.conversations[3].language,
+    } == {
+        "zh",
+        "en",
+    }
+    assert detailed_depths == {
+        blueprint.conversations[0].conversation_key: 3,
+        blueprint.conversations[3].conversation_key: 3,
+    }
+    assert sent_examples == 2
 
 
 def test_configuration_promotion_failure_restores_database_and_files(
