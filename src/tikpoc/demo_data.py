@@ -22,6 +22,7 @@ DEMO_ROUND_ID = "demo-round-ai-growth-v1"
 DEMO_POOL_IDENTITY_PREFIX = "demo:target:"
 DEMO_ROUND_LABEL = "DEMO · AI 多账号获客转化试点"
 DEMO_SEED = 20260904
+DEMO_BACKUP_PROVENANCE_VERSION = 1
 DEMO_HISTORY_ROUND_IDS = (
     "demo-round-ai-growth-history-01",
     "demo-round-ai-growth-history-02",
@@ -244,6 +245,7 @@ def seed_demo_database(
     staged_files: dict[Path, Path] = {}
     prior_files: dict[Path, bytes | None] = {}
     backup_path: Path | None = None
+    backup_reused = False
 
     if web_accounts_path is not None and runtime_settings_path is not None:
         destinations = (Path(web_accounts_path), Path(runtime_settings_path))
@@ -251,6 +253,13 @@ def seed_demo_database(
             destination: destination.read_bytes() if destination.exists() else None
             for destination in destinations
         }
+        expected_backup_path = _database_backup_path(Path(backup_dir), blueprint.now_ms)
+        try:
+            expected_backup_path.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            backup_reused = True
         backup_path = create_database_backup(
             database_path,
             Path(backup_dir),
@@ -284,6 +293,17 @@ def seed_demo_database(
         for name, count in conversion_created.items():
             created[name] = created.get(name, 0) + count
         summary = _seed_summary(connection, blueprint)
+        if backup_reused and sum(created.values()):
+            raise FileExistsError(
+                "existing demo backup cannot repair an incomplete replay"
+            )
+        if backup_reused and any(
+            prior_files[destination] != staged.read_bytes()
+            for destination, staged in staged_files.items()
+        ):
+            raise FileExistsError(
+                "existing demo backup requires exact replay configuration"
+            )
         for destination, staged in staged_files.items():
             os.replace(staged, destination)
             os.chmod(destination, 0o600)
@@ -322,16 +342,24 @@ def create_database_backup(
     if not stat.S_ISDIR(directory_status.st_mode):
         raise ValueError("demo backup destination must be a directory")
     os.chmod(destination_dir, 0o700)
-    timestamp = datetime.fromtimestamp(int(now_ms) / 1_000, UTC).strftime(
-        "%Y%m%dT%H%M%SZ"
-    )
-    destination = destination_dir / f"tikpoc-before-demo-{timestamp}.db"
+    destination = _database_backup_path(destination_dir, now_ms)
+    provenance_path = destination.with_suffix(".json")
     try:
         destination.lstat()
     except FileNotFoundError:
         pass
     else:
         _validate_existing_database_backup(destination)
+        _validate_backup_provenance(
+            destination,
+            provenance_path,
+            namespace=(
+                replay_blueprint.namespace
+                if replay_blueprint is not None
+                else DEMO_NAMESPACE
+            ),
+            now_ms=now_ms,
+        )
         if replay_blueprint is None or not _is_complete_demo_replay(
             source_path, replay_blueprint
         ):
@@ -345,6 +373,7 @@ def create_database_backup(
         dir=destination_dir,
     )
     temporary = Path(temporary_name)
+    provenance_temporary: Path | None = None
     try:
         os.fchmod(descriptor, 0o600)
         os.close(descriptor)
@@ -364,14 +393,98 @@ def create_database_backup(
                 target.execute("DROP TABLE demo_empty_backup_marker")
         os.chmod(temporary, 0o600)
         _validate_existing_database_backup(temporary)
+        provenance = _backup_provenance(
+            temporary,
+            backup_filename=destination.name,
+            namespace=(
+                replay_blueprint.namespace
+                if replay_blueprint is not None
+                else DEMO_NAMESPACE
+            ),
+            now_ms=now_ms,
+        )
+        provenance_temporary = _stage_bytes(
+            provenance_path,
+            json.dumps(
+                provenance,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8"),
+        )
         os.link(temporary, destination)
+        try:
+            os.link(provenance_temporary, provenance_path)
+        except BaseException:
+            destination.unlink(missing_ok=True)
+            raise
     finally:
         if descriptor >= 0:
             os.close(descriptor)
         temporary.unlink(missing_ok=True)
         for suffix in ("-journal", "-wal", "-shm"):
             Path(f"{temporary}{suffix}").unlink(missing_ok=True)
+        if provenance_temporary is not None:
+            provenance_temporary.unlink(missing_ok=True)
     return destination
+
+
+def _database_backup_path(backup_dir: Path, now_ms: int) -> Path:
+    timestamp = datetime.fromtimestamp(int(now_ms) / 1_000, UTC).strftime(
+        "%Y%m%dT%H%M%SZ"
+    )
+    return Path(backup_dir) / f"tikpoc-before-demo-{timestamp}.db"
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _backup_provenance(
+    path: Path, *, backup_filename: str, namespace: str, now_ms: int
+) -> dict[str, object]:
+    return {
+        "schema_version": DEMO_BACKUP_PROVENANCE_VERSION,
+        "namespace": namespace,
+        "now_ms": int(now_ms),
+        "backup_filename": backup_filename,
+        "sha256": _file_sha256(path),
+    }
+
+
+def _validate_backup_provenance(
+    backup_path: Path,
+    provenance_path: Path,
+    *,
+    namespace: str,
+    now_ms: int,
+) -> None:
+    try:
+        status = provenance_path.lstat()
+    except FileNotFoundError as error:
+        raise FileExistsError("demo backup provenance sidecar is missing") from error
+    if not stat.S_ISREG(status.st_mode):
+        raise FileExistsError("demo backup provenance must be a regular file")
+    if stat.S_IMODE(status.st_mode) != 0o600:
+        raise PermissionError("demo backup provenance has insecure permissions")
+    try:
+        document = json.loads(provenance_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("demo backup provenance is invalid") from error
+    expected = _backup_provenance(
+        backup_path,
+        backup_filename=backup_path.name,
+        namespace=namespace,
+        now_ms=now_ms,
+    )
+    if document != expected:
+        if isinstance(document, dict) and document.get("sha256") != expected["sha256"]:
+            raise ValueError("demo backup provenance digest mismatch")
+        raise ValueError("demo backup provenance metadata mismatch")
 
 
 def _open_database_read_only(path: Path) -> sqlite3.Connection:

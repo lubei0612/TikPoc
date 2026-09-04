@@ -143,6 +143,7 @@ def test_demo_data_seed_replays_and_clear_preserves_backup(
     assert cleared["deleted_total"] > 0
     assert cleared["deleted"]["target_pools"] > 0
     assert backup.exists()
+    assert backup.with_suffix(".json").exists()
     assert not accounts.exists()
     assert json.loads(settings.read_text(encoding="utf-8")).get("accounts") == {}
 

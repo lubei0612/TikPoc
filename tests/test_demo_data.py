@@ -1,3 +1,4 @@
+import hashlib
 import json
 import math
 import sqlite3
@@ -1160,6 +1161,15 @@ def test_database_backup_uses_private_directory_and_unique_temporary_file(
     assert predictable.read_text(encoding="utf-8") == "do not touch"
     assert stat.S_IMODE(backup_dir.stat().st_mode) == 0o700
     assert stat.S_IMODE(backup.stat().st_mode) == 0o600
+    provenance = backup.with_suffix(".json")
+    assert stat.S_IMODE(provenance.stat().st_mode) == 0o600
+    assert json.loads(provenance.read_text(encoding="utf-8")) == {
+        "backup_filename": backup.name,
+        "namespace": "demo-ai-growth-v1",
+        "now_ms": NOW_MS,
+        "schema_version": 1,
+        "sha256": hashlib.sha256(backup.read_bytes()).hexdigest(),
+    }
     with sqlite3.connect(backup) as connection:
         assert (
             connection.execute(
@@ -1230,7 +1240,7 @@ def test_valid_unrelated_backup_collision_aborts_unseeded_source(
     destination.chmod(0o600)
     blueprint = build_demo_blueprint(now_ms=NOW_MS, scale=DemoScale.test_fixture())
 
-    with pytest.raises(FileExistsError, match="idempotent replay"):
+    with pytest.raises(FileExistsError, match="provenance"):
         seed_demo_database(
             path,
             blueprint,
@@ -1262,6 +1272,9 @@ def test_complete_idempotent_replay_preserves_backup_bytes(tmp_path: Path) -> No
     assert first.backup_path is not None
     backup_bytes = first.backup_path.read_bytes()
     backup_status = first.backup_path.stat()
+    provenance = first.backup_path.with_suffix(".json")
+    provenance_bytes = provenance.read_bytes()
+    provenance_status = provenance.stat()
 
     replay = seed_demo_database(path, blueprint, **seed_arguments)
 
@@ -1270,6 +1283,146 @@ def test_complete_idempotent_replay_preserves_backup_bytes(tmp_path: Path) -> No
     assert replay.backup_path.read_bytes() == backup_bytes
     assert replay.backup_path.stat().st_ino == backup_status.st_ino
     assert replay.backup_path.stat().st_mtime_ns == backup_status.st_mtime_ns
+    assert provenance.read_bytes() == provenance_bytes
+    assert provenance.stat().st_ino == provenance_status.st_ino
+    assert stat.S_IMODE(provenance.stat().st_mode) == 0o600
+
+
+def test_replay_rejects_backup_replaced_with_unrelated_valid_sqlite(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tikpoc.db"
+    backup_dir = tmp_path / "backups"
+    blueprint = build_demo_blueprint(now_ms=NOW_MS, scale=DemoScale.test_fixture())
+    seed_arguments = {
+        "web_accounts_path": tmp_path / "web-accounts.yaml",
+        "runtime_settings_path": tmp_path / "operator-settings.json",
+        "backup_dir": backup_dir,
+    }
+    first = seed_demo_database(path, blueprint, **seed_arguments)
+    assert first.backup_path is not None
+    first.backup_path.unlink()
+    with sqlite3.connect(first.backup_path) as connection:
+        connection.execute("CREATE TABLE unrelated(value TEXT NOT NULL)")
+    first.backup_path.chmod(0o600)
+
+    with pytest.raises(ValueError, match="digest"):
+        seed_demo_database(path, blueprint, **seed_arguments)
+
+
+@pytest.mark.parametrize(
+    ("entity", "delete_sql", "count_sql"),
+    [
+        (
+            "health",
+            (
+                "DELETE FROM fleet_device_health WHERE device_id=(SELECT MIN(device_id) "
+                "FROM fleet_device_health WHERE device_id LIKE 'demo-device-%')"
+            ),
+            (
+                "SELECT COUNT(*) FROM fleet_device_health "
+                "WHERE device_id LIKE 'demo-device-%'"
+            ),
+        ),
+        (
+            "message",
+            (
+                "DELETE FROM web_messages WHERE id=(SELECT MIN(id) FROM web_messages "
+                "WHERE account_id LIKE 'demo-account-%')"
+            ),
+            "SELECT COUNT(*) FROM web_messages WHERE account_id LIKE 'demo-account-%'",
+        ),
+        (
+            "manual",
+            (
+                "DELETE FROM browser_reply_plans WHERE id=(SELECT MIN(id) "
+                "FROM browser_reply_plans WHERE account_id LIKE 'demo-account-%' "
+                "AND plan_origin='manual')"
+            ),
+            (
+                "SELECT COUNT(*) FROM browser_reply_plans "
+                "WHERE account_id LIKE 'demo-account-%' AND plan_origin='manual'"
+            ),
+        ),
+        (
+            "funnel",
+            (
+                "DELETE FROM lead_funnel_events WHERE event_id=(SELECT MIN(event_id) "
+                "FROM lead_funnel_events WHERE account_id LIKE 'demo-account-%')"
+            ),
+            (
+                "SELECT COUNT(*) FROM lead_funnel_events "
+                "WHERE account_id LIKE 'demo-account-%'"
+            ),
+        ),
+        (
+            "sale",
+            (
+                "DELETE FROM lead_sales WHERE sale_id=(SELECT MIN(sale_id) "
+                "FROM lead_sales WHERE account_id LIKE 'demo-account-%')"
+            ),
+            "SELECT COUNT(*) FROM lead_sales WHERE account_id LIKE 'demo-account-%'",
+        ),
+        (
+            "history",
+            (
+                "DELETE FROM assignment_phase_history WHERE history_id=("
+                "SELECT MIN(history_id) FROM assignment_phase_history AS history "
+                "JOIN round_assignments AS assignment "
+                "ON assignment.assignment_id=history.assignment_id "
+                "WHERE assignment.round_id='demo-round-ai-growth-v1')"
+            ),
+            (
+                "SELECT COUNT(*) FROM assignment_phase_history AS history "
+                "JOIN round_assignments AS assignment "
+                "ON assignment.assignment_id=history.assignment_id "
+                "WHERE assignment.round_id='demo-round-ai-growth-v1'"
+            ),
+        ),
+    ],
+)
+def test_replay_rejects_missing_entity_without_repair(
+    tmp_path: Path, entity: str, delete_sql: str, count_sql: str
+) -> None:
+    del entity
+    path = tmp_path / "tikpoc.db"
+    blueprint = build_demo_blueprint(now_ms=NOW_MS, scale=DemoScale.test_fixture())
+    seed_arguments = {
+        "web_accounts_path": tmp_path / "web-accounts.yaml",
+        "runtime_settings_path": tmp_path / "operator-settings.json",
+        "backup_dir": tmp_path / "backups",
+    }
+    seed_demo_database(path, blueprint, **seed_arguments)
+    with sqlite3.connect(path) as connection:
+        connection.execute(delete_sql)
+        expected_count = connection.execute(count_sql).fetchone()[0]
+
+    with pytest.raises(FileExistsError, match="incomplete replay"):
+        seed_demo_database(path, blueprint, **seed_arguments)
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(count_sql).fetchone()[0] == expected_count
+
+
+def test_replay_rejects_configuration_mismatch_without_repair(tmp_path: Path) -> None:
+    path = tmp_path / "tikpoc.db"
+    settings = tmp_path / "operator-settings.json"
+    blueprint = build_demo_blueprint(now_ms=NOW_MS, scale=DemoScale.test_fixture())
+    seed_arguments = {
+        "web_accounts_path": tmp_path / "web-accounts.yaml",
+        "runtime_settings_path": settings,
+        "backup_dir": tmp_path / "backups",
+    }
+    seed_demo_database(path, blueprint, **seed_arguments)
+    changed = json.loads(settings.read_text(encoding="utf-8"))
+    changed["accounts"]["demo-account-01"]["brand_name"] = "changed"
+    settings.write_text(json.dumps(changed), encoding="utf-8")
+    changed_bytes = settings.read_bytes()
+
+    with pytest.raises(FileExistsError, match="configuration"):
+        seed_demo_database(path, blueprint, **seed_arguments)
+
+    assert settings.read_bytes() == changed_bytes
 
 
 def test_existing_backup_rejects_incomplete_demo_source(tmp_path: Path) -> None:
