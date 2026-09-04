@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import random
 import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
@@ -7,6 +8,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType
+
+import yaml
 
 from .acquisition_db import AcquisitionRepository
 from .db import Database
@@ -51,6 +54,8 @@ class DemoScale:
     ai_uncertain: int
     ai_superseded: int
     conversations: int
+    manual_handled: int
+    pending_inbound: int
 
     @property
     def assignments(self) -> int:
@@ -90,6 +95,8 @@ class DemoScale:
             ai_uncertain=5,
             ai_superseded=12,
             conversations=20,
+            manual_handled=98,
+            pending_inbound=29,
         )
 
     @classmethod
@@ -114,6 +121,8 @@ class DemoScale:
             ai_uncertain=1,
             ai_superseded=0,
             conversations=8,
+            manual_handled=2,
+            pending_inbound=0,
         )
 
 
@@ -212,11 +221,48 @@ def build_demo_blueprint(
     return _build_blueprint(selected, now_ms=now_ms, seed=DEMO_SEED)
 
 
-def seed_demo_database(path: Path, blueprint: DemoBlueprint) -> DemoSeedResult:
+def seed_demo_database(
+    path: Path,
+    blueprint: DemoBlueprint,
+    *,
+    web_accounts_path: Path | None = None,
+    runtime_settings_path: Path | None = None,
+    backup_dir: Path | None = None,
+) -> DemoSeedResult:
     """Persist one deterministic demo dataset without activating any worker."""
     database_path = Path(path)
+    configuration_paths = (web_accounts_path, runtime_settings_path)
+    if any(item is not None for item in configuration_paths):
+        if not all(item is not None for item in configuration_paths):
+            raise ValueError("both demo configuration paths are required")
+        if backup_dir is None:
+            raise ValueError("backup directory is required for configuration output")
+
+    staged_files: dict[Path, Path] = {}
+    prior_files: dict[Path, bytes | None] = {}
+    backup_path: Path | None = None
     AcquisitionRepository(database_path).migrate()
     Database(database_path).migrate()
+
+    if web_accounts_path is not None and runtime_settings_path is not None:
+        destinations = (Path(web_accounts_path), Path(runtime_settings_path))
+        prior_files = {
+            destination: destination.read_bytes() if destination.exists() else None
+            for destination in destinations
+        }
+        staged_files = _stage_configuration_files(
+            blueprint,
+            web_accounts_path=destinations[0],
+            runtime_settings_path=destinations[1],
+        )
+        try:
+            backup_path = create_database_backup(
+                database_path, Path(backup_dir), blueprint.now_ms
+            )
+        except BaseException:
+            for staged in staged_files.values():
+                staged.unlink(missing_ok=True)
+            raise
 
     connection = sqlite3.connect(database_path, timeout=30)
     try:
@@ -230,12 +276,383 @@ def seed_demo_database(path: Path, blueprint: DemoBlueprint) -> DemoSeedResult:
             created[name] = created.get(name, 0) + count
         summary = _seed_summary(connection, blueprint)
         connection.commit()
+        for destination, staged in staged_files.items():
+            os.replace(staged, destination)
+    except BaseException:
+        connection.rollback()
+        connection.close()
+        if backup_path is not None:
+            _restore_database_backup(database_path, backup_path)
+        for destination, previous in prior_files.items():
+            _restore_file(destination, previous)
+        raise
+    finally:
+        try:
+            connection.close()
+        finally:
+            for staged in staged_files.values():
+                staged.unlink(missing_ok=True)
+    return DemoSeedResult(created=created, summary=summary)
+
+
+def create_database_backup(path: Path, backup_dir: Path, now_ms: int) -> Path:
+    """Create a consistent SQLite backup before compensated demo seeding."""
+    source_path = Path(path)
+    destination_dir = Path(backup_dir)
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    destination = destination_dir / f"{source_path.name}.{int(now_ms)}.bak"
+    temporary = destination.with_name(f".{destination.name}.tmp")
+    temporary.unlink(missing_ok=True)
+    with sqlite3.connect(source_path) as source, sqlite3.connect(temporary) as target:
+        source.backup(target)
+    os.replace(temporary, destination)
+    return destination
+
+
+def clear_demo_database(
+    path: Path,
+    *,
+    web_accounts_path: Path | None = None,
+    runtime_settings_path: Path | None = None,
+) -> DemoSeedResult:
+    """Remove only entities owned by the fixed synthetic namespace."""
+    database_path = Path(path)
+    AcquisitionRepository(database_path).migrate()
+    Database(database_path).migrate()
+    connection = sqlite3.connect(database_path, timeout=30)
+    try:
+        connection.execute("PRAGMA foreign_keys=ON")
+        connection.execute("BEGIN IMMEDIATE")
+        deleted: dict[str, int] = {}
+        statements = (
+            (
+                "action_attempts",
+                (
+                    "DELETE FROM action_attempts WHERE plan_id IN "
+                    "(SELECT plan_id FROM device_action_plans "
+                    "WHERE round_id IN ('demo-round-ai-growth-v1', 'demo-round-ai-growth-history-01', 'demo-round-ai-growth-history-02'))"
+                ),
+            ),
+            (
+                "assignment_phase_history",
+                (
+                    "DELETE FROM assignment_phase_history WHERE assignment_id IN "
+                    "(SELECT assignment_id FROM round_assignments "
+                    "WHERE round_id IN ('demo-round-ai-growth-v1', 'demo-round-ai-growth-history-01', 'demo-round-ai-growth-history-02'))"
+                ),
+            ),
+            (
+                "assignment_stage_timings",
+                (
+                    "DELETE FROM assignment_stage_timings WHERE assignment_id IN "
+                    "(SELECT assignment_id FROM round_assignments "
+                    "WHERE round_id IN ('demo-round-ai-growth-v1', 'demo-round-ai-growth-history-01', 'demo-round-ai-growth-history-02'))"
+                ),
+            ),
+            (
+                "assignment_command_metrics",
+                (
+                    "DELETE FROM assignment_command_metrics WHERE assignment_id IN "
+                    "(SELECT assignment_id FROM round_assignments "
+                    "WHERE round_id IN ('demo-round-ai-growth-v1', 'demo-round-ai-growth-history-01', 'demo-round-ai-growth-history-02'))"
+                ),
+            ),
+            (
+                "acquisition_quota_windows",
+                "DELETE FROM acquisition_quota_windows WHERE device_id LIKE 'demo-device-%'",
+            ),
+            (
+                "device_action_plans",
+                "DELETE FROM device_action_plans WHERE round_id IN ('demo-round-ai-growth-v1', 'demo-round-ai-growth-history-01', 'demo-round-ai-growth-history-02')",
+            ),
+            (
+                "profile_snapshot_leases",
+                "DELETE FROM profile_snapshot_leases WHERE round_id IN ('demo-round-ai-growth-v1', 'demo-round-ai-growth-history-01', 'demo-round-ai-growth-history-02')",
+            ),
+            (
+                "profile_snapshots",
+                "DELETE FROM profile_snapshots WHERE round_id IN ('demo-round-ai-growth-v1', 'demo-round-ai-growth-history-01', 'demo-round-ai-growth-history-02')",
+            ),
+            (
+                "round_assignments",
+                "DELETE FROM round_assignments WHERE round_id IN ('demo-round-ai-growth-v1', 'demo-round-ai-growth-history-01', 'demo-round-ai-growth-history-02')",
+            ),
+            (
+                "round_device_seeds",
+                "DELETE FROM round_device_seeds WHERE round_id IN ('demo-round-ai-growth-v1', 'demo-round-ai-growth-history-01', 'demo-round-ai-growth-history-02')",
+            ),
+            (
+                "exposure_rounds",
+                "DELETE FROM exposure_rounds WHERE round_id IN ('demo-round-ai-growth-v1', 'demo-round-ai-growth-history-01', 'demo-round-ai-growth-history-02')",
+            ),
+            (
+                "pool_targets",
+                (
+                    "DELETE FROM pool_targets "
+                    "WHERE pool_id IN ('demo-pool-ai-growth-v1', 'demo-pool-ai-growth-history-01', 'demo-pool-ai-growth-history-02') "
+                    "OR identity_key LIKE 'demo:target:%'"
+                ),
+            ),
+            (
+                "target_pools",
+                "DELETE FROM target_pools WHERE pool_id IN ('demo-pool-ai-growth-v1', 'demo-pool-ai-growth-history-01', 'demo-pool-ai-growth-history-02')",
+            ),
+            (
+                "fleet_device_health",
+                "DELETE FROM fleet_device_health WHERE device_id LIKE 'demo-device-%'",
+            ),
+            (
+                "operator_control_states",
+                "DELETE FROM operator_control_states WHERE scope_id LIKE 'demo-device-%'",
+            ),
+            (
+                "operator_lead_commands",
+                "DELETE FROM operator_lead_commands WHERE account_id LIKE 'demo-account-%'",
+            ),
+            (
+                "browser_action_leases",
+                "DELETE FROM browser_action_leases WHERE account_id LIKE 'demo-account-%'",
+            ),
+            (
+                "browser_action_circuits",
+                "DELETE FROM browser_action_circuits WHERE account_id LIKE 'demo-account-%'",
+            ),
+            (
+                "browser_contact_suppressions",
+                "DELETE FROM browser_contact_suppressions WHERE account_id LIKE 'demo-account-%'",
+            ),
+            (
+                "browser_reply_plans",
+                (
+                    "DELETE FROM browser_reply_plans "
+                    "WHERE account_id LIKE 'demo-account-%' "
+                    "OR inbound_fingerprint LIKE 'demo:%'"
+                ),
+            ),
+            (
+                "browser_welcome_plans",
+                "DELETE FROM browser_welcome_plans WHERE account_id LIKE 'demo-account-%'",
+            ),
+            (
+                "web_messages",
+                (
+                    "DELETE FROM web_messages "
+                    "WHERE account_id LIKE 'demo-account-%' "
+                    "OR message_id LIKE 'demo:%'"
+                ),
+            ),
+            (
+                "lead_funnel_events",
+                (
+                    "DELETE FROM lead_funnel_events "
+                    "WHERE account_id LIKE 'demo-account-%' "
+                    "OR participant_username GLOB 'demo_lead_*' "
+                    "OR source_key LIKE 'demo:%'"
+                ),
+            ),
+            (
+                "lead_sales",
+                (
+                    "DELETE FROM lead_sales "
+                    "WHERE account_id LIKE 'demo-account-%' "
+                    "OR participant_username GLOB 'demo_lead_*'"
+                ),
+            ),
+            (
+                "browser_account_health",
+                "DELETE FROM browser_account_health WHERE account_id LIKE 'demo-account-%'",
+            ),
+            (
+                "web_account_settings",
+                "DELETE FROM web_account_settings WHERE account_id LIKE 'demo-account-%'",
+            ),
+            (
+                "web_events",
+                (
+                    "DELETE FROM web_events "
+                    "WHERE account_id LIKE 'demo-account-%' "
+                    "OR dedup_key LIKE 'demo:%'"
+                ),
+            ),
+            (
+                "web_conversations",
+                (
+                    "DELETE FROM web_conversations "
+                    "WHERE account_id LIKE 'demo-account-%' "
+                    "OR conversation_id LIKE 'demo:%' "
+                    "OR participant_username GLOB 'demo_lead_*'"
+                ),
+            ),
+        )
+        for name, sql in statements:
+            deleted[name] = _execute_counted(connection, sql, ())
+        connection.commit()
     except BaseException:
         connection.rollback()
         raise
     finally:
         connection.close()
-    return DemoSeedResult(created=created, summary=summary)
+
+    if web_accounts_path is not None:
+        _remove_demo_web_accounts(Path(web_accounts_path))
+    if runtime_settings_path is not None:
+        _remove_demo_runtime_accounts(Path(runtime_settings_path))
+    return DemoSeedResult(created=deleted, summary={})
+
+
+def _stage_configuration_files(
+    blueprint: DemoBlueprint,
+    *,
+    web_accounts_path: Path,
+    runtime_settings_path: Path,
+) -> dict[Path, Path]:
+    accounts_document = {
+        "accounts": [
+            {
+                "account_id": account.account_id,
+                "device_id": account.device_id,
+                "mode": "browser",
+                "expected_tiktok_username": account.username,
+                "browser_profile_label": account.profile_label,
+                "private_channel_hint": account.private_channel_hint,
+                "offer_context": "DEMO catalog: synthetic portfolio product context.",
+                "faq_file": "",
+                "faq_context": "DEMO FAQ: availability and delivery are illustrative.",
+                "reply_language": "auto",
+                "max_auto_replies": 12,
+                "invite_after_meaningful_turns": 2,
+                "fallback_acknowledgement": "Thanks for your DEMO message.",
+                "browser_followback_enabled": False,
+                "browser_dm_enabled": False,
+                "enabled": False,
+            }
+            for account in blueprint.accounts
+        ]
+    }
+    existing_settings: dict[str, object] = {}
+    if runtime_settings_path.exists():
+        loaded = json.loads(runtime_settings_path.read_text(encoding="utf-8"))
+        if not isinstance(loaded, dict):
+            raise ValueError("runtime settings must be an object")
+        existing_settings = loaded
+    existing_accounts = existing_settings.get("accounts", {})
+    if not isinstance(existing_accounts, dict):
+        raise TypeError("runtime account settings must be an object")
+    runtime_accounts = {
+        key: value
+        for key, value in existing_accounts.items()
+        if not str(key).startswith("demo-account-")
+    }
+    runtime_accounts.update(
+        {
+            account.account_id: {
+                "whatsapp": "",
+                "telegram": account.private_channel_hint,
+                "offer_context": "DEMO catalog: synthetic portfolio product context.",
+                "faq_context": "DEMO FAQ: illustrative availability and delivery facts.",
+                "reply_tone": "Concise, helpful, bilingual demo tone.",
+                "brand_name": "TikPoc DEMO",
+                "welcome_after_followback": False,
+                "welcome_language": "English",
+            }
+            for account in blueprint.accounts
+        }
+    )
+    settings_document = dict(existing_settings)
+    settings_document.setdefault(
+        "provider", {"base_url": "", "api_key": "", "model": ""}
+    )
+    settings_document["accounts"] = runtime_accounts
+    staged: dict[Path, Path] = {}
+    try:
+        staged[web_accounts_path] = _stage_bytes(
+            web_accounts_path,
+            yaml.safe_dump(
+                accounts_document,
+                allow_unicode=True,
+                sort_keys=False,
+            ).encode("utf-8"),
+        )
+        staged[runtime_settings_path] = _stage_bytes(
+            runtime_settings_path,
+            json.dumps(
+                settings_document,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8"),
+        )
+    except BaseException:
+        for temporary in staged.values():
+            temporary.unlink(missing_ok=True)
+        raise
+    return staged
+
+
+def _stage_bytes(destination: Path, content: bytes) -> Path:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.name}.demo.tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(content)
+        stream.flush()
+        os.fsync(stream.fileno())
+    return temporary
+
+
+def _restore_database_backup(path: Path, backup_path: Path) -> None:
+    temporary = path.with_name(f".{path.name}.restore.tmp")
+    with sqlite3.connect(backup_path) as source, sqlite3.connect(temporary) as target:
+        source.backup(target)
+    path.with_name(f"{path.name}-wal").unlink(missing_ok=True)
+    path.with_name(f"{path.name}-shm").unlink(missing_ok=True)
+    os.replace(temporary, path)
+
+
+def _restore_file(path: Path, content: bytes | None) -> None:
+    if content is None:
+        path.unlink(missing_ok=True)
+        return
+    staged = _stage_bytes(path, content)
+    os.replace(staged, path)
+
+
+def _remove_demo_web_accounts(path: Path) -> None:
+    if not path.exists():
+        return
+    document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    accounts = document.get("accounts") if isinstance(document, dict) else None
+    if (
+        isinstance(accounts, list)
+        and accounts
+        and all(
+            isinstance(item, dict)
+            and str(item.get("account_id", "")).startswith("demo-account-")
+            for item in accounts
+        )
+    ):
+        path.unlink()
+
+
+def _remove_demo_runtime_accounts(path: Path) -> None:
+    if not path.exists():
+        return
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(document, dict):
+        raise TypeError("runtime settings must be an object")
+    accounts = document.get("accounts", {})
+    if not isinstance(accounts, dict):
+        raise TypeError("runtime account settings must be an object")
+    document["accounts"] = {
+        key: value
+        for key, value in accounts.items()
+        if not str(key).startswith("demo-account-")
+    }
+    staged = _stage_bytes(
+        path,
+        json.dumps(document, ensure_ascii=True, sort_keys=True).encode("utf-8"),
+    )
+    os.replace(staged, path)
 
 
 def _seed_summary(
@@ -465,9 +882,283 @@ def _seed_acquisition(
 def _seed_conversion(
     connection: sqlite3.Connection, blueprint: DemoBlueprint
 ) -> dict[str, int]:
-    """Task 3 extension point kept inside the acquisition transaction."""
-    del connection, blueprint
-    return {}
+    """Seed domain-shaped browser and funnel rows in the active transaction."""
+    created: dict[str, int] = {}
+    detailed = {
+        index: item for index, item in enumerate(blueprint.conversations, start=1)
+    }
+    inbound_count = blueprint.metrics.inbound
+    follower_count = blueprint.metrics.followers
+
+    created["web_conversations"] = _executemany_bounded(
+        connection,
+        """
+        INSERT OR IGNORE INTO web_conversations(
+            account_id, conversation_id, participant_id, participant_username,
+            is_follower, stage, meaningful_turns, auto_reply_count,
+            last_invited_at_ms, contact_captured_at_ms, human_required
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            (
+                _conversion_account(blueprint, index).account_id,
+                _conversation_key(index),
+                f"demo:participant:{index:04d}",
+                _lead_id(index),
+                int(index <= follower_count),
+                _conversation_stage(blueprint, index, detailed),
+                int(index <= blueprint.metrics.engaged),
+                int(index <= blueprint.metrics.ai_sent),
+                (
+                    _conversion_timestamp(blueprint, index)
+                    if index <= blueprint.metrics.invited
+                    else 0
+                ),
+                (
+                    _conversion_timestamp(blueprint, index)
+                    if index <= blueprint.metrics.contact_captured
+                    else 0
+                ),
+                int(index <= blueprint.metrics.human_required),
+            )
+            for index in range(1, max(inbound_count, follower_count) + 1)
+        ),
+    )
+    created["inbound_messages"] = _executemany_bounded(
+        connection,
+        """
+        INSERT OR IGNORE INTO web_messages(
+            account_id, conversation_id, message_id, direction,
+            message_type, text, timestamp_ms
+        ) VALUES (?, ?, ?, 'inbound', 'TEXT', ?, ?)
+        """,
+        (
+            (
+                _conversion_account(blueprint, index).account_id,
+                _conversation_key(index),
+                _inbound_fingerprint(index),
+                (
+                    detailed[index].inbound_text
+                    if index in detailed
+                    else _aggregate_inbound_text(index)
+                ),
+                _conversion_timestamp(blueprint, index),
+            )
+            for index in range(1, inbound_count + 1)
+        ),
+    )
+
+    created["ai_reply_plans"] = _executemany_bounded(
+        connection,
+        """
+        INSERT OR IGNORE INTO browser_reply_plans(
+            account_id, conversation_id, inbound_fingerprint,
+            participant_username, inbound_text, inbound_timestamp_ms,
+            reply_text, stage, state, plan_origin,
+            source_inbound_fingerprint, invitation_included,
+            invitation_evidence_known, created_at_ms, sent_at_ms
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ai', ?, ?, 1, ?, ?)
+        """,
+        (
+            (
+                _conversion_account(blueprint, index).account_id,
+                _conversation_key(index),
+                _inbound_fingerprint(index),
+                _lead_id(index),
+                (
+                    detailed[index].inbound_text
+                    if index in detailed
+                    else _aggregate_inbound_text(index)
+                ),
+                _conversion_timestamp(blueprint, index),
+                (
+                    detailed[index].outbound_text
+                    if index in detailed
+                    else _aggregate_outbound_text(index)
+                ),
+                _conversation_stage(blueprint, index, detailed),
+                _ai_plan_state(blueprint, index),
+                _inbound_fingerprint(index),
+                int(index <= blueprint.metrics.invited),
+                _conversion_timestamp(blueprint, index) + 100,
+                (
+                    _conversion_timestamp(blueprint, index) + 500
+                    if index <= blueprint.metrics.ai_sent
+                    else 0
+                ),
+            )
+            for index in range(1, blueprint.metrics.ai_plans + 1)
+        ),
+    )
+    manual_start = blueprint.metrics.ai_plans + 1
+    manual_stop = manual_start + blueprint.scale.manual_handled
+    created["manual_reply_plans"] = _executemany_bounded(
+        connection,
+        """
+        INSERT OR IGNORE INTO browser_reply_plans(
+            account_id, conversation_id, inbound_fingerprint,
+            participant_username, inbound_text, inbound_timestamp_ms,
+            reply_text, stage, state, plan_origin,
+            source_inbound_fingerprint, invitation_evidence_known,
+            created_at_ms, sent_at_ms
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'sent', 'manual', ?, 1, ?, ?)
+        """,
+        (
+            (
+                _conversion_account(blueprint, index).account_id,
+                _conversation_key(index),
+                f"demo:manual-plan:{index:04d}",
+                _lead_id(index),
+                _aggregate_inbound_text(index),
+                _conversion_timestamp(blueprint, index),
+                "DEMO manual reply / 演示人工回复。",
+                _conversation_stage(blueprint, index, detailed),
+                _inbound_fingerprint(index),
+                _conversion_timestamp(blueprint, index) + 200,
+                _conversion_timestamp(blueprint, index) + 600,
+            )
+            for index in range(manual_start, manual_stop)
+        ),
+    )
+    created["outbound_messages"] = _executemany_bounded(
+        connection,
+        """
+        INSERT OR IGNORE INTO web_messages(
+            account_id, conversation_id, message_id, direction, message_type,
+            text, timestamp_ms, in_reply_to_message_id
+        ) VALUES (?, ?, ?, 'outbound', 'TEXT', ?, ?, ?)
+        """,
+        (
+            (
+                _conversion_account(blueprint, index).account_id,
+                _conversation_key(index),
+                f"demo:outbound:{index:04d}",
+                (
+                    detailed[index].outbound_text
+                    if index in detailed
+                    else _aggregate_outbound_text(index)
+                ),
+                _conversion_timestamp(blueprint, index) + 500,
+                _inbound_fingerprint(index),
+            )
+            for index in range(1, blueprint.metrics.ai_sent + 1)
+        ),
+    )
+    created["outbound_messages"] += _executemany_bounded(
+        connection,
+        """
+        INSERT OR IGNORE INTO web_messages(
+            account_id, conversation_id, message_id, direction, message_type,
+            text, timestamp_ms, in_reply_to_message_id
+        ) VALUES (?, ?, ?, 'outbound', 'TEXT', ?, ?, ?)
+        """,
+        (
+            (
+                _conversion_account(blueprint, index).account_id,
+                _conversation_key(index),
+                f"demo:manual-outbound:{index:04d}",
+                "DEMO manual reply / 演示人工回复。",
+                _conversion_timestamp(blueprint, index) + 600,
+                _inbound_fingerprint(index),
+            )
+            for index in range(manual_start, manual_stop)
+        ),
+    )
+
+    for stage in (
+        "dm_inbound",
+        "engaged",
+        "qualified",
+        "invited",
+        "contact_captured",
+        "human_required",
+    ):
+        total = int(
+            blueprint.metrics.inbound
+            if stage == "dm_inbound"
+            else getattr(blueprint.metrics, stage)
+        )
+        created[f"funnel_{stage}"] = _executemany_bounded(
+            connection,
+            """
+            INSERT OR IGNORE INTO lead_funnel_events(
+                account_id, participant_username, conversation_id,
+                stage, source_key, occurred_at_ms
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                (
+                    _conversion_account(blueprint, index).account_id,
+                    _lead_id(index),
+                    _conversation_key(index),
+                    stage,
+                    f"demo:funnel:{stage}:{index:04d}",
+                    _conversion_timestamp(blueprint, index),
+                )
+                for index in range(1, total + 1)
+            ),
+        )
+
+    created["sales"] = _executemany_bounded(
+        connection,
+        """
+        INSERT INTO lead_sales(
+            account_id, participant_username, amount_minor,
+            currency, status, occurred_at_ms
+        )
+        SELECT ?, ?, ?, 'USD', 'confirmed', ?
+        WHERE NOT EXISTS (
+            SELECT 1 FROM lead_sales
+            WHERE account_id=? AND participant_username=?
+              AND status='confirmed' AND occurred_at_ms=?
+        )
+        """,
+        (
+            (
+                _conversion_account(blueprint, index).account_id,
+                _lead_id(index),
+                12_900 + index * 100,
+                _conversion_timestamp(blueprint, index) + 900,
+                _conversion_account(blueprint, index).account_id,
+                _lead_id(index),
+                _conversion_timestamp(blueprint, index) + 900,
+            )
+            for index in range(1, blueprint.metrics.sales + 1)
+        ),
+    )
+    created["browser_health"] = _executemany_bounded(
+        connection,
+        """
+        INSERT OR IGNORE INTO browser_account_health(
+            account_id, page_role, device_id, status, observed_at_ms, detail,
+            observed_username, last_scan_at_ms, last_success_at_ms, scan_state
+        ) VALUES (?, ?, ?, 'ready', ?, ?, ?, ?, ?, 'idle')
+        """,
+        (
+            (
+                account.account_id,
+                page_role,
+                account.device_id,
+                blueprint.now_ms,
+                "DEMO synthetic browser observer; execution disabled",
+                account.username,
+                blueprint.now_ms,
+                blueprint.now_ms,
+            )
+            for account in blueprint.accounts
+            for page_role in ("activity", "messages")
+        ),
+    )
+    created["web_account_settings"] = _executemany_bounded(
+        connection,
+        """
+        INSERT OR IGNORE INTO web_account_settings(
+            account_id, ai_enabled, followback_enabled
+        ) VALUES (?, 0, 0)
+        """,
+        ((account.account_id,) for account in blueprint.accounts),
+    )
+    return created
 
 
 def _insert_phase_history(
@@ -1109,6 +1800,69 @@ def _build_account(index: int) -> DemoAccount:
     )
 
 
+def _conversion_account(blueprint: DemoBlueprint, index: int) -> DemoAccount:
+    return blueprint.accounts[(index - 1) % len(blueprint.accounts)]
+
+
+def _conversation_key(index: int) -> str:
+    return f"demo:conversation:{index:04d}"
+
+
+def _lead_id(index: int) -> str:
+    return f"demo_lead_{index:04d}"
+
+
+def _inbound_fingerprint(index: int) -> str:
+    return f"demo:inbound:{index:04d}"
+
+
+def _conversion_timestamp(blueprint: DemoBlueprint, index: int) -> int:
+    window_ms = 14 * _DAY_MS
+    return max(1, blueprint.now_ms - window_ms + (index * 7_919) % window_ms)
+
+
+def _aggregate_inbound_text(index: int) -> str:
+    if index % 2:
+        return "请介绍演示商品的规格和交付方式。"
+    return "Could you share the DEMO product options and delivery details?"
+
+
+def _aggregate_outbound_text(index: int) -> str:
+    if index % 2:
+        return "可以，这是合成演示数据；您更关心哪个规格？"
+    return "Sure—this is synthetic DEMO data. Which option matters most?"
+
+
+def _conversation_stage(
+    blueprint: DemoBlueprint,
+    index: int,
+    detailed: Mapping[int, DemoConversation],
+) -> str:
+    if index in detailed:
+        return detailed[index].stage
+    if index <= blueprint.metrics.human_required:
+        return "human_required"
+    if index <= blueprint.metrics.sales:
+        return "closed"
+    if index <= blueprint.metrics.contact_captured:
+        return "contact_captured"
+    if index <= blueprint.metrics.invited:
+        return "invited"
+    if index <= blueprint.metrics.qualified:
+        return "qualified"
+    if index <= blueprint.metrics.engaged:
+        return "engaged"
+    return "new"
+
+
+def _ai_plan_state(blueprint: DemoBlueprint, index: int) -> str:
+    if index <= blueprint.metrics.ai_sent:
+        return "sent"
+    if index <= blueprint.metrics.ai_sent + blueprint.metrics.ai_uncertain:
+        return "uncertain"
+    return "superseded"
+
+
 def _build_timeline(
     metrics: DemoMetrics,
     *,
@@ -1188,6 +1942,18 @@ def _build_conversations(
             "A demo specialist will review this conversation.",
         ),
         ("zh", "closed", "已确认演示订单。", "感谢您，演示成交已记录。"),
+        (
+            "zh",
+            "human_required",
+            "我想取消演示订单，请安排人工处理。",
+            "已标记为演示人工接管。",
+        ),
+        (
+            "en",
+            "human_required",
+            "I have a complaint about the demo order.",
+            "A demo specialist will review this conversation.",
+        ),
     )
     conversations: list[DemoConversation] = []
     for index in range(1, count + 1):

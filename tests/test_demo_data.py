@@ -1,3 +1,4 @@
+import json
 import math
 import sqlite3
 from collections import Counter
@@ -9,11 +10,15 @@ import pytest
 
 from tikpoc import demo_data
 from tikpoc.acquisition_db import AcquisitionRepository
+from tikpoc.db import Database
 from tikpoc.demo_data import (
     DemoScale,
     build_demo_blueprint,
+    clear_demo_database,
     seed_demo_database,
 )
+from tikpoc.runtime_settings import RuntimeSettingsStore
+from tikpoc.web_accounts import WebAccountRegistry
 
 NOW_MS = 1_788_499_200_000
 
@@ -488,8 +493,350 @@ def test_portfolio_seed_persists_exact_interaction_and_trace_counts(
             """,
             (blueprint.round_id, blueprint.round_id),
         ).fetchone()
+        ai_states = dict(
+            connection.execute(
+                """
+                SELECT state, COUNT(*) FROM browser_reply_plans
+                WHERE account_id LIKE 'demo-account-%' AND plan_origin='ai'
+                GROUP BY state
+                """
+            )
+        )
+        manual_handled = connection.execute(
+            """
+            SELECT COUNT(*) FROM browser_reply_plans
+            WHERE account_id LIKE 'demo-account-%'
+              AND plan_origin='manual' AND state='sent'
+            """
+        ).fetchone()[0]
+        claimed_leases = connection.execute(
+            """
+            SELECT COUNT(*) FROM browser_action_leases
+            WHERE account_id LIKE 'demo-account-%' AND state='claimed'
+            """
+        ).fetchone()[0]
 
     assert tuple(counts) == (4_410, 68_420 - 4_410, 5, 4_410)
+    account_ids = tuple(account.account_id for account in blueprint.accounts)
+    funnel = Database(path).lead_funnel_snapshot(account_ids=account_ids)
+    assert funnel == {
+        "followers": 1_240,
+        "dm_inbound": 486,
+        "engaged": 326,
+        "qualified": 173,
+        "invited": 126,
+        "contact_captured": 72,
+        "human_required": 28,
+    }
+    assert Database(path).lead_sales_snapshot(account_ids=account_ids)["sales"] == 19
+    assert ai_states == {"sent": 331, "superseded": 12, "uncertain": 5}
+    assert manual_handled == 98
+    assert 486 - (331 + manual_handled + 28) == 29
+    assert 331 / (331 + manual_handled + 28) == pytest.approx(0.7243, abs=0.0001)
+    assert claimed_leases == 0
     assert result.summary["interaction_plans"] == 4_410
     assert result.summary["uncertain_action_plans"] == 5
     assert result.created_total == sum(result.created.values())
+
+
+def test_seed_conversion_populates_inbox_settings_and_sales(tmp_path: Path) -> None:
+    path = tmp_path / "tikpoc.db"
+    accounts_path = tmp_path / "web-accounts.yaml"
+    settings_path = tmp_path / "config/secrets/operator-settings.json"
+    blueprint = build_demo_blueprint(
+        now_ms=NOW_MS,
+        scale=DemoScale.test_fixture(),
+    )
+
+    first = seed_demo_database(
+        path,
+        blueprint,
+        web_accounts_path=accounts_path,
+        runtime_settings_path=settings_path,
+        backup_dir=tmp_path / "backups",
+    )
+    second = seed_demo_database(
+        path,
+        blueprint,
+        web_accounts_path=accounts_path,
+        runtime_settings_path=settings_path,
+        backup_dir=tmp_path / "backups",
+    )
+
+    registry = WebAccountRegistry.from_path(accounts_path)
+    database = Database(path)
+    account_ids = tuple(item.account_id for item in registry.accounts)
+    conversations = database.lead_conversations(
+        account_ids=account_ids,
+        limit=100,
+        now_ms=blueprint.now_ms,
+    )
+
+    assert len(registry.accounts) == 3
+    assert all(item.mode == "browser" for item in registry.accounts)
+    assert all(item.enabled is False for item in registry.accounts)
+    assert all(item.browser_dm_enabled is False for item in registry.accounts)
+    assert all(item.browser_followback_enabled is False for item in registry.accounts)
+    assert {item.expected_tiktok_username for item in registry.accounts} == {
+        account.username for account in blueprint.accounts
+    }
+    assert {item.browser_profile_label for item in registry.accounts} == {
+        account.profile_label for account in blueprint.accounts
+    }
+    assert {row["stage"] for row in conversations} >= {
+        "qualified",
+        "invited",
+        "human_required",
+        "closed",
+    }
+    assert database.lead_funnel_snapshot(account_ids=account_ids) == {
+        "followers": 5,
+        "dm_inbound": 8,
+        "engaged": 7,
+        "qualified": 6,
+        "invited": 5,
+        "contact_captured": 4,
+        "human_required": 1,
+    }
+    assert database.lead_sales_snapshot(account_ids=account_ids)["sales"] == 3
+    assert (
+        RuntimeSettingsStore(settings_path).provider_credentials().key_configured
+        is False
+    )
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert "provider" not in settings or settings["provider"].get("api_key", "") == ""
+    assert set(settings["accounts"]) == set(account_ids)
+
+    with sqlite3.connect(path) as connection:
+        message_counts = dict(
+            connection.execute(
+                """
+                SELECT direction, COUNT(*) FROM web_messages
+                WHERE account_id LIKE 'demo-account-%' GROUP BY direction
+                """
+            )
+        )
+        ai_states = dict(
+            connection.execute(
+                """
+                SELECT state, COUNT(*) FROM browser_reply_plans
+                WHERE account_id LIKE 'demo-account-%' AND plan_origin='ai'
+                GROUP BY state
+                """
+            )
+        )
+        manual_outcomes = connection.execute(
+            """
+            SELECT COUNT(*) FROM browser_reply_plans
+            WHERE account_id LIKE 'demo-account-%'
+              AND plan_origin='manual' AND state='sent'
+            """
+        ).fetchone()[0]
+        human_outcomes = connection.execute(
+            """
+            SELECT COUNT(*) FROM lead_funnel_events
+            WHERE account_id LIKE 'demo-account-%' AND stage='human_required'
+            """
+        ).fetchone()[0]
+        leases = connection.execute(
+            """
+            SELECT COUNT(*) FROM browser_action_leases
+            WHERE account_id LIKE 'demo-account-%' AND state='claimed'
+            """
+        ).fetchone()[0]
+        health = connection.execute(
+            """
+            SELECT page_role, COUNT(*) FROM browser_account_health
+            WHERE account_id LIKE 'demo-account-%' GROUP BY page_role
+            """
+        ).fetchall()
+
+    assert message_counts == {"inbound": 8, "outbound": 7}
+    assert ai_states == {"sent": 5, "uncertain": 1}
+    assert manual_outcomes == 2
+    assert human_outcomes == 1
+    assert 5 / (5 + manual_outcomes + human_outcomes) == 0.625
+    assert leases == 0
+    assert dict(health) == {"activity": 3, "messages": 3}
+    assert first.created["ai_reply_plans"] == 6
+    assert first.created["manual_reply_plans"] == 2
+    assert second.created_total == 0
+
+
+def test_portfolio_conversion_contract_is_exact_and_detailed() -> None:
+    blueprint = build_demo_blueprint(now_ms=NOW_MS)
+
+    assert blueprint.metrics.inbound == 486
+    assert blueprint.metrics.ai_plans == 348
+    assert blueprint.metrics.ai_sent == 331
+    assert blueprint.metrics.ai_uncertain == 5
+    assert blueprint.metrics.ai_superseded == 12
+    assert blueprint.scale.manual_handled == 98
+    assert blueprint.scale.pending_inbound == 29
+    assert 331 / (331 + 98 + 28) == pytest.approx(0.7243, abs=0.0001)
+    assert len(blueprint.conversations) >= 20
+    assert {item.language for item in blueprint.conversations} == {"zh", "en"}
+    assert {item.stage for item in blueprint.conversations} >= {
+        "engaged",
+        "qualified",
+        "invited",
+        "contact_captured",
+        "human_required",
+        "closed",
+    }
+    combined_text = " ".join(
+        f"{item.inbound_text} {item.outbound_text}" for item in blueprint.conversations
+    )
+    assert "demo@example.invalid" in combined_text
+    assert "refund" in combined_text
+    assert "取消" in combined_text
+    assert "complaint" in combined_text
+
+
+def test_clear_demo_database_preserves_unrelated_rows_and_settings(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tikpoc.db"
+    accounts_path = tmp_path / "web-accounts.yaml"
+    settings_path = tmp_path / "operator-settings.json"
+    blueprint = build_demo_blueprint(now_ms=NOW_MS, scale=DemoScale.test_fixture())
+    database = Database(path)
+    database.migrate()
+    database.append_web_message(
+        "real-account",
+        "real-conversation",
+        "real-message",
+        direction="inbound",
+        message_type="TEXT",
+        text="keep me",
+        timestamp_ms=NOW_MS,
+        participant_username="real_customer",
+    )
+    database.record_lead_funnel_event(
+        "real-account",
+        "real_customer",
+        "engaged",
+        "real:source",
+        conversation_id="real-conversation",
+        occurred_at_ms=NOW_MS,
+    )
+    settings_path.write_text(
+        json.dumps(
+            {
+                "provider": {
+                    "base_url": "https://provider.example.invalid",
+                    "api_key": "KEEP",
+                },
+                "accounts": {"real-account": {"brand_name": "Keep"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    seed_demo_database(
+        path,
+        blueprint,
+        web_accounts_path=accounts_path,
+        runtime_settings_path=settings_path,
+        backup_dir=tmp_path / "backups",
+    )
+    result = clear_demo_database(
+        path,
+        web_accounts_path=accounts_path,
+        runtime_settings_path=settings_path,
+    )
+
+    assert result.created_total > 0
+    with sqlite3.connect(path) as connection:
+        assert (
+            connection.execute(
+                "SELECT text FROM web_messages WHERE account_id='real-account'"
+            ).fetchone()[0]
+            == "keep me"
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM web_messages WHERE account_id LIKE 'demo-account-%'"
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM pool_targets WHERE identity_key LIKE 'demo:%'"
+            ).fetchone()[0]
+            == 0
+        )
+    restored_settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert restored_settings == {
+        "provider": {"base_url": "https://provider.example.invalid", "api_key": "KEEP"},
+        "accounts": {"real-account": {"brand_name": "Keep"}},
+    }
+    assert not accounts_path.exists()
+
+
+def test_configuration_promotion_failure_restores_database_and_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "tikpoc.db"
+    accounts_path = tmp_path / "web-accounts.yaml"
+    settings_path = tmp_path / "operator-settings.json"
+    accounts_before = (
+        b"accounts:\n  - account_id: real-account\n    device_id: real-device\n"
+    )
+    settings_before = b'{"accounts":{"real-account":{"brand_name":"Keep"}}}'
+    accounts_path.write_bytes(accounts_before)
+    settings_path.write_bytes(settings_before)
+    database = Database(path)
+    database.migrate()
+    database.append_web_message(
+        "real-account",
+        "real-conversation",
+        "real-message",
+        direction="inbound",
+        message_type="TEXT",
+        text="keep me",
+        timestamp_ms=NOW_MS,
+    )
+    blueprint = build_demo_blueprint(now_ms=NOW_MS, scale=DemoScale.test_fixture())
+    real_replace = demo_data.os.replace
+    failed = False
+
+    def fail_second_promotion(source: object, destination: object) -> None:
+        nonlocal failed
+        if Path(destination) == settings_path and not failed:
+            failed = True
+            raise OSError("settings promotion failed")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(demo_data.os, "replace", fail_second_promotion)
+
+    with pytest.raises(OSError, match="settings promotion failed"):
+        seed_demo_database(
+            path,
+            blueprint,
+            web_accounts_path=accounts_path,
+            runtime_settings_path=settings_path,
+            backup_dir=tmp_path / "backups",
+        )
+
+    assert accounts_path.read_bytes() == accounts_before
+    assert settings_path.read_bytes() == settings_before
+    with sqlite3.connect(path) as connection:
+        assert (
+            connection.execute(
+                "SELECT text FROM web_messages WHERE account_id='real-account'"
+            ).fetchone()[0]
+            == "keep me"
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM pool_targets WHERE identity_key LIKE 'demo:%'"
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM browser_reply_plans WHERE account_id LIKE 'demo-account-%'"
+            ).fetchone()[0]
+            == 0
+        )
