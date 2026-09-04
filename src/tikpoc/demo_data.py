@@ -241,16 +241,8 @@ def seed_demo_database(
 
     staged_files: dict[Path, Path] = {}
     prior_files: dict[Path, bytes | None] = {}
-    backup_path: Path | None = None
     AcquisitionRepository(database_path).migrate()
     Database(database_path).migrate()
-    with sqlite3.connect(database_path) as state_connection:
-        demo_preexisting = bool(
-            state_connection.execute(
-                "SELECT 1 FROM exposure_rounds WHERE round_id=?",
-                (blueprint.round_id,),
-            ).fetchone()
-        )
 
     if web_accounts_path is not None and runtime_settings_path is not None:
         destinations = (Path(web_accounts_path), Path(runtime_settings_path))
@@ -264,9 +256,7 @@ def seed_demo_database(
             runtime_settings_path=destinations[1],
         )
         try:
-            backup_path = create_database_backup(
-                database_path, Path(backup_dir), blueprint.now_ms
-            )
+            create_database_backup(database_path, Path(backup_dir), blueprint.now_ms)
         except BaseException:
             for staged in staged_files.values():
                 staged.unlink(missing_ok=True)
@@ -283,15 +273,13 @@ def seed_demo_database(
         for name, count in conversion_created.items():
             created[name] = created.get(name, 0) + count
         summary = _seed_summary(connection, blueprint)
-        connection.commit()
         for destination, staged in staged_files.items():
             os.replace(staged, destination)
             os.chmod(destination, 0o600)
+        connection.commit()
     except BaseException:
         connection.rollback()
         connection.close()
-        if backup_path is not None and not demo_preexisting:
-            clear_demo_database(database_path)
         for destination, previous in prior_files.items():
             _restore_file(destination, previous)
         raise

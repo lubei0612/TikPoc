@@ -2,6 +2,7 @@ import json
 import math
 import sqlite3
 import stat
+import threading
 from collections import Counter
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
@@ -1011,20 +1012,32 @@ def test_configuration_failure_preserves_concurrent_unrelated_database_write(
     blueprint = build_demo_blueprint(now_ms=NOW_MS, scale=DemoScale.test_fixture())
     real_replace = demo_data.os.replace
     injected = False
+    writer_started = threading.Event()
+    writer_finished = threading.Event()
+    writer: threading.Thread | None = None
 
     def write_unrelated_then_fail(source: object, destination: object) -> None:
-        nonlocal injected
+        nonlocal injected, writer
         if Path(destination) == settings_path and not injected:
             injected = True
-            Database(path).append_web_message(
-                "concurrent-account",
-                "concurrent-conversation",
-                "concurrent-message",
-                direction="inbound",
-                message_type="TEXT",
-                text="preserve concurrent write",
-                timestamp_ms=NOW_MS,
-            )
+
+            def write_after_lock() -> None:
+                writer_started.set()
+                Database(path).append_web_message(
+                    "concurrent-account",
+                    "concurrent-conversation",
+                    "concurrent-message",
+                    direction="inbound",
+                    message_type="TEXT",
+                    text="preserve concurrent write",
+                    timestamp_ms=NOW_MS,
+                )
+                writer_finished.set()
+
+            writer = threading.Thread(target=write_after_lock)
+            writer.start()
+            assert writer_started.wait(timeout=2)
+            assert not writer_finished.wait(timeout=0.1)
             raise OSError("settings promotion failed after concurrent write")
         real_replace(source, destination)
 
@@ -1038,6 +1051,10 @@ def test_configuration_failure_preserves_concurrent_unrelated_database_write(
             runtime_settings_path=settings_path,
             backup_dir=tmp_path / "backups",
         )
+    assert writer is not None
+    writer.join(timeout=5)
+    assert not writer.is_alive()
+    assert writer_finished.is_set()
 
     with sqlite3.connect(path) as connection:
         assert (
@@ -1074,6 +1091,18 @@ def test_failed_idempotent_reseed_preserves_preexisting_demo_rows(
         runtime_settings_path=settings_path,
         backup_dir=tmp_path / "backups",
     )
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            DELETE FROM browser_reply_plans WHERE id=(
+                SELECT MIN(id) FROM browser_reply_plans
+                WHERE account_id LIKE 'demo-account-%'
+            )
+            """
+        )
+        connection.execute(
+            "UPDATE worker_control SET requested_state='running' WHERE singleton=1"
+        )
     real_replace = demo_data.os.replace
     failed = False
 
@@ -1105,7 +1134,13 @@ def test_failed_idempotent_reseed_preserves_preexisting_demo_rows(
             connection.execute(
                 "SELECT COUNT(*) FROM browser_reply_plans WHERE account_id LIKE 'demo-account-%'"
             ).fetchone()[0]
-            == 7
+            == 6
+        )
+        assert (
+            connection.execute(
+                "SELECT requested_state FROM worker_control WHERE singleton=1"
+            ).fetchone()[0]
+            == "running"
         )
 
 
